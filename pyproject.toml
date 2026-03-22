@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "async-service-monitor"
+version = "0.1.0"
+description = "Async, config-driven backend service and endpoint monitoring"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "docker>=7.1.0,<8.0.0",
+  "fastapi>=0.116.0,<1.0.0",
+  "httpx>=0.27.0,<1.0.0",
+  "PyMySQL>=1.1.1,<2.0.0",
+  "PyYAML>=6.0.1,<7.0.0",
+  "uvicorn>=0.35.0,<1.0.0",
+]
+
+[project.scripts]
+service-monitor = "service_monitor.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+service_monitor = ["web/*.html", "web/*.css", "web/*.js"]

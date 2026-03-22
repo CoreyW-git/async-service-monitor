@@ -1,0 +1,35 @@
+services:
+  monitor-1:
+    build: .
+    container_name: monitor-1
+    environment:
+      MONITOR_NODE_ID: monitor-1
+      EMAIL_ENABLED: "false"
+      SMTP_PORT: "587"
+    volumes:
+      - ./config.example.yaml:/app/config.yaml:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "8000:8000"
+
+  monitor-2:
+    build: .
+    container_name: monitor-2
+    environment:
+      MONITOR_NODE_ID: monitor-2
+      EMAIL_ENABLED: "false"
+      SMTP_PORT: "587"
+    volumes:
+      - ./config.example.yaml:/app/config.yaml:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  monitor-3:
+    build: .
+    container_name: monitor-3
+    environment:
+      MONITOR_NODE_ID: monitor-3
+      EMAIL_ENABLED: "false"
+      SMTP_PORT: "587"
+    volumes:
+      - ./config.example.yaml:/app/config.yaml:ro
+      - /var/run/docker.sock:/var/run/docker.sock

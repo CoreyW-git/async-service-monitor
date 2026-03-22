@@ -1,0 +1,91 @@
+defaults:
+  timeout_seconds: 10.0
+  user_agent: async-service-monitor/0.1.0
+  peer_timeout_seconds: 3.0
+  peer_poll_interval_seconds: 15.0
+  recovery_cooldown_seconds: 300.0
+  bind_host: 0.0.0.0
+  bind_port: 8080
+  metrics_history_limit: 120
+cluster:
+  enabled: false
+  node_id: monitor-1
+  bind_host: 0.0.0.0
+  bind_port: 8080
+notifications:
+  email:
+    enabled: false
+    port: 587
+    subject_prefix: '[async-service-monitor]'
+    use_tls: true
+    use_ssl: false
+telemetry:
+  enabled: false
+  provider: local_mysql
+  port: 3306
+  retention_hours: 2
+  use_ssl: false
+portal:
+  enabled: true
+  provider: basic
+  realm: Async Service Monitor
+  users:
+  - username: admin
+    password: admin
+    first_name: Corey
+    last_name: Wright
+    role: admin
+    enabled: true
+    last_login_at: 1774220915.0518746
+  oci:
+    enabled: false
+checks:
+- name: yahoo-http
+  type: http
+  interval_seconds: 300.0
+  enabled: false
+  timeout_seconds: 10.0
+  url: https://www.yahoo.com
+  expected_statuses:
+  - 200
+  expect_authenticated_statuses:
+  - 200
+  content:
+    contains:
+    - Yahoo
+    - news
+  unauthenticated_probe:
+    enabled: false
+    expect_statuses:
+    - 401
+    - 403
+- name: yahoo-dns
+  type: dns
+  interval_seconds: 300.0
+  enabled: true
+  timeout_seconds: 10.0
+  host: www.yahoo.com
+  expected_statuses:
+  - 200
+  expect_authenticated_statuses:
+  - 200
+  unauthenticated_probe:
+    enabled: false
+    expect_statuses:
+    - 401
+    - 403
+- name: Google Monitor
+  type: http
+  interval_seconds: 300.0
+  enabled: true
+  timeout_seconds: 10.0
+  url: https://www.google.com
+  expected_statuses:
+  - 200
+  expect_authenticated_statuses:
+  - 200
+  unauthenticated_probe:
+    enabled: false
+    expect_statuses:
+    - 401
+    - 403

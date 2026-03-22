@@ -1,0 +1,73 @@
+defaults:
+  timeout_seconds: 10
+  user_agent: async-service-monitor/0.1.0
+  peer_timeout_seconds: 3
+  peer_poll_interval_seconds: 15
+  recovery_cooldown_seconds: 300
+  bind_host: 0.0.0.0
+  bind_port: 8080
+
+cluster:
+  enabled: true
+  node_id: ${MONITOR_NODE_ID}
+  peers:
+    - node_id: monitor-1
+      base_url: http://monitor-1:8080
+      container_name: monitor-1
+      recovery:
+        enabled: true
+        container_name: monitor-1
+    - node_id: monitor-2
+      base_url: http://monitor-2:8080
+      container_name: monitor-2
+      recovery:
+        enabled: true
+        container_name: monitor-2
+    - node_id: monitor-3
+      base_url: http://monitor-3:8080
+      container_name: monitor-3
+      recovery:
+        enabled: true
+        container_name: monitor-3
+
+notifications:
+  email:
+    enabled: ${EMAIL_ENABLED}
+    host: ${SMTP_HOST}
+    port: ${SMTP_PORT}
+    username: ${SMTP_USERNAME}
+    password: ${SMTP_PASSWORD}
+    from_address: ${SMTP_FROM}
+    to_addresses:
+      - ${ALERT_EMAIL_TO}
+    subject_prefix: "[async-service-monitor]"
+    use_tls: true
+    use_ssl: false
+
+checks:
+  - name: yahoo-http
+    type: http
+    url: https://www.yahoo.com
+    interval_seconds: 300
+    expected_statuses: [200]
+    content:
+      contains:
+        - Yahoo
+        - news
+
+  - name: yahoo-dns
+    type: dns
+    host: www.yahoo.com
+    interval_seconds: 300
+
+  - name: example-protected-auth
+    type: auth
+    url: https://api.example.com/private/health
+    interval_seconds: 120
+    auth:
+      type: bearer
+      token: ${API_TOKEN}
+    expect_authenticated_statuses: [200]
+    unauthenticated_probe:
+      enabled: true
+      expect_statuses: [401, 403]

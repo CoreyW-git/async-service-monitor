@@ -1,0 +1,1431 @@
+const state = {
+  pollingHandle: null,
+  session: null,
+  monitorsExpanded: false,
+};
+
+const ROLE_LEVELS = {
+  read_only: 1,
+  read_write: 2,
+  admin: 3,
+};
+
+async function api(path, options = {}) {
+  const response = await fetch(path, {
+    headers: { "Content-Type": "application/json" },
+    ...options,
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.detail || `Request failed: ${response.status}`);
+  }
+  const type = response.headers.get("content-type") || "";
+  return type.includes("application/json") ? response.json() : response.text();
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+function fmtTime(epoch) {
+  if (!epoch) return "Never";
+  return new Date(epoch * 1000).toLocaleString();
+}
+
+function statusClass(status) {
+  return status === "healthy" ? "healthy" : status === "unhealthy" ? "unhealthy" : "disabled";
+}
+
+function statusLabel(status) {
+  if (status === "healthy") return "Healthy";
+  if (status === "unhealthy") return "Unhealthy";
+  if (status === "disabled") return "Disabled";
+  return "Unknown";
+}
+
+function statusPill(status) {
+  const neutral = status === "disabled" || status === "unknown";
+  return `<span class="pill ${status === "unhealthy" ? "bad" : neutral ? "neutral" : ""}">${escapeHtml(statusLabel(status))}</span>`;
+}
+
+function parseCsv(input) {
+  return String(input || "")
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function csv(value) {
+  return Array.isArray(value) ? value.join(",") : "";
+}
+
+function currentRoleLevel() {
+  return ROLE_LEVELS[state.session?.role || "read_only"] || 1;
+}
+
+function hasRole(minimumRole) {
+  return currentRoleLevel() >= (ROLE_LEVELS[minimumRole] || 99);
+}
+
+function formatDuration(milliseconds) {
+  if (milliseconds == null) return "n/a";
+  return `${Math.round(Number(milliseconds))} ms`;
+}
+
+function lastMetricLabel(points) {
+  const latest = Array.isArray(points) && points.length ? points[points.length - 1] : null;
+  if (!latest) return "No telemetry yet";
+  return `Last fired ${fmtTime(latest.timestamp)}`;
+}
+
+function sparklineMarkup(points, variant = "good") {
+  const values = Array.isArray(points) && points.length
+    ? points.map((point) => (point.healthy ? 1 : 0))
+    : [0];
+  const width = 180;
+  const height = 44;
+  const step = values.length > 1 ? width / (values.length - 1) : width;
+  const coords = values.map((value, index) => {
+    const x = values.length > 1 ? index * step : width / 2;
+    const y = height - value * (height - 8) - 4;
+    return [x, y];
+  });
+  const line = coords.map(([x, y], index) => `${index === 0 ? "M" : "L"} ${x.toFixed(1)} ${y.toFixed(1)}`).join(" ");
+  const area = `${line} L ${coords[coords.length - 1][0].toFixed(1)} ${height} L ${coords[0][0].toFixed(1)} ${height} Z`;
+  return `
+    <svg class="sparkline ${variant}" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true">
+      <path class="area" d="${area}"></path>
+      <path class="line" d="${line}"></path>
+    </svg>
+  `;
+}
+
+function endpointSparkline(check, checkMetrics) {
+  const points = checkMetrics[check.name] || [];
+  const variant = check.status === "unhealthy" ? "bad" : check.status === "disabled" ? "neutral" : "good";
+  return sparklineMarkup(points, variant);
+}
+
+function nodeSparkline(nodeId, nodeMetrics) {
+  const points = nodeMetrics[nodeId] || [];
+  const latest = points[points.length - 1];
+  const variant = latest ? (latest.healthy ? "good" : "bad") : "neutral";
+  return sparklineMarkup(points, variant);
+}
+
+function renderOverview(overview, checks) {
+  const healthy = checks.filter((check) => check.status === "healthy").length;
+  const unhealthy = checks.filter((check) => check.status === "unhealthy").length;
+  const disabled = checks.filter((check) => check.status === "disabled").length;
+
+  const cards = [
+    { label: "Node", value: overview.node_id },
+    { label: "Checks", value: String(checks.length) },
+    { label: "Healthy", value: String(healthy) },
+    { label: "Unhealthy", value: String(unhealthy) },
+  ];
+
+  document.getElementById("overview-cards").innerHTML = cards
+    .map(
+      (card) => `
+        <article class="metric-card">
+          <p>${card.label}</p>
+          <strong>${escapeHtml(card.value)}</strong>
+        </article>
+      `
+    )
+    .join("");
+
+  return { healthy, unhealthy, disabled };
+}
+
+function renderSessionChip() {
+  const chip = document.getElementById("session-chip");
+  if (!state.session?.authenticated) {
+    chip.classList.add("hidden");
+    chip.textContent = "";
+    return;
+  }
+  chip.classList.remove("hidden");
+  chip.innerHTML = `
+    <a href="/profile" data-link class="sidebar-link active" style="display:block; color: white;">
+      <strong>${escapeHtml([state.session.first_name, state.session.last_name].filter(Boolean).join(" ") || state.session.username)}</strong><br />
+      <span>${escapeHtml(state.session.username)} · ${escapeHtml(state.session.role.replaceAll("_", " "))}</span>
+    </a>
+    <div class="button-row" style="margin-top: 10px;">
+      <button type="button" class="secondary" id="logout-btn">Log Out</button>
+    </div>
+  `;
+}
+
+function renderSidebar(checks) {
+  const currentPath = window.location.pathname;
+  const authenticated = Boolean(state.session?.authenticated);
+  document.querySelectorAll(".sidebar-nav a").forEach((link) => {
+    const minRole = link.dataset.roleMin;
+    const visible = authenticated && (!minRole || hasRole(minRole));
+    link.classList.toggle("hidden", !visible);
+    link.classList.toggle("active", visible && link.getAttribute("href") === currentPath);
+  });
+
+  const monitorList = document.getElementById("sidebar-monitors");
+  const sidebarSection = document.getElementById("configured-monitors-section");
+  const toggle = document.getElementById("configured-monitors-toggle");
+  const chevron = document.getElementById("configured-monitors-chevron");
+  sidebarSection.classList.toggle("hidden", !authenticated || !state.monitorsExpanded);
+  toggle.classList.toggle("hidden", !authenticated);
+  toggle.classList.toggle("active", state.monitorsExpanded);
+  chevron.textContent = state.monitorsExpanded ? "-" : "+";
+  if (!authenticated) {
+    monitorList.innerHTML = "";
+    return;
+  }
+
+  const groups = checks.reduce((acc, check) => {
+    const key = check.type || "other";
+    acc[key] = acc[key] || [];
+    acc[key].push(check);
+    return acc;
+  }, {});
+
+  const typeOrder = ["http", "dns", "auth"];
+  const sortedKeys = Object.keys(groups).sort((a, b) => {
+    const aIndex = typeOrder.indexOf(a);
+    const bIndex = typeOrder.indexOf(b);
+    return (aIndex === -1 ? 99 : aIndex) - (bIndex === -1 ? 99 : bIndex) || a.localeCompare(b);
+  });
+
+  monitorList.innerHTML = sortedKeys
+    .map((type) => `
+      <div class="monitor-group">
+        <div class="monitor-group-title">
+          <strong>${escapeHtml(type)}</strong>
+          <span>${groups[type].length}</span>
+        </div>
+        <div class="monitor-group-list">
+          ${groups[type]
+            .map(
+              (check) => `
+                <a class="sidebar-link ${currentPath === `/monitors/${encodeURIComponent(check.name)}` ? "active" : ""}" href="/monitors/${encodeURIComponent(check.name)}" data-link>
+                  <span>${escapeHtml(check.name)}</span>
+                  <span class="dot ${statusClass(check.status)}"></span>
+                </a>
+              `
+            )
+            .join("")}
+        </div>
+      </div>
+    `)
+    .join("");
+}
+
+function setWorkspaceHeader(title, subtitle) {
+  document.getElementById("workspace-title").textContent = title;
+  document.getElementById("workspace-subtitle").textContent = subtitle;
+}
+
+function renderLoginPage() {
+  setWorkspaceHeader("Sign In", "Sign in to the portal, create a new account, or reset your password.");
+  document.getElementById("overview-cards").innerHTML = "";
+  const root = document.getElementById("app-root");
+  root.innerHTML = `
+    <div class="split-panels">
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Login</h3>
+          <p>Use your portal credentials to access the monitoring dashboard.</p>
+        </div>
+        <form id="login-form" class="check-form">
+          <label><span>Username</span><input name="username" required /></label>
+          <label><span>Password</span><input name="password" type="password" required /></label>
+          <button type="submit">Sign In</button>
+          <p class="form-status" id="login-status"></p>
+        </form>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Create Account</h3>
+          <p>New self-service accounts start as read-only until an administrator grants more access.</p>
+        </div>
+        <form id="register-form" class="check-form">
+          <label><span>First Name</span><input name="first_name" /></label>
+          <label><span>Last Name</span><input name="last_name" /></label>
+          <label><span>Username</span><input name="username" required /></label>
+          <label><span>Password</span><input name="password" type="password" required /></label>
+          <button type="submit">Create Account</button>
+          <p class="form-status" id="register-status"></p>
+        </form>
+
+        <div class="panel-head" style="margin-top: 24px;">
+          <h3>Reset Password</h3>
+          <p>Reset your password by username. Administrators can further tighten this flow later.</p>
+        </div>
+        <form id="reset-password-form" class="check-form">
+          <label><span>Username</span><input name="username" required /></label>
+          <label><span>New Password</span><input name="password" type="password" required /></label>
+          <button type="submit">Reset Password</button>
+          <p class="form-status" id="reset-password-status"></p>
+        </form>
+      </section>
+    </div>
+  `;
+}
+
+function renderProfilePage(profile) {
+  setWorkspaceHeader("Profile", "Review and update your personal account details.");
+  const root = document.getElementById("app-root");
+  root.innerHTML = `
+    <div class="detail-grid">
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Edit Profile</h3>
+          <p>You can update your name and password here. Your username stays fixed once created.</p>
+        </div>
+        <form id="profile-form" class="check-form">
+          <label><span>First Name</span><input name="first_name" value="${escapeHtml(profile.first_name || "")}" /></label>
+          <label><span>Last Name</span><input name="last_name" value="${escapeHtml(profile.last_name || "")}" /></label>
+          <label><span>Username</span><input name="username" value="${escapeHtml(profile.username)}" disabled /></label>
+          <label><span>New Password</span><input name="password" type="password" placeholder="Leave blank to keep your current password" /></label>
+          <button type="submit">Save Profile</button>
+          <p class="form-status" id="profile-status"></p>
+        </form>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Account Details</h3>
+          <p>Your access level and most recent successful sign-in are shown here.</p>
+        </div>
+        <div class="stack">
+          <article class="guide-card">
+            <h4>Access Level</h4>
+            <p>${escapeHtml(profile.role.replaceAll("_", " "))}</p>
+          </article>
+          <article class="guide-card">
+            <h4>Last Login</h4>
+            <p>${fmtTime(profile.last_login_at)}</p>
+          </article>
+          <article class="guide-card">
+            <h4>Auth Provider</h4>
+            <p>${escapeHtml(profile.provider || "basic")}</p>
+          </article>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function renderDashboard(overview, checks, summaryCounts, checkMetrics, nodeMetrics, cluster) {
+  setWorkspaceHeader("Dashboard", "Live endpoint availability and monitoring node health at a glance.");
+  const root = document.getElementById("app-root");
+  const endpointCards = checks
+    .map(
+      (check) => {
+        const points = checkMetrics[check.name] || [];
+        return `
+        <a class="status-row" href="/monitors/${encodeURIComponent(check.name)}" data-link>
+          <span class="dot ${statusClass(check.status)}"></span>
+          <div>
+            <strong>${escapeHtml(check.name)}</strong>
+            <div class="status-meta">
+              <span>${escapeHtml(check.type.toUpperCase())}</span>
+              <span>${escapeHtml(check.url || check.host || "")}</span>
+            </div>
+          </div>
+          <div>
+            ${endpointSparkline(check, checkMetrics)}
+            <div class="status-meta">
+              <span>Last run ${formatDuration(check.latest_result?.duration_ms)}</span>
+              <span>${escapeHtml(lastMetricLabel(points))}</span>
+            </div>
+          </div>
+          ${statusPill(check.status)}
+          <span class="subtle">${escapeHtml(check.latest_result?.message || "Waiting for result")}</span>
+        </a>
+      `;
+      }
+    )
+    .join("");
+
+  const nodeIds = Array.from(
+    new Set([
+      overview.node_id,
+      ...(cluster?.peers || []).map((peer) => peer.node_id),
+      ...Object.keys(nodeMetrics || {}),
+    ])
+  );
+
+  const nodeCards = nodeIds
+    .map((nodeId) => {
+      const points = nodeMetrics[nodeId] || [];
+      const latest = points[points.length - 1];
+      const status = latest ? (latest.healthy ? "healthy" : "unhealthy") : "unknown";
+      const peer = cluster?.peers?.find((item) => item.node_id === nodeId);
+      const subtitle = nodeId === overview.node_id ? "Local node" : peer?.base_url || "Peer monitor";
+      return `
+        <article class="guide-card">
+          <div class="status-row">
+            <span class="dot ${statusClass(status)}"></span>
+            <div>
+              <strong>${escapeHtml(nodeId)}</strong>
+              <div class="status-meta">
+                <span>${escapeHtml(subtitle)}</span>
+              </div>
+            </div>
+            <div>${nodeSparkline(nodeId, nodeMetrics)}</div>
+            ${statusPill(status)}
+            <span class="subtle">${latest ? `Last heartbeat ${fmtTime(latest.timestamp)}` : "No heartbeat data yet"}</span>
+          </div>
+        </article>
+      `;
+    })
+    .join("");
+
+  root.innerHTML = `
+    <div class="stack">
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Outcome Snapshot</h3>
+          <p>Fast visual totals across all configured endpoint monitors.</p>
+        </div>
+        <div class="chart-strip">
+          <article class="chart-card">
+            <p class="subtle">Healthy</p>
+            <div class="chart-value">${summaryCounts.healthy}</div>
+          </article>
+          <article class="chart-card">
+            <p class="subtle">Unhealthy</p>
+            <div class="chart-value">${summaryCounts.unhealthy}</div>
+          </article>
+          <article class="chart-card">
+            <p class="subtle">Disabled</p>
+            <div class="chart-value">${summaryCounts.disabled}</div>
+          </article>
+          <article class="chart-card">
+            <p class="subtle">Total</p>
+            <div class="chart-value">${checks.length}</div>
+          </article>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Endpoint Monitors</h3>
+          <p>Each monitor gets its own live availability graph as new results arrive.</p>
+        </div>
+        <div class="status-list">
+          ${endpointCards || `<article class="guide-card"><p>No endpoint monitors are configured yet.</p></article>`}
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Monitoring Nodes</h3>
+          <p>Cluster heartbeat graphs show whether each monitoring node is reachable over time.</p>
+        </div>
+        <div class="stack">
+          ${nodeCards || `<article class="guide-card"><p>No node history is available yet.</p></article>`}
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function authSummary(check) {
+  if (!check.auth) return "No auth configured";
+  if (check.auth.type === "bearer") return "Bearer token";
+  if (check.auth.type === "basic") return `Basic auth${check.auth.username ? ` as ${check.auth.username}` : ""}`;
+  return `Header auth${check.auth.header_name ? ` via ${check.auth.header_name}` : ""}`;
+}
+
+function disableForm(form, disabled) {
+  form.querySelectorAll("input, select, button").forEach((element) => {
+    if (element.dataset.alwaysEnabled === "true") {
+      return;
+    }
+    element.disabled = disabled;
+  });
+}
+
+function monitorFormMarkup(check, mode) {
+  const auth = check.auth || {};
+  const isNew = mode === "create";
+  const canWrite = hasRole("read_write");
+  const readonlyAttr = canWrite ? "" : "disabled";
+  return `
+    <div class="detail-grid">
+      <section class="panel">
+        <div class="panel-head">
+          <h3>${isNew ? "Add Monitor" : `Edit ${escapeHtml(check.name)}`}</h3>
+          <p>${isNew ? "Create a new endpoint monitor." : "Save changes and the monitor will re-run immediately."}</p>
+        </div>
+        <form class="check-form" id="monitor-form" data-original-name="${escapeHtml(check.name || "")}">
+          <label><span>Name</span><input name="name" value="${escapeHtml(check.name || "")}" required ${readonlyAttr} /></label>
+          <label>
+            <span>Type</span>
+            <select name="type" ${readonlyAttr}>
+              <option value="http" ${check.type === "http" ? "selected" : ""}>HTTP</option>
+              <option value="dns" ${check.type === "dns" ? "selected" : ""}>DNS</option>
+              <option value="auth" ${check.type === "auth" ? "selected" : ""}>Auth</option>
+            </select>
+          </label>
+          <label>
+            <span>Enabled</span>
+            <select name="enabled" ${readonlyAttr}>
+              <option value="true" ${check.enabled !== false ? "selected" : ""}>Enabled</option>
+              <option value="false" ${check.enabled === false ? "selected" : ""}>Disabled</option>
+            </select>
+          </label>
+          <label><span>Interval Seconds</span><input name="interval_seconds" type="number" min="1" value="${escapeHtml(check.interval_seconds || 300)}" required ${readonlyAttr} /></label>
+          <label><span>Timeout Seconds</span><input name="timeout_seconds" type="number" min="1" value="${escapeHtml(check.timeout_seconds || 10)}" ${readonlyAttr} /></label>
+          <label class="field-url ${check.type === "dns" ? "hidden" : ""}"><span>URL</span><input name="url" value="${escapeHtml(check.url || "")}" ${readonlyAttr} /></label>
+          <label class="field-host ${check.type !== "dns" ? "hidden" : ""}"><span>Host</span><input name="host" value="${escapeHtml(check.host || "")}" ${readonlyAttr} /></label>
+          <label><span>Expected Statuses</span><input name="expected_statuses" value="${escapeHtml(csv(check.expected_statuses || [200]))}" ${readonlyAttr} /></label>
+          <label><span>Contains Text</span><input name="contains" value="${escapeHtml(csv(check.content_rules?.contains || []))}" ${readonlyAttr} /></label>
+          <label><span>Exclude Text</span><input name="not_contains" value="${escapeHtml(csv(check.content_rules?.not_contains || []))}" ${readonlyAttr} /></label>
+          <label><span>Regex</span><input name="regex" value="${escapeHtml(check.content_rules?.regex || "")}" ${readonlyAttr} /></label>
+          <label class="auth-only ${check.type !== "auth" ? "hidden" : ""}" data-auth-field="type">
+            <span>Auth Type</span>
+            <select name="auth_type" ${readonlyAttr}>
+              <option value="bearer" ${auth.type === "bearer" ? "selected" : ""}>Bearer</option>
+              <option value="basic" ${auth.type === "basic" ? "selected" : ""}>Basic</option>
+              <option value="header" ${auth.type === "header" ? "selected" : ""}>Header</option>
+            </select>
+          </label>
+          <label class="auth-only ${check.type !== "auth" || auth.type !== "bearer" ? "hidden" : ""}" data-auth-field="token"><span>Bearer Token</span><input name="token" value="${escapeHtml(auth.token || "")}" ${readonlyAttr} /></label>
+          <label class="auth-only ${check.type !== "auth" || auth.type !== "basic" ? "hidden" : ""}" data-auth-field="username"><span>Username</span><input name="username" value="${escapeHtml(auth.username || "")}" ${readonlyAttr} /></label>
+          <label class="auth-only ${check.type !== "auth" || auth.type !== "basic" ? "hidden" : ""}" data-auth-field="password"><span>Password</span><input name="password" type="password" value="${escapeHtml(auth.password || "")}" ${readonlyAttr} /></label>
+          <label class="auth-only ${check.type !== "auth" || auth.type !== "header" ? "hidden" : ""}" data-auth-field="header_name"><span>Header Name</span><input name="header_name" value="${escapeHtml(auth.header_name || "")}" ${readonlyAttr} /></label>
+          <label class="auth-only ${check.type !== "auth" || auth.type !== "header" ? "hidden" : ""}" data-auth-field="header_value"><span>Header Value</span><input name="header_value" value="${escapeHtml(auth.header_value || "")}" ${readonlyAttr} /></label>
+          <div class="button-row ${canWrite ? "" : "hidden"}">
+            <button type="submit">${isNew ? "Create Monitor" : "Save Changes"}</button>
+            ${
+              isNew
+                ? ""
+                : `<button type="button" class="secondary" id="toggle-monitor-btn">${check.enabled ? "Disable" : "Enable"}</button>
+                   <button type="button" class="danger" id="delete-monitor-btn">Delete</button>`
+            }
+          </div>
+          <p class="form-status" id="monitor-form-status">${canWrite ? "" : "Read-only access: editing is disabled for this account."}</p>
+        </form>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Monitor Status</h3>
+          <p>Latest outcome, ownership, and authentication context.</p>
+        </div>
+        <div class="stack">
+          <div class="status-row">
+            <span class="dot ${statusClass(check.status)}"></span>
+            <div>
+              <strong>${escapeHtml(check.name || "New monitor")}</strong>
+              <div class="status-meta">
+                <span>${escapeHtml(check.type?.toUpperCase() || "HTTP")}</span>
+                <span>${escapeHtml(authSummary(check))}</span>
+              </div>
+            </div>
+            <div>${sparklineMarkup(check.metric_points || [], check.status === "unhealthy" ? "bad" : check.status === "disabled" ? "neutral" : "good")}</div>
+            ${statusPill(check.status || "unknown")}
+            <span class="subtle">${escapeHtml(check.latest_result?.message || "No result yet")}</span>
+          </div>
+          <div class="guide-card">
+            <h4>Last Checked</h4>
+            <p>${fmtTime(check.latest_result?.timestamp)}</p>
+          </div>
+          <div class="guide-card">
+            <h4>Owner</h4>
+            <p>${escapeHtml(check.owner || "monitor-1")}</p>
+          </div>
+          <div class="guide-card">
+            <h4>Last Duration</h4>
+            <p>${formatDuration(check.latest_result?.duration_ms)}</p>
+          </div>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function renderContainersPage(peers, containers, nodeMetrics) {
+  setWorkspaceHeader("Containers", "Configure peer monitors, manage monitor containers, and add new ones live.");
+  const root = document.getElementById("app-root");
+  const canAdmin = hasRole("admin");
+  root.innerHTML = `
+    <div class="split-panels">
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Peer Monitors</h3>
+          <p>Container-to-container monitor health and recovery settings.</p>
+        </div>
+        <form id="create-peer-form" class="check-form ${canAdmin ? "" : "hidden"}">
+          <label><span>Node ID</span><input name="node_id" placeholder="monitor-4" required /></label>
+          <label><span>Base URL</span><input name="base_url" placeholder="http://monitor-4:8080" required /></label>
+          <label><span>Container Name</span><input name="container_name" placeholder="monitor-4" /></label>
+          <label><span>Peer Monitor</span><select name="enabled"><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
+          <label><span>Recovery</span><select name="recovery_enabled"><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
+          <button type="submit">Add Peer Monitor</button>
+          <p class="form-status" id="peer-create-status"></p>
+        </form>
+        ${canAdmin ? "" : `<p class="subtle">Container and peer management is restricted to administrators.</p>`}
+        <div class="stack">
+          ${peers
+            .map(
+              (peer) => `
+                <article class="guide-card">
+                  <form class="check-form peer-form" data-peer-id="${escapeHtml(peer.node_id)}">
+                    <div class="status-row">
+                      <span class="dot ${peer.healthy ? "healthy" : peer.enabled ? "unhealthy" : "disabled"}"></span>
+                      <div>
+                        <strong>${escapeHtml(peer.node_id)}</strong>
+                        <div class="status-meta"><span>${escapeHtml(peer.base_url)}</span></div>
+                      </div>
+                      <div>${nodeSparkline(peer.node_id, nodeMetrics)}</div>
+                      ${statusPill(peer.healthy ? "healthy" : peer.enabled ? "unhealthy" : "disabled")}
+                      <span class="subtle">${escapeHtml(peer.last_error || "Peer reachable")}</span>
+                    </div>
+                    <label><span>Node ID</span><input name="node_id" value="${escapeHtml(peer.node_id)}" required ${canAdmin ? "" : "disabled"} /></label>
+                    <label><span>Base URL</span><input name="base_url" value="${escapeHtml(peer.base_url)}" required ${canAdmin ? "" : "disabled"} /></label>
+                    <label><span>Container Name</span><input name="container_name" value="${escapeHtml(peer.container_name || "")}" ${canAdmin ? "" : "disabled"} /></label>
+                    <label><span>Peer Monitor</span><select name="enabled" ${canAdmin ? "" : "disabled"}><option value="true" ${peer.enabled ? "selected" : ""}>Enabled</option><option value="false" ${!peer.enabled ? "selected" : ""}>Disabled</option></select></label>
+                    <label><span>Recovery</span><select name="recovery_enabled" ${canAdmin ? "" : "disabled"}><option value="true" ${peer.recovery?.enabled ? "selected" : ""}>Enabled</option><option value="false" ${!peer.recovery?.enabled ? "selected" : ""}>Disabled</option></select></label>
+                    <div class="button-row ${canAdmin ? "" : "hidden"}">
+                      <button type="submit">Save Peer</button>
+                      <button type="button" class="secondary" data-toggle-peer="${escapeHtml(peer.node_id)}" data-enabled="${peer.enabled ? "true" : "false"}">${peer.enabled ? "Disable" : "Enable"}</button>
+                      <button type="button" class="danger" data-delete-peer="${escapeHtml(peer.node_id)}">Delete</button>
+                    </div>
+                    <p class="form-status"></p>
+                  </form>
+                </article>
+              `
+            )
+            .join("")}
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Add Monitor Container</h3>
+          <p>Create a new monitor container and register it with peer monitoring.</p>
+        </div>
+        <form id="create-container-form" class="check-form ${canAdmin ? "" : "hidden"}">
+          <label><span>Node ID</span><input name="node_id" placeholder="monitor-4" required /></label>
+          <label><span>Container Name</span><input name="container_name" placeholder="monitor-4" required /></label>
+          <label><span>Image</span><input name="image" placeholder="async-service-monitor:latest" required /></label>
+          <label><span>Base URL</span><input name="base_url" placeholder="http://monitor-4:8080" required /></label>
+          <label><span>Docker Network</span><input name="network" placeholder="playground_default" /></label>
+          <label><span>Host Port</span><input name="host_port" type="number" min="1" placeholder="8004" /></label>
+          <button type="submit">Create Container</button>
+          <p class="form-status" id="container-create-status"></p>
+        </form>
+        <div class="stack">
+          ${(containers.available ? containers.containers : []).map((container) => `
+            <article class="guide-card">
+              <div class="status-row">
+                <span class="dot ${container.status === "running" ? "healthy" : "disabled"}"></span>
+                <div>
+                  <strong>${escapeHtml(container.name)}</strong>
+                  <div class="status-meta"><span>${escapeHtml(container.image)}</span></div>
+                </div>
+                <div>${nodeSparkline(container.name, nodeMetrics)}</div>
+                ${statusPill(container.status === "running" ? "healthy" : "disabled")}
+                <span class="subtle">${escapeHtml(container.status)}</span>
+              </div>
+              <div class="button-row ${canAdmin ? "" : "hidden"}">
+                <button class="secondary" data-action="start" data-container="${escapeHtml(container.name)}">Start</button>
+                <button class="danger" data-action="stop" data-container="${escapeHtml(container.name)}">Stop</button>
+                <button data-action="restart" data-container="${escapeHtml(container.name)}">Restart</button>
+              </div>
+            </article>
+          `).join("") || `<article class="guide-card"><p>No monitor containers available.</p></article>`}
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function renderGuidePage() {
+  setWorkspaceHeader("FAQ", "Answers to common setup, operations, scaling, and access questions.");
+  const root = document.getElementById("app-root");
+  root.innerHTML = `
+    <section class="panel">
+      <div class="panel-head">
+        <h3>Frequently Asked Questions</h3>
+        <p>Use this page for the most common operator questions about monitoring, editing, scaling, and access control.</p>
+      </div>
+      <div class="guide-grid">
+        <article class="guide-card">
+          <h4>How do I watch endpoint health?</h4>
+          <p>The dashboard shows every endpoint monitor with a health dot and a live availability trend graph.</p>
+        </article>
+        <article class="guide-card">
+          <h4>How do I edit a monitor?</h4>
+          <p>Select any monitor from the left sidebar to open a dedicated edit page for intervals, URLs, validation rules, and auth settings.</p>
+        </article>
+        <article class="guide-card">
+          <h4>How do I scale the monitoring fleet?</h4>
+          <p>The containers page lets admins manage peer monitors, control monitor containers, and add new nodes while the service is running.</p>
+        </article>
+        <article class="guide-card">
+          <h4>How do I manage portal access?</h4>
+          <p>The Administration page lets admins create read-only, read-write, and full admin accounts today, with OCI auth scaffolding ready for future integration.</p>
+        </article>
+      </div>
+    </section>
+  `;
+}
+
+function renderAdminPage(users, telemetry, portalSettings) {
+  setWorkspaceHeader("Administration", "Create accounts and control who can view, edit, or fully administer the platform.");
+  const root = document.getElementById("app-root");
+  root.innerHTML = `
+    <div class="stack">
+      <div class="split-panels">
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Add User</h3>
+          <p>Basic auth is enabled today, and the portal config now includes scaffolding for OCI-based auth later.</p>
+        </div>
+        <form id="create-user-form" class="check-form">
+          <label><span>First Name</span><input name="first_name" /></label>
+          <label><span>Last Name</span><input name="last_name" /></label>
+          <label><span>Username</span><input name="username" required /></label>
+          <label><span>Password</span><input name="password" type="password" required /></label>
+          <label>
+            <span>Role</span>
+            <select name="role">
+              <option value="read_only">Read-Only</option>
+              <option value="read_write">Read-Write</option>
+              <option value="admin">Administrator</option>
+            </select>
+          </label>
+          <label>
+            <span>Account State</span>
+            <select name="enabled">
+              <option value="true">Enabled</option>
+              <option value="false">Disabled</option>
+            </select>
+          </label>
+          <button type="submit">Create User</button>
+          <p class="form-status" id="user-create-status"></p>
+        </form>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Existing Users</h3>
+          <p>Read-only users can view data, read-write users can manage monitors, and admins control containers and access.</p>
+        </div>
+        <div class="stack">
+          ${users
+            .map(
+              (user) => `
+                <article class="user-card">
+                  <form class="check-form user-form" data-username="${escapeHtml(user.username)}">
+                    <div class="status-row">
+                      <span class="dot ${user.enabled ? "healthy" : "disabled"}"></span>
+                      <div>
+                        <strong>${escapeHtml([user.first_name, user.last_name].filter(Boolean).join(" ") || user.username)}</strong>
+                        <div class="status-meta">
+                          <span>${escapeHtml(user.username)}</span>
+                          <span>${escapeHtml(user.role.replaceAll("_", " "))}</span>
+                        </div>
+                      </div>
+                      <div></div>
+                      ${statusPill(user.enabled ? "healthy" : "disabled")}
+                      <span class="subtle">${user.last_login_at ? `Last login ${fmtTime(user.last_login_at)}` : "No logins yet"}</span>
+                    </div>
+                    <label><span>First Name</span><input name="first_name" value="${escapeHtml(user.first_name || "")}" /></label>
+                    <label><span>Last Name</span><input name="last_name" value="${escapeHtml(user.last_name || "")}" /></label>
+                    <label><span>Username</span><input name="username" value="${escapeHtml(user.username)}" required /></label>
+                    <label><span>New Password</span><input name="password" type="password" placeholder="Enter a replacement password" required /></label>
+                    <label>
+                      <span>Role</span>
+                      <select name="role">
+                        <option value="read_only" ${user.role === "read_only" ? "selected" : ""}>Read-Only</option>
+                        <option value="read_write" ${user.role === "read_write" ? "selected" : ""}>Read-Write</option>
+                        <option value="admin" ${user.role === "admin" ? "selected" : ""}>Administrator</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span>Account State</span>
+                      <select name="enabled">
+                        <option value="true" ${user.enabled ? "selected" : ""}>Enabled</option>
+                        <option value="false" ${!user.enabled ? "selected" : ""}>Disabled</option>
+                      </select>
+                    </label>
+                    <div class="button-row">
+                      <button type="submit">Save User</button>
+                      <button type="button" class="danger" data-delete-user="${escapeHtml(user.username)}">Delete</button>
+                    </div>
+                    <p class="form-status"></p>
+                  </form>
+                </article>
+              `
+            )
+            .join("")}
+        </div>
+      </section>
+      </div>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Service Configuration</h3>
+          <p>Point the service at local or OCI-managed MySQL, and configure OCI-backed portal auth scaffolding here.</p>
+        </div>
+        <div class="split-panels">
+          <div class="guide-card">
+            <div class="panel-head">
+              <h3>Telemetry Storage</h3>
+              <p>Store up to two hours of monitor telemetry and config snapshots in local MySQL or OCI MySQL.</p>
+            </div>
+            <form id="telemetry-form" class="check-form">
+              <label>
+                <span>Enabled</span>
+                <select name="enabled">
+                  <option value="true" ${telemetry?.enabled ? "selected" : ""}>Enabled</option>
+                  <option value="false" ${!telemetry?.enabled ? "selected" : ""}>Disabled</option>
+                </select>
+              </label>
+              <label>
+                <span>MySQL Target</span>
+                <select name="provider">
+                  <option value="local_mysql" ${telemetry?.provider === "local_mysql" ? "selected" : ""}>Local MySQL Instance</option>
+                  <option value="oci_mysql" ${telemetry?.provider === "oci_mysql" ? "selected" : ""}>OCI Hosted MySQL</option>
+                </select>
+              </label>
+              <label><span>Host</span><input name="host" value="${escapeHtml(telemetry?.host || "")}" placeholder="mysql.example.internal" /></label>
+              <label><span>Port</span><input name="port" type="number" min="1" value="${escapeHtml(telemetry?.port || 3306)}" /></label>
+              <label><span>Database</span><input name="database" value="${escapeHtml(telemetry?.database || "")}" /></label>
+              <label><span>Username</span><input name="username" value="${escapeHtml(telemetry?.username || "")}" /></label>
+              <label><span>Password</span><input name="password" type="password" value="${escapeHtml(telemetry?.password || "")}" /></label>
+              <label><span>Retention Hours</span><input name="retention_hours" type="number" min="1" max="2" value="${escapeHtml(telemetry?.retention_hours || 2)}" /></label>
+              <label>
+                <span>Use SSL</span>
+                <select name="use_ssl">
+                  <option value="true" ${telemetry?.use_ssl ? "selected" : ""}>Enabled</option>
+                  <option value="false" ${!telemetry?.use_ssl ? "selected" : ""}>Disabled</option>
+                </select>
+              </label>
+              <button type="submit">Save Telemetry Settings</button>
+              <p class="form-status" id="telemetry-status"></p>
+            </form>
+          </div>
+
+          <div class="guide-card">
+            <div class="panel-head">
+              <h3>Portal Authentication</h3>
+              <p>Keep using basic auth or point the service at OCI auth settings for the future cloud-backed flow.</p>
+            </div>
+            <form id="portal-settings-form" class="check-form">
+              <label>
+                <span>Portal Auth Enabled</span>
+                <select name="enabled">
+                  <option value="true" ${portalSettings?.enabled ? "selected" : ""}>Enabled</option>
+                  <option value="false" ${!portalSettings?.enabled ? "selected" : ""}>Disabled</option>
+                </select>
+              </label>
+              <label>
+                <span>Provider</span>
+                <select name="provider">
+                  <option value="basic" ${portalSettings?.provider === "basic" ? "selected" : ""}>Basic Auth</option>
+                  <option value="oci" ${portalSettings?.provider === "oci" ? "selected" : ""}>OCI Auth</option>
+                </select>
+              </label>
+              <label><span>Realm</span><input name="realm" value="${escapeHtml(portalSettings?.realm || "Async Service Monitor")}" /></label>
+              <label>
+                <span>OCI Settings Enabled</span>
+                <select name="oci_enabled">
+                  <option value="true" ${portalSettings?.oci_enabled ? "selected" : ""}>Enabled</option>
+                  <option value="false" ${!portalSettings?.oci_enabled ? "selected" : ""}>Disabled</option>
+                </select>
+              </label>
+              <label><span>OCI Tenancy OCID</span><input name="tenancy_ocid" value="${escapeHtml(portalSettings?.tenancy_ocid || "")}" /></label>
+              <label><span>OCI User OCID</span><input name="user_ocid" value="${escapeHtml(portalSettings?.user_ocid || "")}" /></label>
+              <label><span>OCI Region</span><input name="region" value="${escapeHtml(portalSettings?.region || "")}" /></label>
+              <label><span>OCI Group Claim</span><input name="group_claim" value="${escapeHtml(portalSettings?.group_claim || "")}" placeholder="groups" /></label>
+              <button type="submit">Save Portal Settings</button>
+              <p class="form-status" id="portal-settings-status"></p>
+            </form>
+          </div>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function hydrateFormVisibility(form) {
+  const type = form.querySelector("select[name='type']")?.value;
+  if (!type) return;
+  form.querySelectorAll(".field-url").forEach((node) => node.classList.toggle("hidden", type === "dns"));
+  form.querySelectorAll(".field-host").forEach((node) => node.classList.toggle("hidden", type !== "dns"));
+  const authType = form.querySelector("select[name='auth_type']")?.value || "bearer";
+  form.querySelectorAll(".auth-only").forEach((node) => node.classList.toggle("hidden", type !== "auth"));
+  form.querySelectorAll("[data-auth-field='token']").forEach((node) => node.classList.toggle("hidden", type !== "auth" || authType !== "bearer"));
+  form.querySelectorAll("[data-auth-field='username'], [data-auth-field='password']").forEach((node) => node.classList.toggle("hidden", type !== "auth" || authType !== "basic"));
+  form.querySelectorAll("[data-auth-field='header_name'], [data-auth-field='header_value']").forEach((node) => node.classList.toggle("hidden", type !== "auth" || authType !== "header"));
+}
+
+function monitorFormPayload(form) {
+  const formData = new FormData(form);
+  const type = String(formData.get("type"));
+  return {
+    name: String(formData.get("name")),
+    type,
+    enabled: String(formData.get("enabled")) === "true",
+    interval_seconds: Number(formData.get("interval_seconds")),
+    timeout_seconds: formData.get("timeout_seconds") ? Number(formData.get("timeout_seconds")) : null,
+    url: formData.get("url") || null,
+    host: formData.get("host") || null,
+    expected_statuses: parseCsv(formData.get("expected_statuses")).map(Number),
+    expect_authenticated_statuses: [200],
+    content: {
+      contains: parseCsv(formData.get("contains")),
+      not_contains: parseCsv(formData.get("not_contains")),
+      regex: String(formData.get("regex") || "") || null,
+    },
+    auth:
+      type === "auth"
+        ? {
+            type: String(formData.get("auth_type") || "bearer"),
+            token: formData.get("token") || null,
+            username: formData.get("username") || null,
+            password: formData.get("password") || null,
+            header_name: formData.get("header_name") || null,
+            header_value: formData.get("header_value") || null,
+          }
+        : null,
+  };
+}
+
+function peerFormPayload(form) {
+  const formData = new FormData(form);
+  return {
+    node_id: String(formData.get("node_id")),
+    base_url: String(formData.get("base_url")),
+    enabled: String(formData.get("enabled")) === "true",
+    container_name: formData.get("container_name") || null,
+    recovery: {
+      enabled: String(formData.get("recovery_enabled")) === "true",
+      container_name: formData.get("container_name") || null,
+    },
+  };
+}
+
+function userFormPayload(form) {
+  const formData = new FormData(form);
+  return {
+    username: String(formData.get("username")),
+    password: String(formData.get("password")),
+    first_name: String(formData.get("first_name") || ""),
+    last_name: String(formData.get("last_name") || ""),
+    role: String(formData.get("role")),
+    enabled: String(formData.get("enabled")) === "true",
+  };
+}
+
+function telemetryFormPayload(form) {
+  const formData = new FormData(form);
+  return {
+    enabled: String(formData.get("enabled")) === "true",
+    provider: String(formData.get("provider")),
+    host: String(formData.get("host") || "") || null,
+    port: Number(formData.get("port") || 3306),
+    database: String(formData.get("database") || "") || null,
+    username: String(formData.get("username") || "") || null,
+    password: String(formData.get("password") || "") || null,
+    retention_hours: Number(formData.get("retention_hours") || 2),
+    use_ssl: String(formData.get("use_ssl")) === "true",
+  };
+}
+
+function portalSettingsPayload(form) {
+  const formData = new FormData(form);
+  return {
+    enabled: String(formData.get("enabled")) === "true",
+    provider: String(formData.get("provider")),
+    realm: String(formData.get("realm") || "Async Service Monitor"),
+    oci_enabled: String(formData.get("oci_enabled")) === "true",
+    tenancy_ocid: String(formData.get("tenancy_ocid") || "") || null,
+    user_ocid: String(formData.get("user_ocid") || "") || null,
+    region: String(formData.get("region") || "") || null,
+    group_claim: String(formData.get("group_claim") || "") || null,
+  };
+}
+
+function setStatus(element, text, isError = false) {
+  if (!element) return;
+  element.textContent = text;
+  element.classList.toggle("error-text", isError);
+}
+
+async function renderRoute() {
+  state.session = await api("/api/session");
+  renderSessionChip();
+
+  const path = window.location.pathname;
+  if (path.startsWith("/monitors/") && path !== "/monitors/new") {
+    state.monitorsExpanded = true;
+  }
+  if (!state.session?.authenticated) {
+    renderSidebar([]);
+    renderLoginPage();
+    return;
+  }
+
+  const [overview, checks] = await Promise.all([api("/api/overview"), api("/api/checks")]);
+  const summaryCounts = renderOverview(overview, checks);
+  renderSidebar(checks);
+
+  if (path === "/" || path === "/monitors") {
+    const [checkMetrics, nodeMetrics, cluster] = await Promise.all([
+      api("/api/metrics/checks"),
+      api("/api/metrics/nodes"),
+      api("/api/cluster"),
+    ]);
+    renderDashboard(overview, checks, summaryCounts, checkMetrics, nodeMetrics, cluster);
+    return;
+  }
+
+  if (path === "/guide") {
+    renderGuidePage();
+    return;
+  }
+
+  if (path === "/profile") {
+    const profile = await api("/api/profile");
+    renderProfilePage(profile);
+    return;
+  }
+
+  if (path === "/admin") {
+    if (!hasRole("admin")) {
+      navigate("/");
+      return;
+    }
+    const [users, telemetry, portalSettings] = await Promise.all([
+      api("/api/users"),
+      api("/api/settings/telemetry"),
+      api("/api/settings/portal"),
+    ]);
+    renderAdminPage(users, telemetry, portalSettings);
+    return;
+  }
+
+  if (path === "/monitors/new") {
+    setWorkspaceHeader("Add Monitor", "Create a new endpoint monitor with its own health rules and authentication.");
+    document.getElementById("app-root").innerHTML = monitorFormMarkup(
+      {
+        name: "",
+        type: "http",
+        enabled: true,
+        interval_seconds: 300,
+        timeout_seconds: 10,
+        expected_statuses: [200],
+        content_rules: { contains: [], not_contains: [], regex: "" },
+        status: "unknown",
+        metric_points: [],
+      },
+      "create"
+    );
+    const form = document.getElementById("monitor-form");
+    hydrateFormVisibility(form);
+    if (!hasRole("read_write")) {
+      disableForm(form, true);
+    }
+    return;
+  }
+
+  if (path.startsWith("/monitors/")) {
+    const name = decodeURIComponent(path.split("/").pop());
+    const [check, checkMetrics] = await Promise.all([
+      api(`/api/checks/${encodeURIComponent(name)}`),
+      api("/api/metrics/checks"),
+    ]);
+    check.metric_points = checkMetrics[check.name] || [];
+    setWorkspaceHeader(check.name, "Dedicated monitor page for editing, auth updates, and immediate re-checks.");
+    document.getElementById("app-root").innerHTML = monitorFormMarkup(check, "edit");
+    const form = document.getElementById("monitor-form");
+    hydrateFormVisibility(form);
+    if (!hasRole("read_write")) {
+      disableForm(form, true);
+      setStatus(document.getElementById("monitor-form-status"), "Read-only access: editing is disabled for this account.");
+    }
+    return;
+  }
+
+  if (path === "/containers") {
+    const [peers, containers, nodeMetrics] = await Promise.all([
+      api("/api/peers"),
+      api("/api/containers"),
+      api("/api/metrics/nodes"),
+    ]);
+    renderContainersPage(peers, containers, nodeMetrics);
+  }
+}
+
+function navigate(url) {
+  window.history.pushState({}, "", url);
+  renderRoute().catch((error) => alert(error.message));
+}
+
+async function handleSubmit(event) {
+  if (event.target.id === "login-form") {
+    event.preventDefault();
+    const form = event.target;
+    const data = new FormData(form);
+    const status = document.getElementById("login-status");
+    try {
+      setStatus(status, "Signing in...");
+      await api("/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify({
+          username: String(data.get("username")),
+          password: String(data.get("password")),
+        }),
+      });
+      navigate("/");
+    } catch (error) {
+      setStatus(status, error.message, true);
+    }
+    return;
+  }
+
+  if (event.target.id === "register-form") {
+    event.preventDefault();
+    const form = event.target;
+    const data = new FormData(form);
+    const status = document.getElementById("register-status");
+    try {
+      setStatus(status, "Creating account...");
+      await api("/api/auth/register", {
+        method: "POST",
+        body: JSON.stringify({
+          username: String(data.get("username")),
+          password: String(data.get("password")),
+          first_name: String(data.get("first_name") || ""),
+          last_name: String(data.get("last_name") || ""),
+        }),
+      });
+      setStatus(status, "Account created. You can sign in now.");
+      form.reset();
+    } catch (error) {
+      setStatus(status, error.message, true);
+    }
+    return;
+  }
+
+  if (event.target.id === "reset-password-form") {
+    event.preventDefault();
+    const form = event.target;
+    const data = new FormData(form);
+    const status = document.getElementById("reset-password-status");
+    try {
+      setStatus(status, "Resetting password...");
+      await api("/api/auth/reset-password", {
+        method: "POST",
+        body: JSON.stringify({
+          username: String(data.get("username")),
+          password: String(data.get("password")),
+        }),
+      });
+      setStatus(status, "Password reset. You can sign in with the new password.");
+      form.reset();
+    } catch (error) {
+      setStatus(status, error.message, true);
+    }
+    return;
+  }
+
+  if (event.target.id === "profile-form") {
+    event.preventDefault();
+    const form = event.target;
+    const data = new FormData(form);
+    const status = document.getElementById("profile-status");
+    try {
+      setStatus(status, "Saving profile...");
+      await api("/api/profile", {
+        method: "PUT",
+        body: JSON.stringify({
+          first_name: String(data.get("first_name") || ""),
+          last_name: String(data.get("last_name") || ""),
+          password: String(data.get("password") || "") || null,
+        }),
+      });
+      await renderRoute();
+      setStatus(document.getElementById("profile-status"), "Profile updated.");
+    } catch (error) {
+      setStatus(status, error.message, true);
+    }
+    return;
+  }
+
+  if (event.target.id === "telemetry-form") {
+    event.preventDefault();
+    if (!hasRole("admin")) return;
+    const form = event.target;
+    const status = document.getElementById("telemetry-status");
+    try {
+      setStatus(status, "Saving telemetry settings...");
+      await api("/api/settings/telemetry", {
+        method: "PUT",
+        body: JSON.stringify(telemetryFormPayload(form)),
+      });
+      setStatus(status, "Telemetry settings saved.");
+    } catch (error) {
+      setStatus(status, error.message, true);
+    }
+    return;
+  }
+
+  if (event.target.id === "portal-settings-form") {
+    event.preventDefault();
+    if (!hasRole("admin")) return;
+    const form = event.target;
+    const status = document.getElementById("portal-settings-status");
+    try {
+      setStatus(status, "Saving portal settings...");
+      await api("/api/settings/portal", {
+        method: "PUT",
+        body: JSON.stringify(portalSettingsPayload(form)),
+      });
+      setStatus(status, "Portal settings saved.");
+    } catch (error) {
+      setStatus(status, error.message, true);
+    }
+    return;
+  }
+
+  if (event.target.id === "monitor-form") {
+    event.preventDefault();
+    if (!hasRole("read_write")) return;
+    const form = event.target;
+    const status = document.getElementById("monitor-form-status");
+    const isNew = window.location.pathname === "/monitors/new";
+    try {
+      setStatus(status, isNew ? "Creating monitor..." : "Saving monitor and re-running...");
+      const payload = monitorFormPayload(form);
+      if (isNew) {
+        await api("/api/checks", { method: "POST", body: JSON.stringify(payload) });
+        navigate(`/monitors/${encodeURIComponent(payload.name)}`);
+      } else {
+        const originalName = form.dataset.originalName;
+        await api(`/api/checks/${encodeURIComponent(originalName)}`, {
+          method: "PUT",
+          body: JSON.stringify(payload),
+        });
+        if (payload.name !== originalName) {
+          navigate(`/monitors/${encodeURIComponent(payload.name)}`);
+        } else {
+          await renderRoute();
+        }
+      }
+    } catch (error) {
+      setStatus(status, error.message, true);
+    }
+    return;
+  }
+
+  if (event.target.matches(".peer-form")) {
+    event.preventDefault();
+    if (!hasRole("admin")) return;
+    const form = event.target;
+    const status = form.querySelector(".form-status");
+    try {
+      setStatus(status, "Saving peer...");
+      await api(`/api/peers/${encodeURIComponent(form.dataset.peerId)}`, {
+        method: "PUT",
+        body: JSON.stringify(peerFormPayload(form)),
+      });
+      await renderRoute();
+    } catch (error) {
+      setStatus(status, error.message, true);
+    }
+    return;
+  }
+
+  if (event.target.id === "create-peer-form") {
+    event.preventDefault();
+    if (!hasRole("admin")) return;
+    const form = event.target;
+    const status = document.getElementById("peer-create-status");
+    try {
+      setStatus(status, "Adding peer...");
+      await api("/api/peers", { method: "POST", body: JSON.stringify(peerFormPayload(form)) });
+      form.reset();
+      await renderRoute();
+    } catch (error) {
+      setStatus(status, error.message, true);
+    }
+    return;
+  }
+
+  if (event.target.id === "create-container-form") {
+    event.preventDefault();
+    if (!hasRole("admin")) return;
+    const form = event.target;
+    const data = new FormData(form);
+    const status = document.getElementById("container-create-status");
+    try {
+      setStatus(status, "Creating container...");
+      await api("/api/containers", {
+        method: "POST",
+        body: JSON.stringify({
+          node_id: String(data.get("node_id")),
+          container_name: String(data.get("container_name")),
+          image: String(data.get("image")),
+          base_url: String(data.get("base_url")),
+          network: data.get("network") || null,
+          host_port: data.get("host_port") ? Number(data.get("host_port")) : null,
+          enabled: true,
+          recovery_enabled: true,
+        }),
+      });
+      form.reset();
+      await renderRoute();
+    } catch (error) {
+      setStatus(status, error.message, true);
+    }
+    return;
+  }
+
+  if (event.target.id === "create-user-form") {
+    event.preventDefault();
+    if (!hasRole("admin")) return;
+    const form = event.target;
+    const status = document.getElementById("user-create-status");
+    try {
+      setStatus(status, "Creating user...");
+      await api("/api/users", {
+        method: "POST",
+        body: JSON.stringify(userFormPayload(form)),
+      });
+      form.reset();
+      await renderRoute();
+    } catch (error) {
+      setStatus(status, error.message, true);
+    }
+    return;
+  }
+
+  if (event.target.matches(".user-form")) {
+    event.preventDefault();
+    if (!hasRole("admin")) return;
+    const form = event.target;
+    const status = form.querySelector(".form-status");
+    try {
+      setStatus(status, "Saving user...");
+      await api(`/api/users/${encodeURIComponent(form.dataset.username)}`, {
+        method: "PUT",
+        body: JSON.stringify(userFormPayload(form)),
+      });
+      await renderRoute();
+    } catch (error) {
+      setStatus(status, error.message, true);
+    }
+  }
+}
+
+async function handleClick(event) {
+  const link = event.target.closest("[data-link]");
+  if (link) {
+    event.preventDefault();
+    navigate(link.getAttribute("href"));
+    return;
+  }
+
+  if (event.target.closest("#configured-monitors-toggle")) {
+    state.monitorsExpanded = !state.monitorsExpanded;
+    await renderRoute();
+    return;
+  }
+
+  if (event.target.id === "logout-btn") {
+    await api("/api/auth/logout", { method: "POST" });
+    navigate("/");
+    return;
+  }
+
+  if (event.target.id === "toggle-monitor-btn") {
+    if (!hasRole("read_write")) return;
+    const form = document.getElementById("monitor-form");
+    const originalName = form.dataset.originalName;
+    const enabled = form.querySelector("select[name='enabled']").value !== "true";
+    await api(`/api/checks/${encodeURIComponent(originalName)}/enabled`, {
+      method: "PATCH",
+      body: JSON.stringify({ enabled }),
+    });
+    await renderRoute();
+    return;
+  }
+
+  if (event.target.id === "delete-monitor-btn") {
+    if (!hasRole("read_write")) return;
+    const form = document.getElementById("monitor-form");
+    const originalName = form.dataset.originalName;
+    if (!window.confirm(`Delete monitor "${originalName}"?`)) return;
+    await api(`/api/checks/${encodeURIComponent(originalName)}`, { method: "DELETE" });
+    navigate("/");
+    return;
+  }
+
+  const togglePeer = event.target.closest("[data-toggle-peer]");
+  if (togglePeer) {
+    if (!hasRole("admin")) return;
+    await api(`/api/peers/${encodeURIComponent(togglePeer.dataset.togglePeer)}/enabled`, {
+      method: "PATCH",
+      body: JSON.stringify({ enabled: togglePeer.dataset.enabled !== "true" }),
+    });
+    await renderRoute();
+    return;
+  }
+
+  const deletePeer = event.target.closest("[data-delete-peer]");
+  if (deletePeer) {
+    if (!hasRole("admin")) return;
+    if (!window.confirm(`Delete peer "${deletePeer.dataset.deletePeer}"?`)) return;
+    await api(`/api/peers/${encodeURIComponent(deletePeer.dataset.deletePeer)}`, { method: "DELETE" });
+    await renderRoute();
+    return;
+  }
+
+  const deleteUser = event.target.closest("[data-delete-user]");
+  if (deleteUser) {
+    if (!hasRole("admin")) return;
+    if (!window.confirm(`Delete user "${deleteUser.dataset.deleteUser}"?`)) return;
+    await api(`/api/users/${encodeURIComponent(deleteUser.dataset.deleteUser)}`, { method: "DELETE" });
+    await renderRoute();
+    return;
+  }
+
+  const containerAction = event.target.closest("[data-action]");
+  if (containerAction) {
+    if (!hasRole("admin")) return;
+    await api(`/api/containers/${encodeURIComponent(containerAction.dataset.container)}/${containerAction.dataset.action}`, {
+      method: "POST",
+    });
+    await renderRoute();
+  }
+}
+
+function handleChange(event) {
+  if (event.target.matches("select[name='type'], select[name='auth_type']")) {
+    hydrateFormVisibility(event.target.closest("form"));
+  }
+}
+
+function boot() {
+  document.addEventListener("click", (event) => handleClick(event).catch((error) => alert(error.message)));
+  document.addEventListener("submit", (event) => handleSubmit(event).catch((error) => alert(error.message)));
+  document.addEventListener("change", handleChange);
+  window.addEventListener("popstate", () => renderRoute().catch((error) => alert(error.message)));
+  renderRoute().catch((error) => alert(error.message));
+  state.pollingHandle = setInterval(() => renderRoute().catch(() => {}), 10000);
+}
+
+window.addEventListener("DOMContentLoaded", boot);
