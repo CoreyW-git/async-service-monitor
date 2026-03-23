@@ -409,7 +409,13 @@ function renderDashboard(overview, checks, summaryCounts, checkMetrics, nodeMetr
   const root = document.getElementById("app-root");
   const endpointChecks = checks.filter((check) => check.type !== "database");
   const databaseChecks = checks.filter((check) => check.type === "database");
-  const endpointCards = endpointChecks.map((check) => monitorCardMarkup(check, checkMetrics)).join("");
+  const enabledEndpointChecks = endpointChecks.filter((check) => check.status !== "disabled");
+  const healthyEnabledEndpointChecks = enabledEndpointChecks.filter((check) => check.status === "healthy");
+  const unhealthyEnabledEndpointChecks = enabledEndpointChecks.filter((check) => check.status === "unhealthy");
+  const disabledChecks = checks.filter((check) => check.status === "disabled");
+  const activeChecks = checks.filter((check) => check.status !== "disabled");
+  const endpointCards = enabledEndpointChecks.map((check) => monitorCardMarkup(check, checkMetrics)).join("");
+  const disabledCards = disabledChecks.map((check) => monitorCardMarkup(check, checkMetrics)).join("");
   const databaseCards = databaseChecks.map((check) => monitorCardMarkup(check, checkMetrics)).join("");
 
   const nodeIds = Array.from(
@@ -423,6 +429,35 @@ function renderDashboard(overview, checks, summaryCounts, checkMetrics, nodeMetr
   const healthyNodeCount = Array.from(
     new Set([overview.node_id, ...((cluster?.healthy_nodes || []).filter(Boolean))])
   ).length;
+  const unhealthyNodeCount = Math.max(totalNodes - healthyNodeCount, 0);
+  const healthPercent = activeChecks.length
+    ? Math.round((summaryCounts.healthy / activeChecks.length) * 100)
+    : 0;
+  const recentFailures = checks.filter((check) => check.status === "unhealthy").slice(0, 3);
+  const availabilityState =
+    activeChecks.length === 0
+      ? "neutral"
+      : summaryCounts.unhealthy === 0
+        ? "good"
+        : summaryCounts.healthy === 0
+          ? "bad"
+          : "warn";
+  const enabledMonitorState =
+    enabledEndpointChecks.length === 0
+      ? "neutral"
+      : unhealthyEnabledEndpointChecks.length === 0
+        ? "good"
+        : healthyEnabledEndpointChecks.length === 0
+          ? "bad"
+          : "warn";
+  const nodeState =
+    totalNodes === 0
+      ? "neutral"
+      : unhealthyNodeCount === 0
+        ? "good"
+        : healthyNodeCount === 0
+          ? "bad"
+          : "warn";
 
   const nodeCards = nodeIds
     .map((nodeId) => {
@@ -451,37 +486,44 @@ function renderDashboard(overview, checks, summaryCounts, checkMetrics, nodeMetr
     .join("");
 
   root.innerHTML = `
-    <div class="stack">
-      <section class="dashboard-overview">
-        <article class="panel dashboard-primary">
+    <div class="grafana-dashboard">
+      <section class="grafana-hero">
+        <article class="panel grafana-panel grafana-panel-primary">
           <div class="panel-head">
             <h3>Service Health</h3>
-            <p>Fast visual totals across all configured monitors.</p>
+            <p>Overall monitor health across the active service estate.</p>
           </div>
-          <div class="dashboard-kpis">
-            <article class="chart-card">
-              <p class="subtle">Healthy</p>
-              <div class="chart-value">${summaryCounts.healthy}</div>
-            </article>
-            <article class="chart-card">
-              <p class="subtle">Unhealthy</p>
-              <div class="chart-value">${summaryCounts.unhealthy}</div>
-            </article>
-            <article class="chart-card">
-              <p class="subtle">Disabled</p>
-              <div class="chart-value">${summaryCounts.disabled}</div>
-            </article>
-            <article class="chart-card">
-              <p class="subtle">Total Monitors</p>
-              <div class="chart-value">${checks.length}</div>
-            </article>
+          <div class="grafana-health-grid">
+            <div class="grafana-health-score aggregate-${availabilityState}">
+              <span class="grafana-label">Availability</span>
+              <strong>${healthPercent}%</strong>
+              <span class="subtle">${summaryCounts.healthy} of ${activeChecks.length} enabled monitors healthy</span>
+            </div>
+            <div class="dashboard-kpis">
+              <article class="chart-card grafana-stat-card">
+                <p class="subtle">Healthy</p>
+                <div class="chart-value">${summaryCounts.healthy}</div>
+              </article>
+              <article class="chart-card grafana-stat-card danger">
+                <p class="subtle">Unhealthy</p>
+                <div class="chart-value">${summaryCounts.unhealthy}</div>
+              </article>
+              <article class="chart-card grafana-stat-card neutral">
+                <p class="subtle">Disabled</p>
+                <div class="chart-value">${summaryCounts.disabled}</div>
+              </article>
+              <article class="chart-card grafana-stat-card">
+                <p class="subtle">Total</p>
+                <div class="chart-value">${checks.length}</div>
+              </article>
+            </div>
           </div>
         </article>
 
-        <article class="panel dashboard-secondary">
+        <article class="panel grafana-panel grafana-panel-secondary">
           <div class="panel-head">
-            <h3>Cluster Snapshot</h3>
-            <p>Current node coverage and database monitor count.</p>
+            <h3>Operations Snapshot</h3>
+            <p>Node coverage, cluster state, and the most recent problem checks.</p>
           </div>
           <div class="dashboard-summary-list">
             <div class="dashboard-summary-row">
@@ -489,48 +531,95 @@ function renderDashboard(overview, checks, summaryCounts, checkMetrics, nodeMetr
               <strong>${healthyNodeCount} / ${totalNodes}</strong>
             </div>
             <div class="dashboard-summary-row">
-              <span>Endpoint Monitors</span>
-              <strong>${endpointChecks.length}</strong>
+              <span>Cluster Mode</span>
+              <strong>${cluster?.enabled ? "Enabled" : "Standalone"}</strong>
             </div>
             <div class="dashboard-summary-row">
               <span>Database Monitors</span>
               <strong>${databaseChecks.length}</strong>
             </div>
-            <div class="dashboard-summary-row">
-              <span>Cluster Mode</span>
-              <strong>${cluster?.enabled ? "Enabled" : "Standalone"}</strong>
-            </div>
+          </div>
+          <div class="grafana-incident-list">
+            <span class="grafana-label">Recent Issues</span>
+            ${
+              recentFailures.length
+                ? recentFailures
+                    .map(
+                      (check) => `
+                        <a class="grafana-incident" href="/monitors/${encodeURIComponent(check.name)}" data-link>
+                          <span class="dot unhealthy"></span>
+                          <span>${escapeHtml(check.name)}</span>
+                          <span class="subtle">${escapeHtml(check.latest_result?.message || "Unhealthy")}</span>
+                        </a>
+                      `
+                    )
+                    .join("")
+                : `<div class="grafana-incident ok"><span class="dot healthy"></span><span>No active incidents</span><span class="subtle">Everything currently looks stable</span></div>`
+            }
           </div>
         </article>
       </section>
 
-      <section class="panel">
-        <div class="panel-head">
-          <h3>Endpoint Monitors</h3>
-          <p>Live availability graphs for HTTP, DNS, auth, and generic endpoint checks.</p>
-        </div>
-        <div class="status-list">
-          ${endpointCards || `<article class="guide-card"><p>No endpoint monitors are configured yet.</p></article>`}
-        </div>
+      <section class="grafana-main-grid">
+        <details class="accordion-item aggregate-${enabledMonitorState}">
+          <summary class="accordion-summary">
+            <div>
+              <strong>Enabled Monitors</strong>
+              <div class="status-meta">
+                <span>${healthyEnabledEndpointChecks.length} healthy</span>
+                <span>${unhealthyEnabledEndpointChecks.length} unhealthy</span>
+              </div>
+            </div>
+          </summary>
+          <div class="accordion-body">
+            <div class="status-list">
+              ${endpointCards || `<article class="guide-card"><p>No endpoint monitors are configured yet.</p></article>`}
+            </div>
+          </div>
+        </details>
+
+        <details class="accordion-item aggregate-${nodeState}">
+          <summary class="accordion-summary">
+            <div>
+              <strong>Monitoring Nodes</strong>
+              <div class="status-meta">
+                <span>${healthyNodeCount} healthy</span>
+                <span>${unhealthyNodeCount} unhealthy</span>
+              </div>
+            </div>
+          </summary>
+          <div class="accordion-body">
+            <div class="stack">
+              ${nodeCards || `<article class="guide-card"><p>No node history is available yet.</p></article>`}
+            </div>
+          </div>
+        </details>
       </section>
 
-      <section class="panel">
+      <details class="accordion-item">
+        <summary class="accordion-summary">
+          <div>
+            <strong>Disabled Monitors</strong>
+            <div class="status-meta">
+              <span>Checks currently excluded from active availability calculations</span>
+            </div>
+          </div>
+          ${statusPill(disabledChecks.length ? "disabled" : "unknown")}
+        </summary>
+        <div class="accordion-body">
+          <div class="status-list">
+            ${disabledCards || `<article class="guide-card"><p>No disabled monitors right now.</p></article>`}
+          </div>
+        </div>
+      </details>
+
+      <section class="panel grafana-panel">
         <div class="panel-head">
           <h3>Database</h3>
           <p>Database availability graphs for configured databases and telemetry storage targets.</p>
         </div>
         <div class="status-list">
           ${databaseCards || `<article class="guide-card"><p>No database monitors are configured yet.</p></article>`}
-        </div>
-      </section>
-
-      <section class="panel">
-        <div class="panel-head">
-          <h3>Monitoring Nodes</h3>
-          <p>Cluster heartbeat graphs show whether each monitoring node is reachable over time.</p>
-        </div>
-        <div class="stack">
-          ${nodeCards || `<article class="guide-card"><p>No node history is available yet.</p></article>`}
         </div>
       </section>
     </div>
