@@ -3,13 +3,14 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import time
 from dataclasses import dataclass
 
 import docker
 import httpx
 
-from service_monitor.config import AppConfig, PeerConfig
+from service_monitor.config import AppConfig, CheckConfig, PeerConfig
 from service_monitor.notifier import EmailNotifier
 from service_monitor.state import MonitorState
 
@@ -28,6 +29,7 @@ class ClusterCoordinator:
         self.config = config
         self.notifier = notifier
         self.state = state
+        self.monitor_scope = os.getenv("MONITOR_SCOPE", "full").strip().lower() or "full"
         self.peer_states = {
             peer.node_id: PeerState(node_id=peer.node_id, healthy=False)
             for peer in config.cluster.peers
@@ -82,9 +84,61 @@ class ClusterCoordinator:
         return self.owner_for_check(check_name) == self.config.cluster.node_id
 
     def owner_for_check(self, check_name: str) -> str:
-        active_nodes = self.healthy_node_ids()
-        check_hash = int(hashlib.sha256(check_name.encode("utf-8")).hexdigest(), 16)
-        return active_nodes[check_hash % len(active_nodes)]
+        assignments = self.assignment_plan()
+        return assignments.get(check_name, self.config.cluster.node_id)
+
+    def assignment_plan(self) -> dict[str, str]:
+        checks = sorted(
+            self.config.checks,
+            key=lambda check: (
+                0 if check.enabled else 1,
+                0 if check.placement_mode == "specific" else 1,
+                check.name,
+            ),
+        )
+        assignments: dict[str, str] = {}
+        loads: dict[str, int] = {node_id: 0 for node_id in self.assignable_node_ids()}
+        fallback_nodes = self.healthy_node_ids()
+
+        for check in checks:
+            owner = self._choose_owner_for_check(check, loads, fallback_nodes)
+            assignments[check.name] = owner
+            if check.enabled:
+                loads[owner] = loads.get(owner, 0) + 1
+
+        return assignments
+
+    def assignable_node_ids(self) -> list[str]:
+        node_ids = []
+        if self.monitor_scope != "peer_only":
+            node_ids.append(self.config.cluster.node_id)
+        node_ids.extend(
+            peer.node_id
+            for peer in self.config.cluster.peers
+            if peer.enabled
+            and peer.monitor_scope != "peer_only"
+            and self.peer_states[peer.node_id].healthy
+        )
+        return sorted(node_ids) or self.healthy_node_ids()
+
+    def _choose_owner_for_check(
+        self, check: CheckConfig, loads: dict[str, int], fallback_nodes: list[str]
+    ) -> str:
+        assignable_nodes = self.assignable_node_ids()
+        if check.placement_mode == "specific" and check.assigned_node_id:
+            if check.assigned_node_id in assignable_nodes:
+                return check.assigned_node_id
+            if check.assigned_node_id in fallback_nodes:
+                return check.assigned_node_id
+
+        candidates = assignable_nodes or fallback_nodes
+        if not candidates:
+            return self.config.cluster.node_id
+
+        min_load = min(loads.get(node_id, 0) for node_id in candidates)
+        least_loaded = [node_id for node_id in candidates if loads.get(node_id, 0) == min_load]
+        check_hash = int(hashlib.sha256(check.name.encode("utf-8")).hexdigest(), 16)
+        return least_loaded[check_hash % len(least_loaded)]
 
     def recovery_owner_for_peer(self, peer_id: str) -> str:
         active_nodes = self.healthy_node_ids()

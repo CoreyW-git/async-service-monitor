@@ -3,6 +3,11 @@ const state = {
   session: null,
   monitorsExpanded: false,
   clusterExpanded: false,
+  dashboardPanels: {
+    enabledMonitors: false,
+    monitoringNodes: false,
+    disabledMonitors: false,
+  },
 };
 
 const ROLE_LEVELS = {
@@ -561,7 +566,7 @@ function renderDashboard(overview, checks, summaryCounts, checkMetrics, nodeMetr
       </section>
 
       <section class="grafana-main-grid">
-        <details class="accordion-item aggregate-${enabledMonitorState}">
+        <details class="accordion-item aggregate-${enabledMonitorState}" data-dashboard-panel="enabledMonitors" ${state.dashboardPanels.enabledMonitors ? "open" : ""}>
           <summary class="accordion-summary">
             <div>
               <strong>Enabled Monitors</strong>
@@ -578,7 +583,7 @@ function renderDashboard(overview, checks, summaryCounts, checkMetrics, nodeMetr
           </div>
         </details>
 
-        <details class="accordion-item aggregate-${nodeState}">
+        <details class="accordion-item aggregate-${nodeState}" data-dashboard-panel="monitoringNodes" ${state.dashboardPanels.monitoringNodes ? "open" : ""}>
           <summary class="accordion-summary">
             <div>
               <strong>Monitoring Nodes</strong>
@@ -596,7 +601,7 @@ function renderDashboard(overview, checks, summaryCounts, checkMetrics, nodeMetr
         </details>
       </section>
 
-      <details class="accordion-item">
+      <details class="accordion-item" data-dashboard-panel="disabledMonitors" ${state.dashboardPanels.disabledMonitors ? "open" : ""}>
         <summary class="accordion-summary">
           <div>
             <strong>Disabled Monitors</strong>
@@ -633,6 +638,34 @@ function authSummary(check) {
   return `Header auth${check.auth.header_name ? ` via ${check.auth.header_name}` : ""}`;
 }
 
+function assignableNodeOptions(cluster) {
+  const localNodeId = cluster?.node_id || state.session?.node_id || "monitor-1";
+  const localScope = cluster?.local_monitor_scope === "peer_only" ? "Peer only" : "Full monitoring";
+  const nodes = [
+    {
+      node_id: localNodeId,
+      container_name: localNodeId,
+      enabled: true,
+      healthy: (cluster?.healthy_nodes || []).includes(localNodeId),
+      monitor_scope: cluster?.local_monitor_scope || "full",
+      label: `Local node (${localNodeId})`,
+      description: localScope,
+    },
+    ...((cluster?.peers || []).map((peer) => ({
+      ...peer,
+      label: peer.container_name ? `${peer.node_id} (${peer.container_name})` : peer.node_id,
+      description: peer.monitor_scope === "peer_only" ? "Peer only" : "Full monitoring",
+    }))),
+  ];
+
+  return nodes.filter((node, index, list) => {
+    if (node.monitor_scope === "peer_only") {
+      return false;
+    }
+    return list.findIndex((item) => item.node_id === node.node_id) === index;
+  });
+}
+
 function disableForm(form, disabled) {
   form.querySelectorAll("input, select, button").forEach((element) => {
     if (element.dataset.alwaysEnabled === "true") {
@@ -642,13 +675,16 @@ function disableForm(form, disabled) {
   });
 }
 
-function monitorFormMarkup(check, mode) {
+function monitorFormMarkup(check, mode, cluster = { node_id: "monitor-1", peers: [], healthy_nodes: [] }) {
   const auth = check.auth || {};
   const isNew = mode === "create";
   const canWrite = hasRole("read_write");
   const managed = Boolean(check.generated);
   const editable = canWrite && !managed;
   const readonlyAttr = editable ? "" : "disabled";
+  const placementMode = check.placement_mode || "auto";
+  const nodes = assignableNodeOptions(cluster);
+  const selectedNodeId = check.assigned_node_id || "";
   return `
     <div class="detail-grid">
       <section class="panel">
@@ -704,6 +740,41 @@ function monitorFormMarkup(check, mode) {
                 <label class="field-url ${["http", "auth"].includes(check.type) ? "" : "hidden"}"><span>URL</span><input name="url" value="${escapeHtml(check.url || "")}" ${readonlyAttr} /></label>
                 <label class="field-host ${["dns", "database", "generic"].includes(check.type) ? "" : "hidden"}"><span>Host</span><input name="host" value="${escapeHtml(check.host || "")}" ${readonlyAttr} /></label>
                 <label class="field-port ${["http", "auth", "database", "generic"].includes(check.type) ? "" : "hidden"}"><span>Port</span><input name="port" type="number" min="1" max="65535" value="${escapeHtml(check.port || "")}" ${readonlyAttr} /></label>
+              </div>
+            </details>
+
+            <details class="accordion-item" open>
+              <summary class="accordion-summary">
+                <div>
+                  <strong>Monitor Placement</strong>
+                  <div class="status-meta">
+                    <span>Choose a specific monitoring container or let the service auto-place it</span>
+                  </div>
+                </div>
+              </summary>
+              <div class="accordion-body">
+                <label>
+                  <span>Placement</span>
+                  <select name="placement_mode" ${readonlyAttr}>
+                    <option value="auto" ${placementMode !== "specific" ? "selected" : ""}>Auto-select the healthiest least-loaded container</option>
+                    <option value="specific" ${placementMode === "specific" ? "selected" : ""}>Choose a specific monitoring container</option>
+                  </select>
+                </label>
+                <label class="field-assigned-node ${placementMode === "specific" ? "" : "hidden"}">
+                  <span>Monitoring Container</span>
+                  <select name="assigned_node_id" ${readonlyAttr}>
+                    <option value="">Select a monitoring container</option>
+                    ${nodes
+                      .map(
+                        (node) => `<option value="${escapeHtml(node.node_id)}" ${selectedNodeId === node.node_id ? "selected" : ""}>${escapeHtml(node.label)}${node.healthy ? " | healthy" : " | unhealthy"} | ${escapeHtml(node.description || "")}</option>`
+                      )
+                      .join("")}
+                  </select>
+                </label>
+                <div class="guide-card">
+                  <h4>Placement Notes</h4>
+                  <p>${nodes.length ? "Auto placement keeps new endpoint checks on healthy full-monitoring nodes and balances them across the cluster." : "No full-monitoring peer nodes are currently available, so this monitor will stay on the local node."}</p>
+                </div>
               </div>
             </details>
 
@@ -813,6 +884,10 @@ function monitorFormMarkup(check, mode) {
             <p>${escapeHtml(check.owner || "monitor-1")}</p>
           </div>
           <div class="guide-card">
+            <h4>Placement</h4>
+            <p>${check.placement_mode === "specific" ? `Pinned to ${escapeHtml(check.assigned_node_id || check.owner || "monitor-1")}` : "Automatic cluster placement"}</p>
+          </div>
+          <div class="guide-card">
             <h4>Target</h4>
             <p>${escapeHtml(checkTargetLabel(check))}</p>
           </div>
@@ -826,11 +901,85 @@ function monitorFormMarkup(check, mode) {
   `;
 }
 
-function renderContainersPage(peers, containers, nodeMetrics) {
+function renderContainersPage(peers, containers, nodeMetrics, cluster = { enabled: false, node_id: "monitor-1", peers: [], local_assigned_checks: [] }) {
   setWorkspaceHeader("Configure Containers", "Configure peer monitors, add new nodes, and define how the cluster is managed.");
   const root = document.getElementById("app-root");
   const canAdmin = hasRole("admin");
+  const clusterContainers = containers.available ? containers.containers : [];
   root.innerHTML = `
+    <div class="stack">
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Cluster Status</h3>
+          <p>Current cluster topology, live containers, networks, and published host ports.</p>
+        </div>
+        <div class="guide-grid">
+          <article class="guide-card">
+            <h4>Cluster Mode</h4>
+            <p>${cluster.enabled ? "Enabled" : "Standalone"}</p>
+          </article>
+          <article class="guide-card">
+            <h4>Local Node</h4>
+            <p>${escapeHtml(cluster.node_id || "monitor-1")}</p>
+          </article>
+          <article class="guide-card">
+            <h4>Peer Count</h4>
+            <p>${peers.length}</p>
+          </article>
+          <article class="guide-card">
+            <h4>Tracked Containers</h4>
+            <p>${clusterContainers.length}</p>
+          </article>
+        </div>
+        <div class="stack" style="margin-top: 16px;">
+          <article class="guide-card">
+            <h4>Assigned Checks</h4>
+            <p>${cluster.local_assigned_checks?.length ? escapeHtml(cluster.local_assigned_checks.join(", ")) : "No local check assignments currently reported."}</p>
+          </article>
+          ${(clusterContainers.length
+            ? clusterContainers
+                .map(
+                  (container) => `
+                    <article class="guide-card">
+                      <div class="status-row">
+                        <span class="dot ${container.status === "running" ? "healthy" : "disabled"}"></span>
+                        <div>
+                          <strong>${escapeHtml(container.name)}</strong>
+                          <div class="status-meta">
+                            <span>${escapeHtml(container.image)}</span>
+                            <span>${escapeHtml((container.networks || []).join(", ") || "No network info")}</span>
+                          </div>
+                        </div>
+                        <div>${nodeSparkline(container.name, nodeMetrics)}</div>
+                        ${statusPill(container.status === "running" ? "healthy" : "disabled")}
+                        <span class="subtle">${escapeHtml(container.status)}</span>
+                      </div>
+                      <div class="guide-grid" style="margin-top: 12px;">
+                        <div>
+                          <h4>Docker Networks</h4>
+                          <p>${escapeHtml((container.networks || []).join(", ") || "No networks attached")}</p>
+                        </div>
+                        <div>
+                          <h4>Published Ports</h4>
+                          <p>${escapeHtml(
+                            (container.ports || []).length
+                              ? container.ports
+                                  .map((port) =>
+                                    `${port.host_ip || "0.0.0.0"}:${port.host_port || "-"} -> ${port.container_port}`
+                                  )
+                                  .join(", ")
+                              : "No published host ports"
+                          )}</p>
+                        </div>
+                      </div>
+                    </article>
+                  `
+                )
+                .join("")
+            : `<article class="guide-card"><p>No tracked cluster containers are available.</p></article>`)}
+        </div>
+      </section>
+
     <div class="split-panels">
       <section class="panel">
         <div class="panel-head">
@@ -841,6 +990,7 @@ function renderContainersPage(peers, containers, nodeMetrics) {
           <label><span>Node ID</span><input name="node_id" placeholder="monitor-4" required /></label>
           <label><span>Base URL</span><input name="base_url" placeholder="http://monitor-4:8080" required /></label>
           <label><span>Container Name</span><input name="container_name" placeholder="monitor-4" /></label>
+          <label><span>Monitoring Scope</span><select name="monitor_scope"><option value="full">Monitor peers and external endpoints</option><option value="peer_only">Monitor peers only</option></select></label>
           <label><span>Peer Monitor</span><select name="enabled"><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
           <label><span>Recovery</span><select name="recovery_enabled"><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
           <button type="submit">Add Peer Monitor</button>
@@ -857,7 +1007,7 @@ function renderContainersPage(peers, containers, nodeMetrics) {
                       <span class="dot ${peer.healthy ? "healthy" : peer.enabled ? "unhealthy" : "disabled"}"></span>
                       <div>
                         <strong>${escapeHtml(peer.node_id)}</strong>
-                        <div class="status-meta"><span>${escapeHtml(peer.base_url)}</span></div>
+                        <div class="status-meta"><span>${escapeHtml(peer.base_url)}</span><span>${escapeHtml(peer.monitor_scope === "peer_only" ? "Peer Only" : "Full Monitoring")}</span></div>
                       </div>
                       <div>${nodeSparkline(peer.node_id, nodeMetrics)}</div>
                       ${statusPill(peer.healthy ? "healthy" : peer.enabled ? "unhealthy" : "disabled")}
@@ -866,6 +1016,7 @@ function renderContainersPage(peers, containers, nodeMetrics) {
                     <label><span>Node ID</span><input name="node_id" value="${escapeHtml(peer.node_id)}" required ${canAdmin ? "" : "disabled"} /></label>
                     <label><span>Base URL</span><input name="base_url" value="${escapeHtml(peer.base_url)}" required ${canAdmin ? "" : "disabled"} /></label>
                     <label><span>Container Name</span><input name="container_name" value="${escapeHtml(peer.container_name || "")}" ${canAdmin ? "" : "disabled"} /></label>
+                    <label><span>Monitoring Scope</span><select name="monitor_scope" ${canAdmin ? "" : "disabled"}><option value="full" ${peer.monitor_scope !== "peer_only" ? "selected" : ""}>Monitor peers and external endpoints</option><option value="peer_only" ${peer.monitor_scope === "peer_only" ? "selected" : ""}>Monitor peers only</option></select></label>
                     <label><span>Peer Monitor</span><select name="enabled" ${canAdmin ? "" : "disabled"}><option value="true" ${peer.enabled ? "selected" : ""}>Enabled</option><option value="false" ${!peer.enabled ? "selected" : ""}>Disabled</option></select></label>
                     <label><span>Recovery</span><select name="recovery_enabled" ${canAdmin ? "" : "disabled"}><option value="true" ${peer.recovery?.enabled ? "selected" : ""}>Enabled</option><option value="false" ${!peer.recovery?.enabled ? "selected" : ""}>Disabled</option></select></label>
                     <div class="button-row ${canAdmin ? "" : "hidden"}">
@@ -885,15 +1036,12 @@ function renderContainersPage(peers, containers, nodeMetrics) {
       <section class="panel">
         <div class="panel-head">
           <h3>Add Monitor Container</h3>
-          <p>Create a new monitor container and register it with peer monitoring.</p>
+          <p>Create a new monitor container and let the portal infer the image, networking, and runtime wiring automatically.</p>
         </div>
         <form id="create-container-form" class="check-form ${canAdmin ? "" : "hidden"}">
           <label><span>Node ID</span><input name="node_id" placeholder="monitor-4" required /></label>
-          <label><span>Container Name</span><input name="container_name" placeholder="monitor-4" required /></label>
-          <label><span>Image</span><input name="image" placeholder="async-service-monitor:latest" required /></label>
-          <label><span>Base URL</span><input name="base_url" placeholder="http://monitor-4:8080" required /></label>
-          <label><span>Docker Network</span><input name="network" placeholder="playground_default" /></label>
-          <label><span>Host Port</span><input name="host_port" type="number" min="1" placeholder="8004" /></label>
+          <label><span>Container Name</span><input name="container_name" placeholder="Leave blank to use the node ID" /></label>
+          <label><span>Monitoring Scope</span><select name="monitor_scope"><option value="full">Monitor peers and external endpoints</option><option value="peer_only">Monitor peers only</option></select></label>
           <button type="submit">Create Container</button>
           <p class="form-status" id="container-create-status"></p>
         </form>
@@ -904,11 +1052,29 @@ function renderContainersPage(peers, containers, nodeMetrics) {
                 <span class="dot ${container.status === "running" ? "healthy" : "disabled"}"></span>
                 <div>
                   <strong>${escapeHtml(container.name)}</strong>
-                  <div class="status-meta"><span>${escapeHtml(container.image)}</span></div>
+                  <div class="status-meta"><span>${escapeHtml(container.image)}</span><span>${escapeHtml((container.networks || []).join(", ") || "No network info")}</span></div>
                 </div>
                 <div>${nodeSparkline(container.name, nodeMetrics)}</div>
                 ${statusPill(container.status === "running" ? "healthy" : "disabled")}
                 <span class="subtle">${escapeHtml(container.status)}</span>
+              </div>
+              <div class="guide-grid" style="margin-top: 12px;">
+                <div>
+                  <h4>Host Ports</h4>
+                  <p>${escapeHtml(
+                    (container.ports || []).length
+                      ? container.ports
+                          .map((port) =>
+                            `${port.host_ip || "0.0.0.0"}:${port.host_port || "-"} -> ${port.container_port}`
+                          )
+                          .join(", ")
+                      : "No published host ports"
+                  )}</p>
+                </div>
+                <div>
+                  <h4>Monitoring Scope</h4>
+                  <p>${escapeHtml(((peers.find((peer) => peer.container_name === container.name || peer.node_id === container.name) || {}).monitor_scope) === "peer_only" ? "Peer only" : "Full monitoring")}</p>
+                </div>
               </div>
               <div class="button-row ${canAdmin ? "" : "hidden"}">
                 <button class="secondary" data-action="start" data-container="${escapeHtml(container.name)}">Start</button>
@@ -972,12 +1138,30 @@ function renderContainerDetailPage(container, peer, nodeMetrics) {
             <p>${escapeHtml(peer?.base_url || "n/a")}</p>
           </article>
           <article class="guide-card">
+            <h4>Monitoring Scope</h4>
+            <p>${escapeHtml(peer?.monitor_scope === "peer_only" ? "Peer only" : "Full monitoring")}</p>
+          </article>
+          <article class="guide-card">
             <h4>Recovery</h4>
             <p>${peer?.recovery?.enabled ? "Enabled" : "Disabled"}</p>
           </article>
           <article class="guide-card">
             <h4>Heartbeat</h4>
             <p>${peer?.last_ok_at ? fmtTime(peer.last_ok_at) : "No heartbeat recorded yet"}</p>
+          </article>
+          <article class="guide-card">
+            <h4>Docker Networks</h4>
+            <p>${escapeHtml((container.networks || []).join(", ") || "No networks attached")}</p>
+          </article>
+          <article class="guide-card">
+            <h4>Published Ports</h4>
+            <p>${escapeHtml(
+              (container.ports || []).length
+                ? container.ports
+                    .map((port) => `${port.host_ip || "0.0.0.0"}:${port.host_port || "-"} -> ${port.container_port}`)
+                    .join(", ")
+                : "No published host ports"
+            )}</p>
           </article>
         </div>
       </section>
@@ -1085,7 +1269,6 @@ function renderAdminPage(users, telemetry, portalSettings, emailSettings) {
                 <span>Basic auth today, OCI-ready later</span>
               </div>
             </div>
-            <span class="pill neutral">New</span>
           </summary>
           <div class="accordion-body">
         <form id="create-user-form" class="check-form">
@@ -1123,7 +1306,6 @@ function renderAdminPage(users, telemetry, portalSettings, emailSettings) {
                 <span>${enabledUsers} enabled</span>
               </div>
             </div>
-            ${statusPill(enabledUsers ? "healthy" : "disabled")}
           </summary>
           <div class="accordion-body">
         <div class="stack">
@@ -1143,7 +1325,6 @@ function renderAdminPage(users, telemetry, portalSettings, emailSettings) {
                         </div>
                       </div>
                     </div>
-                    ${statusPill(user.enabled ? "healthy" : "disabled")}
                   </summary>
                   <div class="accordion-body">
                     <form class="check-form user-form" data-username="${escapeHtml(user.username)}">
@@ -1190,7 +1371,6 @@ function renderAdminPage(users, telemetry, portalSettings, emailSettings) {
                 <span>${telemetry?.retention_hours || 2} hour retention</span>
               </div>
             </div>
-            ${statusPill(telemetry?.enabled ? "healthy" : "disabled")}
           </summary>
           <div class="accordion-body">
             <form id="telemetry-form" class="check-form">
@@ -1244,7 +1424,6 @@ function renderAdminPage(users, telemetry, portalSettings, emailSettings) {
                 <span>${emailSettings?.auto_provision_local ? "Local mail container" : "External email service"}</span>
               </div>
             </div>
-            ${statusPill(emailSettings?.enabled ? "healthy" : "disabled")}
           </summary>
           <div class="accordion-body">
             <form id="email-settings-form" class="check-form">
@@ -1310,7 +1489,6 @@ function renderAdminPage(users, telemetry, portalSettings, emailSettings) {
                 <span>${portalSettings?.realm || "Async Service Monitor"}</span>
               </div>
             </div>
-            ${statusPill(portalSettings?.enabled ? "healthy" : "disabled")}
           </summary>
           <div class="accordion-body">
             <form id="portal-settings-form" class="check-form">
@@ -1366,15 +1544,18 @@ function hydrateFormVisibility(form) {
   form.querySelectorAll(".field-content").forEach((node) => node.classList.toggle("hidden", !showContent));
   form.querySelectorAll(".database-only").forEach((node) => node.classList.toggle("hidden", !showDatabase));
   const authType = form.querySelector("select[name='auth_type']")?.value || "bearer";
+  const placementMode = form.querySelector("select[name='placement_mode']")?.value || "auto";
   form.querySelectorAll(".auth-only").forEach((node) => node.classList.toggle("hidden", type !== "auth"));
   form.querySelectorAll("[data-auth-field='token']").forEach((node) => node.classList.toggle("hidden", type !== "auth" || authType !== "bearer"));
   form.querySelectorAll("[data-auth-field='username'], [data-auth-field='password']").forEach((node) => node.classList.toggle("hidden", type !== "auth" || authType !== "basic"));
   form.querySelectorAll("[data-auth-field='header_name'], [data-auth-field='header_value']").forEach((node) => node.classList.toggle("hidden", type !== "auth" || authType !== "header"));
+  form.querySelectorAll(".field-assigned-node").forEach((node) => node.classList.toggle("hidden", placementMode !== "specific"));
 }
 
 function monitorFormPayload(form) {
   const formData = new FormData(form);
   const type = String(formData.get("type"));
+  const placementMode = String(formData.get("placement_mode") || "auto");
   const portValue = String(formData.get("port") || "").trim();
   const databaseUsername = String(formData.get("database_username") || "").trim();
   const databasePassword = String(formData.get("database_password") || "");
@@ -1383,6 +1564,8 @@ function monitorFormPayload(form) {
     type,
     enabled: String(formData.get("enabled")) === "true",
     interval_seconds: Number(formData.get("interval_seconds")),
+    placement_mode: placementMode,
+    assigned_node_id: placementMode === "specific" ? String(formData.get("assigned_node_id") || "") || null : null,
     timeout_seconds: formData.get("timeout_seconds") ? Number(formData.get("timeout_seconds")) : null,
     url: formData.get("url") || null,
     host: formData.get("host") || null,
@@ -1426,6 +1609,7 @@ function peerFormPayload(form) {
     base_url: String(formData.get("base_url")),
     enabled: String(formData.get("enabled")) === "true",
     container_name: formData.get("container_name") || null,
+    monitor_scope: String(formData.get("monitor_scope") || "full"),
     recovery: {
       enabled: String(formData.get("recovery_enabled")) === "true",
       container_name: formData.get("container_name") || null,
@@ -1599,6 +1783,7 @@ async function renderRoute() {
   }
 
   if (path === "/monitors/new") {
+    const cluster = await api("/api/cluster");
     setWorkspaceHeader("Add Monitor", "Create a new endpoint monitor with its own health rules and authentication.");
     document.getElementById("app-root").innerHTML = monitorFormMarkup(
       {
@@ -1606,6 +1791,8 @@ async function renderRoute() {
         type: "http",
         enabled: true,
         interval_seconds: 300,
+        placement_mode: "auto",
+        assigned_node_id: null,
         timeout_seconds: 10,
         port: null,
         database_name: "",
@@ -1615,7 +1802,8 @@ async function renderRoute() {
         status: "unknown",
         metric_points: [],
       },
-      "create"
+      "create",
+      cluster
     );
     const form = document.getElementById("monitor-form");
     hydrateFormVisibility(form);
@@ -1627,13 +1815,14 @@ async function renderRoute() {
 
   if (path.startsWith("/monitors/")) {
     const name = decodeURIComponent(path.split("/").pop());
-    const [check, checkMetrics] = await Promise.all([
+    const [check, checkMetrics, cluster] = await Promise.all([
       api(`/api/checks/${encodeURIComponent(name)}`),
       api("/api/metrics/checks"),
+      api("/api/cluster"),
     ]);
     check.metric_points = checkMetrics[check.name] || [];
     setWorkspaceHeader(check.name, "Dedicated monitor page for editing, auth updates, and immediate re-checks.");
-    document.getElementById("app-root").innerHTML = monitorFormMarkup(check, "edit");
+    document.getElementById("app-root").innerHTML = monitorFormMarkup(check, "edit", cluster);
     const form = document.getElementById("monitor-form");
     hydrateFormVisibility(form);
     if (!hasRole("read_write")) {
@@ -1644,12 +1833,13 @@ async function renderRoute() {
   }
 
   if (path === "/containers" || path === "/cluster/configure" || path === "/cluster") {
-    const [peers, containers, nodeMetrics] = await Promise.all([
+    const [peers, containers, nodeMetrics, cluster] = await Promise.all([
       api("/api/peers"),
       api("/api/containers"),
       api("/api/metrics/nodes"),
+      api("/api/cluster"),
     ]);
-    renderContainersPage(peers, containers, nodeMetrics);
+    renderContainersPage(peers, containers, nodeMetrics, cluster);
     return;
   }
 
@@ -1673,6 +1863,18 @@ async function renderRoute() {
 function navigate(url) {
   window.history.pushState({}, "", url);
   renderRoute().catch((error) => alert(error.message));
+}
+
+function handleToggle(event) {
+  const panel = event.target.closest("[data-dashboard-panel]");
+  if (!panel) {
+    return;
+  }
+  const panelName = panel.dataset.dashboardPanel;
+  if (!panelName || !Object.prototype.hasOwnProperty.call(state.dashboardPanels, panelName)) {
+    return;
+  }
+  state.dashboardPanels[panelName] = panel.open;
 }
 
 async function handleSubmit(event) {
@@ -1897,11 +2099,12 @@ async function handleSubmit(event) {
         method: "POST",
         body: JSON.stringify({
           node_id: String(data.get("node_id")),
-          container_name: String(data.get("container_name")),
-          image: String(data.get("image")),
-          base_url: String(data.get("base_url")),
-          network: data.get("network") || null,
-          host_port: data.get("host_port") ? Number(data.get("host_port")) : null,
+          container_name: String(data.get("container_name") || "") || null,
+          monitor_scope: String(data.get("monitor_scope") || "full"),
+          image: null,
+          base_url: null,
+          network: null,
+          host_port: null,
           enabled: true,
           recovery_enabled: true,
         }),
@@ -2057,6 +2260,7 @@ function boot() {
   document.addEventListener("click", (event) => handleClick(event).catch((error) => alert(error.message)));
   document.addEventListener("submit", (event) => handleSubmit(event).catch((error) => alert(error.message)));
   document.addEventListener("change", handleChange);
+  document.addEventListener("toggle", handleToggle, true);
   window.addEventListener("popstate", () => renderRoute().catch((error) => alert(error.message)));
   renderRoute().catch((error) => alert(error.message));
   state.pollingHandle = setInterval(() => {

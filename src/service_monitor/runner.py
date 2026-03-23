@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import secrets
 import signal
 from dataclasses import asdict
@@ -39,6 +40,7 @@ class MonitorRunner:
         self.peer_task: asyncio.Task[None] | None = None
         self.local_health_task: asyncio.Task[None] | None = None
         self.client: httpx.AsyncClient | None = None
+        self.monitor_scope = os.getenv("MONITOR_SCOPE", "full").strip().lower() or "full"
         try:
             self.docker_client = docker.from_env()
         except Exception:
@@ -192,6 +194,8 @@ class MonitorRunner:
         return None
 
     def runtime_checks(self) -> list[CheckConfig]:
+        if self.monitor_scope == "peer_only":
+            return []
         checks = list(self.config.checks)
         telemetry_db = self._telemetry_database_check()
         if telemetry_db is not None:
@@ -283,6 +287,8 @@ class MonitorRunner:
             "type": check.type,
             "generated": check.name in {"telemetry-database", "notification-email-service"},
             "enabled": check.enabled,
+            "placement_mode": check.placement_mode,
+            "assigned_node_id": check.assigned_node_id,
             "interval_seconds": check.interval_seconds,
             "timeout_seconds": check.timeout_seconds,
             "url": check.url,
@@ -313,6 +319,9 @@ class MonitorRunner:
             "owner": self.cluster.owner_for_check(check.name)
             if self.config.cluster.enabled
             else self.config.cluster.node_id,
+            "assignable_nodes": self.cluster.assignable_node_ids()
+            if self.config.cluster.enabled
+            else [self.config.cluster.node_id],
         }
 
     def get_check_detail(self, check_name: str) -> dict[str, object] | None:
@@ -331,6 +340,7 @@ class MonitorRunner:
                     "base_url": peer.base_url,
                     "enabled": peer.enabled,
                     "container_name": peer.container_name,
+                    "monitor_scope": peer.monitor_scope,
                     "healthy": state.healthy if state else False,
                     "last_ok_at": state.last_ok_at if state else None,
                     "last_error": state.last_error if state else None,
@@ -352,6 +362,7 @@ class MonitorRunner:
                     "base_url": peer.base_url,
                     "container_name": peer.container_name,
                     "enabled": peer.enabled,
+                    "monitor_scope": peer.monitor_scope,
                     "healthy": state.healthy if state else False,
                     "last_ok_at": state.last_ok_at if state else None,
                     "last_error": state.last_error if state else None,
@@ -368,7 +379,10 @@ class MonitorRunner:
         return {
             "enabled": self.config.cluster.enabled,
             "node_id": self.config.cluster.node_id,
+            "local_monitor_scope": self.monitor_scope,
             "healthy_nodes": self.cluster.healthy_node_ids(),
+            "assignable_nodes": self.cluster.assignable_node_ids(),
+            "assignment_plan": self.cluster.assignment_plan() if self.config.cluster.enabled else {},
             "peers": peers,
             "local_assigned_checks": [
                 check.name
@@ -408,11 +422,38 @@ class MonitorRunner:
         for container in self.docker_client.containers.list(all=True):
             if monitor_names and container.name not in monitor_names:
                 continue
+            attrs = container.attrs if hasattr(container, "attrs") else {}
+            network_settings = attrs.get("NetworkSettings", {})
+            networks = sorted((network_settings.get("Networks") or {}).keys())
+            port_bindings = network_settings.get("Ports") or {}
+            published_ports: list[dict[str, object]] = []
+            for container_port, bindings in port_bindings.items():
+                if not bindings:
+                    published_ports.append(
+                        {
+                            "container_port": container_port,
+                            "host_ip": None,
+                            "host_port": None,
+                        }
+                    )
+                    continue
+                for binding in bindings:
+                    published_ports.append(
+                        {
+                            "container_port": container_port,
+                            "host_ip": binding.get("HostIp"),
+                            "host_port": binding.get("HostPort"),
+                        }
+                    )
             containers.append(
                 {
                     "name": container.name,
                     "status": container.status,
                     "image": container.image.tags[0] if container.image.tags else "unknown",
+                    "networks": networks,
+                    "ports": published_ports,
+                    "created": attrs.get("Created"),
+                    "command": attrs.get("Config", {}).get("Cmd") or [],
                 }
             )
         return sorted(containers, key=lambda item: str(item["name"]))
@@ -436,14 +477,16 @@ class MonitorRunner:
         if self.docker_client is None:
             raise ValueError("Docker is not available to the monitor service")
 
-        container_name = str(payload["container_name"])
-        image = str(payload["image"])
+        defaults = self._container_creation_defaults_sync()
         node_id = str(payload["node_id"])
+        container_name = str(payload.get("container_name") or node_id)
+        image = str(payload.get("image") or defaults["image"])
         host_port = payload.get("host_port")
-        network = payload.get("network")
+        network = payload.get("network") or defaults["network"]
         config_path = payload.get("config_path")
+        monitor_scope = str(payload.get("monitor_scope") or "full")
 
-        environment = {"MONITOR_NODE_ID": node_id}
+        environment = {"MONITOR_NODE_ID": node_id, "MONITOR_SCOPE": monitor_scope}
         command = [
             "python",
             "-m",
@@ -462,8 +505,7 @@ class MonitorRunner:
             "environment": environment,
             "command": command,
         }
-        if host_port:
-            kwargs["ports"] = {"8000/tcp": int(host_port)}
+        kwargs["ports"] = {"8000/tcp": int(host_port)} if host_port else {"8000/tcp": None}
         if network:
             kwargs["network"] = network
         if config_path:
@@ -473,11 +515,57 @@ class MonitorRunner:
 
         container = self.docker_client.containers.run(image, **kwargs)
         container.reload()
+        attrs = container.attrs if hasattr(container, "attrs") else {}
+        network_settings = attrs.get("NetworkSettings", {})
+        networks = sorted((network_settings.get("Networks") or {}).keys())
+        ports = network_settings.get("Ports") or {}
+        bindings = ports.get("8000/tcp") or []
+        published_port = int(bindings[0]["HostPort"]) if bindings and bindings[0].get("HostPort") else None
+        base_url = (
+            f"http://{container.name}:8000"
+            if networks
+            else f"http://127.0.0.1:{published_port or 8000}"
+        )
         return {
             "status": "ok",
             "container": container.name,
             "state": container.status,
+            "image": image,
+            "network": networks[0] if networks else None,
+            "host_port": published_port,
+            "base_url": base_url,
+            "monitor_scope": monitor_scope,
         }
+
+    def _container_creation_defaults_sync(self) -> dict[str, object]:
+        image = "async-service-monitor:latest"
+        network = None
+        if self.docker_client is None:
+            return {"image": image, "network": network}
+
+        candidate_names = [
+            self.config.cluster.node_id,
+            *[
+                peer.container_name
+                for peer in self.config.cluster.peers
+                if peer.container_name
+            ],
+        ]
+        for candidate_name in candidate_names:
+            try:
+                container = self.docker_client.containers.get(candidate_name)
+            except docker.errors.NotFound:
+                continue
+            if container.image.tags:
+                image = container.image.tags[0]
+            attrs = container.attrs if hasattr(container, "attrs") else {}
+            networks = sorted(
+                (attrs.get("NetworkSettings", {}).get("Networks") or {}).keys()
+            )
+            if networks:
+                network = networks[0]
+            break
+        return {"image": image, "network": network}
 
     def _provision_local_mysql_sync(self, telemetry_config) -> dict[str, object]:
         if self.docker_client is None:

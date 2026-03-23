@@ -121,6 +121,80 @@ docker build -t async-service-monitor .
 docker run --rm -p 8000:8000 -v ${PWD}/config.yaml:/app/config.yaml async-service-monitor
 ```
 
+## Offline-Friendly Deployment
+
+This repo now includes an offline build and deployment path, but there is one important distinction:
+
+- The repo is now structured for air-gapped deployment.
+- The actual offline assets still need to be prepared once from a connected machine.
+
+Offline assets live under:
+
+- `offline/wheelhouse/`
+- `offline/images/`
+
+### What Must Be Prepared Before Going Offline
+
+From a connected machine, prepare:
+
+1. Python wheels for the app and every dependency
+2. Docker image tar files for:
+   - `python:3.12-slim`
+   - `async-service-monitor:offline`
+   - `mysql:8.4`
+   - `axllent/mailpit:latest`
+
+### Prepare Offline Assets
+
+```powershell
+.\scripts\prepare-offline-assets.ps1
+```
+
+That script will:
+
+- build a local wheelhouse into `offline/wheelhouse`
+- pull the required base/support images
+- build the offline app image with [Dockerfile.offline](C:\Users\pipsq\OneDrive\Documents\async-service-monitor\Dockerfile.offline)
+- export image tar files into `offline/images`
+
+### Verify Offline Assets
+
+```powershell
+.\scripts\verify-offline-assets.ps1
+```
+
+### Build The Offline Image
+
+Once `offline/wheelhouse` has been populated, the image can be rebuilt without internet access as long as the base image is already loaded locally:
+
+```powershell
+docker build -f Dockerfile.offline -t async-service-monitor:offline .
+```
+
+### Load Prebuilt Offline Images In An Air-Gapped Environment
+
+```powershell
+.\scripts\load-offline-assets.ps1
+```
+
+### Run Offline
+
+```powershell
+docker run --rm -p 8000:8000 -v ${PWD}/config.yaml:/app/config.yaml async-service-monitor:offline
+```
+
+### Run Offline With Compose
+
+```powershell
+docker compose -f docker-compose.offline.yml up
+```
+
+### Air-Gap Notes
+
+- Local self-provisioned MySQL still expects `mysql:8.4` to already be loaded into Docker.
+- Local self-provisioned Mailpit still expects `axllent/mailpit:latest` to already be loaded into Docker.
+- If you plan to use OCI MySQL or external email providers in an offline environment, those endpoints still need network reachability from that environment.
+
 ## Clustered Compose
 
 ```powershell
@@ -139,6 +213,11 @@ docker compose up --build
 - `src/service_monitor/web/index.html`
 - `src/service_monitor/web/app.css`
 - `src/service_monitor/web/app.js`
+- `Dockerfile.offline`
+- `docker-compose.offline.yml`
+- `scripts/prepare-offline-assets.ps1`
+- `scripts/load-offline-assets.ps1`
+- `scripts/verify-offline-assets.ps1`
 
 ## Notes
 
@@ -146,3 +225,4 @@ docker compose up --build
 - Updated monitors re-run immediately after save.
 - The portal uses session-based login today and includes OCI auth scaffolding for future integration.
 - Local MySQL self-provisioning uses Docker and is intended to reduce manual setup when telemetry storage is enabled.
+- Offline deployment support now exists, but the required wheelhouse and image tar files must still be generated once on a connected machine before moving into a disconnected environment.

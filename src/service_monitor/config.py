@@ -82,6 +82,7 @@ class PeerConfig:
     base_url: str
     enabled: bool = True
     container_name: str | None = None
+    monitor_scope: Literal["peer_only", "full"] = "full"
     recovery: DockerRecoveryConfig = field(default_factory=DockerRecoveryConfig)
 
 
@@ -172,6 +173,8 @@ class CheckConfig:
     type: Literal["http", "dns", "auth", "database", "generic"]
     interval_seconds: float
     enabled: bool = True
+    placement_mode: Literal["auto", "specific"] = "auto"
+    assigned_node_id: str | None = None
     timeout_seconds: float | None = None
     url: str | None = None
     host: str | None = None
@@ -245,6 +248,7 @@ def _parse_peer(raw: dict[str, Any]) -> PeerConfig:
         base_url=raw["base_url"].rstrip("/"),
         enabled=_as_bool(raw.get("enabled", True), default=True),
         container_name=raw.get("container_name"),
+        monitor_scope=raw.get("monitor_scope", "full"),
         recovery=_parse_recovery(raw.get("recovery")),
     )
 
@@ -350,6 +354,8 @@ def _parse_check(raw: dict[str, Any]) -> CheckConfig:
         type=raw["type"],
         enabled=_as_bool(raw.get("enabled", True), default=True),
         interval_seconds=float(raw["interval_seconds"]),
+        placement_mode=raw.get("placement_mode", "auto"),
+        assigned_node_id=raw.get("assigned_node_id"),
         timeout_seconds=(
             float(raw["timeout_seconds"]) if raw.get("timeout_seconds") is not None else None
         ),
@@ -379,6 +385,15 @@ def validate_config(config: AppConfig) -> None:
         if check.interval_seconds <= 0:
             raise ValueError(f"Check '{check.name}' interval_seconds must be > 0")
 
+        if check.placement_mode not in {"auto", "specific"}:
+            raise ValueError(
+                f"Check '{check.name}' placement_mode must be either 'auto' or 'specific'"
+            )
+        if check.placement_mode == "specific" and not check.assigned_node_id:
+            raise ValueError(
+                f"Check '{check.name}' must define assigned_node_id when placement_mode is 'specific'"
+            )
+
         if check.type in {"http", "auth"} and not check.url:
             raise ValueError(f"Check '{check.name}' requires a url")
 
@@ -400,6 +415,26 @@ def validate_config(config: AppConfig) -> None:
             raise ValueError("cluster.node_id is required when cluster is enabled")
         if len(peer_ids) != len(config.cluster.peers):
             raise ValueError("cluster.peers must have unique node_id values")
+
+        assignable_nodes = {config.cluster.node_id}
+        assignable_nodes.update(
+            peer.node_id for peer in config.cluster.peers if peer.monitor_scope != "peer_only"
+        )
+        for check in config.checks:
+            if check.placement_mode == "specific" and check.assigned_node_id not in assignable_nodes:
+                raise ValueError(
+                    f"Check '{check.name}' assigned_node_id must reference a full monitoring node"
+                )
+    else:
+        for check in config.checks:
+            if (
+                check.placement_mode == "specific"
+                and check.assigned_node_id
+                and check.assigned_node_id != config.cluster.node_id
+            ):
+                raise ValueError(
+                    f"Check '{check.name}' cannot target '{check.assigned_node_id}' while cluster mode is disabled"
+                )
 
     if config.portal.provider == "basic":
         enabled_users = [user for user in config.portal.users if user.enabled]

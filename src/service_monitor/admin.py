@@ -52,6 +52,8 @@ class CheckPayload(BaseModel):
     type: Literal["http", "dns", "auth", "database", "generic"]
     enabled: bool = True
     interval_seconds: float
+    placement_mode: Literal["auto", "specific"] = "auto"
+    assigned_node_id: str | None = None
     timeout_seconds: float | None = None
     url: str | None = None
     host: str | None = None
@@ -78,16 +80,18 @@ class PeerPayload(BaseModel):
     base_url: str
     enabled: bool = True
     container_name: str | None = None
+    monitor_scope: Literal["peer_only", "full"] = "full"
     recovery: PeerRecoveryPayload = Field(default_factory=PeerRecoveryPayload)
 
 
 class ContainerCreatePayload(BaseModel):
     node_id: str
-    container_name: str
-    image: str
-    base_url: str
+    container_name: str | None = None
+    image: str | None = None
+    base_url: str | None = None
     network: str | None = None
     host_port: int | None = None
+    monitor_scope: Literal["peer_only", "full"] = "full"
     enabled: bool = True
     recovery_enabled: bool = True
 
@@ -185,6 +189,8 @@ def _check_from_payload(payload: CheckPayload) -> CheckConfig:
         type=payload.type,  # type: ignore[arg-type]
         enabled=payload.enabled,
         interval_seconds=payload.interval_seconds,
+        placement_mode=payload.placement_mode,
+        assigned_node_id=payload.assigned_node_id,
         timeout_seconds=payload.timeout_seconds,
         url=payload.url,
         host=payload.host,
@@ -204,6 +210,7 @@ def _peer_from_payload(payload: PeerPayload) -> PeerConfig:
         base_url=payload.base_url.rstrip("/"),
         enabled=payload.enabled,
         container_name=payload.container_name,
+        monitor_scope=payload.monitor_scope,
         recovery=DockerRecoveryConfig(
             enabled=payload.recovery.enabled,
             container_name=payload.recovery.container_name,
@@ -615,12 +622,13 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
             store.add_peer(
                 PeerConfig(
                     node_id=payload.node_id,
-                    base_url=payload.base_url.rstrip("/"),
+                    base_url=str(result.get("base_url") or payload.base_url or "").rstrip("/"),
                     enabled=payload.enabled,
-                    container_name=payload.container_name,
+                    container_name=str(result.get("container") or payload.container_name or payload.node_id),
+                    monitor_scope=payload.monitor_scope,
                     recovery=DockerRecoveryConfig(
                         enabled=payload.recovery_enabled,
-                        container_name=payload.container_name,
+                        container_name=str(result.get("container") or payload.container_name or payload.node_id),
                     ),
                 )
             )
