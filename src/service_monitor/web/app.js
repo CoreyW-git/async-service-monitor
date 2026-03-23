@@ -868,14 +868,26 @@ function renderGuidePage() {
 function renderAdminPage(users, telemetry, portalSettings, emailSettings) {
   setWorkspaceHeader("Administration", "Create accounts and control who can view, edit, or fully administer the platform.");
   const root = document.getElementById("app-root");
+  const enabledUsers = users.filter((user) => user.enabled).length;
   root.innerHTML = `
-    <div class="stack">
-      <div class="split-panels">
-      <section class="panel">
+    <section class="panel">
         <div class="panel-head">
-          <h3>Add User</h3>
-          <p>Basic auth is enabled today, and the portal config now includes scaffolding for OCI-based auth later.</p>
+          <h3>Administration Workspace</h3>
+          <p>Open only what you need. The admin tools now stay collapsed until you expand a section.</p>
         </div>
+        <div class="accordion">
+        <details class="accordion-item">
+          <summary class="accordion-summary">
+            <div>
+              <strong>Add User</strong>
+              <div class="status-meta">
+                <span>Create a new portal account</span>
+                <span>Basic auth today, OCI-ready later</span>
+              </div>
+            </div>
+            <span class="pill neutral">New</span>
+          </summary>
+          <div class="accordion-body">
         <form id="create-user-form" class="check-form">
           <label><span>First Name</span><input name="first_name" /></label>
           <label><span>Last Name</span><input name="last_name" /></label>
@@ -899,32 +911,42 @@ function renderAdminPage(users, telemetry, portalSettings, emailSettings) {
           <button type="submit">Create User</button>
           <p class="form-status" id="user-create-status"></p>
         </form>
-      </section>
+          </div>
+        </details>
 
-      <section class="panel">
-        <div class="panel-head">
-          <h3>Existing Users</h3>
-          <p>Read-only users can view data, read-write users can manage monitors, and admins control containers and access.</p>
-        </div>
+        <details class="accordion-item" open>
+          <summary class="accordion-summary">
+            <div>
+              <strong>User Accounts</strong>
+              <div class="status-meta">
+                <span>${users.length} total accounts</span>
+                <span>${enabledUsers} enabled</span>
+              </div>
+            </div>
+            ${statusPill(enabledUsers ? "healthy" : "disabled")}
+          </summary>
+          <div class="accordion-body">
         <div class="stack">
           ${users
             .map(
               (user) => `
-                <article class="user-card">
-                  <form class="check-form user-form" data-username="${escapeHtml(user.username)}">
-                    <div class="status-row">
+                <details class="accordion-item nested-item">
+                  <summary class="accordion-summary">
+                    <div class="summary-identity">
                       <span class="dot ${user.enabled ? "healthy" : "disabled"}"></span>
                       <div>
                         <strong>${escapeHtml([user.first_name, user.last_name].filter(Boolean).join(" ") || user.username)}</strong>
                         <div class="status-meta">
                           <span>${escapeHtml(user.username)}</span>
                           <span>${escapeHtml(user.role.replaceAll("_", " "))}</span>
+                          <span>${user.last_login_at ? `Last login ${fmtTime(user.last_login_at)}` : "No logins yet"}</span>
                         </div>
                       </div>
-                      <div></div>
-                      ${statusPill(user.enabled ? "healthy" : "disabled")}
-                      <span class="subtle">${user.last_login_at ? `Last login ${fmtTime(user.last_login_at)}` : "No logins yet"}</span>
                     </div>
+                    ${statusPill(user.enabled ? "healthy" : "disabled")}
+                  </summary>
+                  <div class="accordion-body">
+                    <form class="check-form user-form" data-username="${escapeHtml(user.username)}">
                     <label><span>First Name</span><input name="first_name" value="${escapeHtml(user.first_name || "")}" /></label>
                     <label><span>Last Name</span><input name="last_name" value="${escapeHtml(user.last_name || "")}" /></label>
                     <label><span>Username</span><input name="username" value="${escapeHtml(user.username)}" required /></label>
@@ -950,25 +972,27 @@ function renderAdminPage(users, telemetry, portalSettings, emailSettings) {
                     </div>
                     <p class="form-status"></p>
                   </form>
-                </article>
+                  </div>
+                </details>
               `
             )
             .join("")}
         </div>
-      </section>
-      </div>
+          </div>
+        </details>
 
-      <section class="panel">
-        <div class="panel-head">
-          <h3>Service Configuration</h3>
-          <p>Point the service at MySQL, configure outbound email notifications, and manage portal auth scaffolding here.</p>
-        </div>
-        <div class="split-panels">
-          <div class="guide-card">
-            <div class="panel-head">
-              <h3>Telemetry Storage</h3>
-              <p>Store up to two hours of monitor telemetry and config snapshots in local MySQL or OCI MySQL.</p>
+        <details class="accordion-item">
+          <summary class="accordion-summary">
+            <div>
+              <strong>Telemetry Storage</strong>
+              <div class="status-meta">
+                <span>${telemetry?.provider === "oci_mysql" ? "OCI MySQL" : "Local MySQL"}</span>
+                <span>${telemetry?.retention_hours || 2} hour retention</span>
+              </div>
             </div>
+            ${statusPill(telemetry?.enabled ? "healthy" : "disabled")}
+          </summary>
+          <div class="accordion-body">
             <form id="telemetry-form" class="check-form">
               <label>
                 <span>Enabled</span>
@@ -1009,12 +1033,20 @@ function renderAdminPage(users, telemetry, portalSettings, emailSettings) {
               <p class="form-status" id="telemetry-status"></p>
             </form>
           </div>
+        </details>
 
-          <div class="guide-card">
-            <div class="panel-head">
-              <h3>Email Notifications</h3>
-              <p>Send failure alerts through Microsoft 365, Yahoo, Gmail, Outlook, a custom SMTP service, or a self-provisioned local mail container.</p>
+        <details class="accordion-item">
+          <summary class="accordion-summary">
+            <div>
+              <strong>Email Notifications</strong>
+              <div class="status-meta">
+                <span>${escapeHtml(emailSettings?.provider || "custom")}</span>
+                <span>${emailSettings?.auto_provision_local ? "Local mail container" : "External email service"}</span>
+              </div>
             </div>
+            ${statusPill(emailSettings?.enabled ? "healthy" : "disabled")}
+          </summary>
+          <div class="accordion-body">
             <form id="email-settings-form" class="check-form">
               <label>
                 <span>Enabled</span>
@@ -1067,12 +1099,20 @@ function renderAdminPage(users, telemetry, portalSettings, emailSettings) {
               <p class="form-status" id="email-settings-status"></p>
             </form>
           </div>
+        </details>
 
-          <div class="guide-card">
-            <div class="panel-head">
-              <h3>Portal Authentication</h3>
-              <p>Keep using basic auth or point the service at OCI auth settings for the future cloud-backed flow.</p>
+        <details class="accordion-item">
+          <summary class="accordion-summary">
+            <div>
+              <strong>Portal Authentication</strong>
+              <div class="status-meta">
+                <span>${portalSettings?.provider === "oci" ? "OCI Auth" : "Basic Auth"}</span>
+                <span>${portalSettings?.realm || "Async Service Monitor"}</span>
+              </div>
             </div>
+            ${statusPill(portalSettings?.enabled ? "healthy" : "disabled")}
+          </summary>
+          <div class="accordion-body">
             <form id="portal-settings-form" class="check-form">
               <label>
                 <span>Portal Auth Enabled</span>
@@ -1104,9 +1144,9 @@ function renderAdminPage(users, telemetry, portalSettings, emailSettings) {
               <p class="form-status" id="portal-settings-status"></p>
             </form>
           </div>
+        </details>
         </div>
-      </section>
-    </div>
+    </section>
   `;
 }
 

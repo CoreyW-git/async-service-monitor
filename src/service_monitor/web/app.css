@@ -92,6 +92,7 @@ body {
 
 .sidebar-nav,
 .sidebar-monitors,
+.accordion,
 .stack,
 .hero-metrics,
 .status-list,
@@ -443,6 +444,65 @@ button.danger {
   border-radius: 18px;
   background: var(--surface-alt);
   border: 1px solid var(--line);
+}
+
+.accordion {
+  display: grid;
+  gap: 14px;
+}
+
+.accordion-item {
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  overflow: hidden;
+}
+
+.accordion-item[open] {
+  background: var(--surface);
+}
+
+.accordion-summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px;
+}
+
+.accordion-summary::-webkit-details-marker {
+  display: none;
+}
+
+.accordion-summary::after {
+  content: "+";
+  color: var(--muted);
+  font-size: 1.4rem;
+  line-height: 1;
+}
+
+.accordion-item[open] > .accordion-summary::after {
+  content: "-";
+}
+
+.accordion-body {
+  padding: 0 20px 20px;
+}
+
+.nested-item {
+  background: rgba(255, 248, 236, 0.85);
+}
+
+.nested-item .accordion-summary {
+  padding: 16px 18px;
+}
+
+.summary-identity {
+  display: flex;
+  align-items: center;
+  gap: 14px;
 }
 
 .diagram-row,
