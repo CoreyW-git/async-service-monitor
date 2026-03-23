@@ -1176,6 +1176,17 @@ function setStatus(element, text, isError = false) {
   element.classList.toggle("error-text", isError);
 }
 
+function isInteractiveRoute(path = window.location.pathname) {
+  return (
+    path === "/monitors/new" ||
+    path.startsWith("/monitors/") ||
+    path === "/profile" ||
+    path === "/admin" ||
+    path === "/cluster/configure" ||
+    path.startsWith("/cluster/")
+  );
+}
+
 async function renderRoute() {
   state.session = await api("/api/session");
   renderSessionChip();
@@ -1669,7 +1680,12 @@ function boot() {
   document.addEventListener("change", handleChange);
   window.addEventListener("popstate", () => renderRoute().catch((error) => alert(error.message)));
   renderRoute().catch((error) => alert(error.message));
-  state.pollingHandle = setInterval(() => renderRoute().catch(() => {}), 10000);
+  state.pollingHandle = setInterval(() => {
+    if (isInteractiveRoute()) {
+      return;
+    }
+    renderRoute().catch(() => {});
+  }, 10000);
 }
 
 window.addEventListener("DOMContentLoaded", boot);
