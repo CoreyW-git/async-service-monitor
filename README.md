@@ -116,9 +116,18 @@ Open [http://localhost:8000](http://localhost:8000).
 
 ## Running With Docker
 
+PowerShell:
+
 ```powershell
 docker build -t async-service-monitor .
 docker run --rm -p 8000:8000 -v ${PWD}/config.yaml:/app/config.yaml async-service-monitor
+```
+
+WSL / bash:
+
+```bash
+docker build -t async-service-monitor .
+docker run --rm -p 8000:8000 -v "$(pwd)/config.yaml:/app/config.yaml" async-service-monitor
 ```
 
 ## Offline-Friendly Deployment
@@ -179,8 +188,16 @@ docker build -f Dockerfile.offline -t async-service-monitor:offline .
 
 ### Run Offline
 
+PowerShell:
+
 ```powershell
 docker run --rm -p 8000:8000 -v ${PWD}/config.yaml:/app/config.yaml async-service-monitor:offline
+```
+
+WSL / bash:
+
+```bash
+docker run --rm -p 8000:8000 -v "$(pwd)/config.yaml:/app/config.yaml" async-service-monitor:offline
 ```
 
 ### Run Offline With Compose
