@@ -36,22 +36,14 @@ portal:
   provider: basic
   realm: Async Service Monitor
   users:
-  - username: enc::gAAAAABpwaiBQf7lcUoaXfMyhJPHAlteok9UtbtqDd4Xf8Hi1fqiuTCvqn5dQGOI57e6XwA-vmafRdBhi8iOAih2zxbisUxGvA==
-    password: enc::gAAAAABpwaiBgSAUhpkCkpymcL6_TpJ7Ibqoj34SKn8Ms5lEbRuBAdfVdcYxA1HC4tVh-fGhYXc7VOaMYX4IUcUk2NR2wnx-5w==
+  - username: enc::gAAAAABpwbodpP3YXZOCZnsfnaFakbfasTM_gQYG0P_nUGBk0V1aX26VCBFU5evnMrxvtt-sCOsgUhkBvJVuOMzyeKB9F6QWEw==
+    password: enc::gAAAAABpwbodFFGngWvVR8w-0NlmkbPhOc-CiOmGIOcjrxH4iXSPoYmfU0U2ySZywagiQtMwpxTigb1flMAG9CnHr_RIh9NKjA==
     first_name: Corey
     last_name: Wright
     dark_mode: false
     role: admin
     enabled: true
-    last_login_at: 1774235146.3358996
-  - username: enc::gAAAAABpwaiB15gEgyhyPj4DJJJOSVNz4HS8gZK-Zn7nA5nBkb9wHln5purOS9vBfzlCRW1VAMxnuaZ6Lu-I8oRzPEnajtglnA==
-    password: enc::gAAAAABpwaiBnzVlbk-25evkaUyV31Iw4mh3cirYWrbR7BOKHBeZ6gjhjjocuOFDLSHtpDLDvnFLxGOZaCdCoHCOR3YdMzbCow==
-    first_name: John
-    last_name: Doe
-    dark_mode: false
-    role: read_only
-    enabled: true
-    last_login_at: 1774225105.7372577
+    last_login_at: 1774303773.3795257
   oci:
     enabled: false
 checks:
@@ -114,4 +106,4 @@ _encryption:
   version: 1
   kdf: pbkdf2_sha256
   iterations: 390000
-  salt: W99RRx8D0U7jP9WcL7K8FQ==
+  salt: AsdS3PvS4rosIn-Y4BXtRg==

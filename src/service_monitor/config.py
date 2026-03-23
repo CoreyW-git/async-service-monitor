@@ -161,11 +161,7 @@ class PortalAuthConfig:
     enabled: bool = True
     provider: Literal["basic", "oci"] = "basic"
     realm: str = "Async Service Monitor"
-    users: list[PortalUserConfig] = field(
-        default_factory=lambda: [
-            PortalUserConfig(username="admin", password="admin", role="admin", enabled=True)
-        ]
-    )
+    users: list[PortalUserConfig] = field(default_factory=list)
     oci: OCIAuthConfig = field(default_factory=OCIAuthConfig)
 
 
@@ -439,11 +435,12 @@ def validate_config(config: AppConfig) -> None:
                 )
 
     if config.portal.provider == "basic":
-        enabled_users = [user for user in config.portal.users if user.enabled]
-        if not enabled_users:
-            raise ValueError("portal basic auth requires at least one enabled user")
-        if not any(user.role == "admin" for user in enabled_users):
-            raise ValueError("portal basic auth requires at least one enabled admin user")
+        if config.portal.users:
+            enabled_users = [user for user in config.portal.users if user.enabled]
+            if not enabled_users:
+                raise ValueError("portal basic auth requires at least one enabled user")
+            if not any(user.role == "admin" for user in enabled_users):
+                raise ValueError("portal basic auth requires at least one enabled admin user")
 
     email = config.notifications.email
     if email.enabled:

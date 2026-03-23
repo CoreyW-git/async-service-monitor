@@ -117,6 +117,13 @@ class RegisterPayload(BaseModel):
     last_name: str = ""
 
 
+class BootstrapPayload(BaseModel):
+    username: str
+    password: str
+    first_name: str = ""
+    last_name: str = ""
+
+
 class ResetPasswordPayload(BaseModel):
     username: str
     password: str
@@ -378,6 +385,17 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
                 "last_login_at": user.last_login_at,
             },
         }
+
+    @app.post("/api/auth/bootstrap")
+    async def bootstrap(payload: BootstrapPayload, response: Response) -> dict[str, object]:
+        user = auth_manager.bootstrap_admin(
+            response,
+            payload.username,
+            payload.password,
+            payload.first_name,
+            payload.last_name,
+        )
+        return {"status": "ok", "user": user}
 
     @app.post("/api/auth/reset-password")
     async def reset_password(payload: ResetPasswordPayload) -> dict[str, str]:

@@ -114,6 +114,8 @@ py -3 -m service_monitor --config config.yaml
 
 Open [http://localhost:8000](http://localhost:8000).
 
+On a brand-new config with no portal users yet, the first visitor will be taken through a required admin onboarding flow before the rest of the application becomes available. The service no longer relies on a built-in default admin account.
+
 ## Encrypting Sensitive Config Values
 
 The service now supports encrypting sensitive values inside `config.yaml` before you commit or push it to Git. The same file can then be copied to another machine and decrypted at runtime as long as that machine has the same `ASM_CONFIG_PASSPHRASE` environment variable set.

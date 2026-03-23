@@ -354,6 +354,37 @@ function renderLoginPage() {
   `;
 }
 
+function renderBootstrapPage() {
+  setWorkspaceHeader("Initial Admin Setup", "Create the first administrator account before anyone can use the application.");
+  document.getElementById("overview-cards").innerHTML = "";
+  const root = document.getElementById("app-root");
+  root.innerHTML = `
+    <div class="split-panels">
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Onboard The First Admin</h3>
+          <p>This appears to be a first-time startup. Create the initial administrator account to unlock the rest of the application.</p>
+        </div>
+        <form id="bootstrap-form" class="check-form">
+          <label><span>First Name</span><input name="first_name" /></label>
+          <label><span>Last Name</span><input name="last_name" /></label>
+          <label><span>Admin Username</span><input name="username" required /></label>
+          <label><span>Admin Password</span><input name="password" type="password" required /></label>
+          <button type="submit">Create Admin And Continue</button>
+          <p class="form-status" id="bootstrap-status"></p>
+        </form>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Why This Is Required</h3>
+          <p>The application no longer ships with a default admin account. The first visitor must create the initial administrator before sign-in, user registration, and the rest of the portal become available.</p>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
 function renderProfilePage(profile) {
   setWorkspaceHeader("Profile", "Review and update your personal account details.");
   const root = document.getElementById("app-root");
@@ -1732,6 +1763,11 @@ async function renderRoute() {
   if (path.startsWith("/cluster") || path === "/containers") {
     state.clusterExpanded = true;
   }
+  if (state.session?.setup_required) {
+    renderSidebar([], { available: false, containers: [] });
+    renderBootstrapPage();
+    return;
+  }
   if (!state.session?.authenticated) {
     renderSidebar([], { available: false, containers: [] });
     renderLoginPage();
@@ -1917,6 +1953,29 @@ async function handleSubmit(event) {
       });
       setStatus(status, "Account created. You can sign in now.");
       form.reset();
+    } catch (error) {
+      setStatus(status, error.message, true);
+    }
+    return;
+  }
+
+  if (event.target.id === "bootstrap-form") {
+    event.preventDefault();
+    const form = event.target;
+    const data = new FormData(form);
+    const status = document.getElementById("bootstrap-status");
+    try {
+      setStatus(status, "Creating administrator...");
+      await api("/api/auth/bootstrap", {
+        method: "POST",
+        body: JSON.stringify({
+          username: String(data.get("username")),
+          password: String(data.get("password")),
+          first_name: String(data.get("first_name") || ""),
+          last_name: String(data.get("last_name") || ""),
+        }),
+      });
+      navigate("/");
     } catch (error) {
       setStatus(status, error.message, true);
     }

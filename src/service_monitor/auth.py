@@ -33,6 +33,7 @@ class AuthManager:
                 "role": "admin",
                 "provider": "disabled",
                 "last_login_at": None,
+                "setup_required": False,
             }
 
         if config.portal.provider == "oci":
@@ -41,19 +42,44 @@ class AuthManager:
                 "provider": "oci",
                 "role": "read_only",
                 "username": "",
+                "setup_required": False,
+            }
+
+        if self.bootstrap_required(config):
+            return {
+                "authenticated": False,
+                "provider": config.portal.provider,
+                "role": "admin",
+                "username": "",
+                "setup_required": True,
             }
 
         if not session_id:
-            return {"authenticated": False, "provider": config.portal.provider, "role": "read_only"}
+            return {
+                "authenticated": False,
+                "provider": config.portal.provider,
+                "role": "read_only",
+                "setup_required": False,
+            }
 
         username = self.sessions.get(session_id)
         if not username:
-            return {"authenticated": False, "provider": config.portal.provider, "role": "read_only"}
+            return {
+                "authenticated": False,
+                "provider": config.portal.provider,
+                "role": "read_only",
+                "setup_required": False,
+            }
 
         user = self._find_user(config, username)
         if user is None or not user.enabled:
             self.sessions.pop(session_id, None)
-            return {"authenticated": False, "provider": config.portal.provider, "role": "read_only"}
+            return {
+                "authenticated": False,
+                "provider": config.portal.provider,
+                "role": "read_only",
+                "setup_required": False,
+            }
 
         return self._user_payload(user, provider=config.portal.provider)
 
@@ -82,6 +108,11 @@ class AuthManager:
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
                 detail="OCI auth scaffold exists but is not implemented yet",
+            )
+        if self.bootstrap_required(config):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Initial admin setup is required before sign-in is available",
             )
 
         user = self._find_user(config, username)
@@ -117,6 +148,12 @@ class AuthManager:
         first_name: str,
         last_name: str,
     ) -> PortalUserConfig:
+        config = self.config_getter()
+        if self.bootstrap_required(config):
+            raise HTTPException(
+                status_code=403,
+                detail="Initial admin setup must be completed before self-service registration is enabled",
+            )
         if self.store.find_user(username) is not None:
             raise HTTPException(status_code=400, detail=f"User '{username}' already exists")
         user = PortalUserConfig(
@@ -132,6 +169,12 @@ class AuthManager:
         return user
 
     def reset_password(self, username: str, password: str) -> PortalUserConfig:
+        config = self.config_getter()
+        if self.bootstrap_required(config):
+            raise HTTPException(
+                status_code=403,
+                detail="Initial admin setup must be completed before password resets are enabled",
+            )
         existing = self.store.find_user(username)
         if existing is None:
             raise HTTPException(status_code=404, detail=f"User '{username}' was not found")
@@ -147,6 +190,47 @@ class AuthManager:
         )
         self.store.update_user(username, updated)
         return updated
+
+    def bootstrap_admin(
+        self,
+        response: Response,
+        username: str,
+        password: str,
+        first_name: str,
+        last_name: str,
+    ) -> dict[str, object]:
+        config = self.config_getter()
+        if not self.bootstrap_required(config):
+            raise HTTPException(status_code=409, detail="Initial admin setup has already been completed")
+        if self.store.find_user(username) is not None:
+            raise HTTPException(status_code=400, detail=f"User '{username}' already exists")
+
+        user = PortalUserConfig(
+            username=username,
+            password=password,
+            first_name=first_name,
+            last_name=last_name,
+            dark_mode=False,
+            role="admin",
+            enabled=True,
+            last_login_at=time.time(),
+        )
+        self.store.add_user(user)
+        session_id = secrets.token_urlsafe(32)
+        self.sessions[session_id] = user.username
+        response.set_cookie(
+            key=SESSION_COOKIE,
+            value=session_id,
+            httponly=True,
+            samesite="lax",
+            secure=False,
+            path="/",
+        )
+        return self._user_payload(user, provider=config.portal.provider)
+
+    @staticmethod
+    def bootstrap_required(config: AppConfig) -> bool:
+        return bool(config.portal.enabled and config.portal.provider == "basic" and not config.portal.users)
 
     def update_profile(
         self,
@@ -185,4 +269,5 @@ class AuthManager:
         payload.pop("password", None)
         payload["authenticated"] = True
         payload["provider"] = provider
+        payload["setup_required"] = False
         return payload
