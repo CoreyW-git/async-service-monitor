@@ -39,6 +39,7 @@ class MonitorRunner:
         self.tasks: dict[str, asyncio.Task[None]] = {}
         self.peer_task: asyncio.Task[None] | None = None
         self.local_health_task: asyncio.Task[None] | None = None
+        self.reap_tasks: set[asyncio.Task[None]] = set()
         self.client: httpx.AsyncClient | None = None
         self.monitor_scope = os.getenv("MONITOR_SCOPE", "full").strip().lower() or "full"
         try:
@@ -137,12 +138,21 @@ class MonitorRunner:
                 )
 
     async def _restart_check_tasks(self, client: httpx.AsyncClient) -> None:
-        for task in self.tasks.values():
+        old_tasks = list(self.tasks.values())
+        for task in old_tasks:
             task.cancel()
-        if self.tasks:
-            await asyncio.gather(*self.tasks.values(), return_exceptions=True)
         self.tasks = {}
+        if old_tasks:
+            self._reap_cancelled_tasks(old_tasks)
         await self._sync_check_tasks(client)
+
+    async def _await_cancelled_tasks(self, tasks: list[asyncio.Task[None]]) -> None:
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    def _reap_cancelled_tasks(self, tasks: list[asyncio.Task[None]]) -> None:
+        reap_task = asyncio.create_task(self._await_cancelled_tasks(tasks), name="task-reaper")
+        self.reap_tasks.add(reap_task)
+        reap_task.add_done_callback(self.reap_tasks.discard)
 
     async def _shutdown_tasks(self) -> None:
         for task in self.tasks.values():
@@ -152,6 +162,8 @@ class MonitorRunner:
         if self.local_health_task is not None:
             self.local_health_task.cancel()
         await asyncio.gather(*self.tasks.values(), return_exceptions=True)
+        if self.reap_tasks:
+            await asyncio.gather(*self.reap_tasks, return_exceptions=True)
         if self.peer_task is not None:
             await asyncio.gather(self.peer_task, return_exceptions=True)
         if self.local_health_task is not None:
