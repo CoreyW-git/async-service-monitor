@@ -7,6 +7,8 @@ from typing import Any, Literal
 
 import yaml
 
+from service_monitor.secrets import decrypt_config_payload
+
 
 def _expand_env(value: Any) -> Any:
     if isinstance(value, dict):
@@ -473,6 +475,7 @@ def validate_config(config: AppConfig) -> None:
 def load_config(path: str | Path) -> AppConfig:
     config_path = Path(path)
     raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    raw = decrypt_config_payload(raw)
     raw = _expand_env(raw)
 
     defaults_raw = raw.get("defaults", {})

@@ -8,7 +8,7 @@ defaults:
   bind_port: 8080
   metrics_history_limit: 120
 cluster:
-  enabled: false
+  enabled: true
   node_id: monitor-1
   bind_host: 0.0.0.0
   bind_port: 8080
@@ -36,16 +36,16 @@ portal:
   provider: basic
   realm: Async Service Monitor
   users:
-  - username: admin
-    password: admin
+  - username: enc::gAAAAABpwaiBQf7lcUoaXfMyhJPHAlteok9UtbtqDd4Xf8Hi1fqiuTCvqn5dQGOI57e6XwA-vmafRdBhi8iOAih2zxbisUxGvA==
+    password: enc::gAAAAABpwaiBgSAUhpkCkpymcL6_TpJ7Ibqoj34SKn8Ms5lEbRuBAdfVdcYxA1HC4tVh-fGhYXc7VOaMYX4IUcUk2NR2wnx-5w==
     first_name: Corey
     last_name: Wright
-    dark_mode: true
+    dark_mode: false
     role: admin
     enabled: true
-    last_login_at: 1774226736.0936763
-  - username: JDoe
-    password: password
+    last_login_at: 1774235146.3358996
+  - username: enc::gAAAAABpwaiB15gEgyhyPj4DJJJOSVNz4HS8gZK-Zn7nA5nBkb9wHln5purOS9vBfzlCRW1VAMxnuaZ6Lu-I8oRzPEnajtglnA==
+    password: enc::gAAAAABpwaiBnzVlbk-25evkaUyV31Iw4mh3cirYWrbR7BOKHBeZ6gjhjjocuOFDLSHtpDLDvnFLxGOZaCdCoHCOR3YdMzbCow==
     first_name: John
     last_name: Doe
     dark_mode: false
@@ -59,6 +59,7 @@ checks:
   type: http
   interval_seconds: 300.0
   enabled: false
+  placement_mode: auto
   timeout_seconds: 10.0
   url: https://www.yahoo.com
   database_engine: mysql
@@ -79,6 +80,7 @@ checks:
   type: dns
   interval_seconds: 300.0
   enabled: true
+  placement_mode: auto
   timeout_seconds: 10.0
   host: www.yahoo.com
   database_engine: mysql
@@ -95,6 +97,7 @@ checks:
   type: http
   interval_seconds: 300.0
   enabled: true
+  placement_mode: auto
   timeout_seconds: 10.0
   url: https://www.google.com
   database_engine: mysql
@@ -107,3 +110,8 @@ checks:
     expect_statuses:
     - 401
     - 403
+_encryption:
+  version: 1
+  kdf: pbkdf2_sha256
+  iterations: 390000
+  salt: W99RRx8D0U7jP9WcL7K8FQ==

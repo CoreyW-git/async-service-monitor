@@ -114,6 +114,65 @@ py -3 -m service_monitor --config config.yaml
 
 Open [http://localhost:8000](http://localhost:8000).
 
+## Encrypting Sensitive Config Values
+
+The service now supports encrypting sensitive values inside `config.yaml` before you commit or push it to Git. The same file can then be copied to another machine and decrypted at runtime as long as that machine has the same `ASM_CONFIG_PASSPHRASE` environment variable set.
+
+Sensitive fields include:
+
+- portal usernames and passwords
+- email usernames and passwords
+- telemetry usernames and passwords
+- check auth usernames, passwords, bearer tokens, and header values
+
+Generate a strong passphrase:
+
+PowerShell:
+
+```powershell
+py -3 -m service_monitor --generate-config-passphrase
+```
+
+WSL / bash:
+
+```bash
+python -m service_monitor --generate-config-passphrase
+```
+
+Set the passphrase in your shell before encrypting or running the app:
+
+PowerShell:
+
+```powershell
+$env:ASM_CONFIG_PASSPHRASE = "replace-with-your-passphrase"
+```
+
+WSL / bash:
+
+```bash
+export ASM_CONFIG_PASSPHRASE="replace-with-your-passphrase"
+```
+
+Encrypt an existing config file before committing it:
+
+PowerShell:
+
+```powershell
+py -3 -m service_monitor --encrypt-config --config config.yaml
+```
+
+WSL / bash:
+
+```bash
+python -m service_monitor --encrypt-config --config config.yaml
+```
+
+Important:
+
+- Keep `ASM_CONFIG_PASSPHRASE` out of Git and store it in your secret manager, password vault, CI secret store, or deployment environment.
+- Any machine that runs the app with an encrypted config file must have the same `ASM_CONFIG_PASSPHRASE` value available.
+- Existing plaintext configs still load for migration purposes, but saving config changes with real secrets now requires `ASM_CONFIG_PASSPHRASE` so secrets are not written back in plain text.
+
 ## Running With Docker
 
 PowerShell:
@@ -128,6 +187,20 @@ WSL / bash:
 ```bash
 docker build -t async-service-monitor .
 docker run --rm -p 8000:8000 -v "$(pwd)/config.yaml:/app/config.yaml" async-service-monitor
+```
+
+If `config.yaml` contains encrypted values, pass the config passphrase into the container too.
+
+PowerShell:
+
+```powershell
+docker run --rm -p 8000:8000 -e ASM_CONFIG_PASSPHRASE=${env:ASM_CONFIG_PASSPHRASE} -v ${PWD}/config.yaml:/app/config.yaml async-service-monitor
+```
+
+WSL / bash:
+
+```bash
+docker run --rm -p 8000:8000 -e ASM_CONFIG_PASSPHRASE="$ASM_CONFIG_PASSPHRASE" -v "$(pwd)/config.yaml:/app/config.yaml" async-service-monitor
 ```
 
 ## Offline-Friendly Deployment
