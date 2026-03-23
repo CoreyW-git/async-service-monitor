@@ -419,6 +419,10 @@ function renderDashboard(overview, checks, summaryCounts, checkMetrics, nodeMetr
       ...Object.keys(nodeMetrics || {}),
     ])
   );
+  const totalNodes = nodeIds.length;
+  const healthyNodeCount = Array.from(
+    new Set([overview.node_id, ...((cluster?.healthy_nodes || []).filter(Boolean))])
+  ).length;
 
   const nodeCards = nodeIds
     .map((nodeId) => {
@@ -448,39 +452,62 @@ function renderDashboard(overview, checks, summaryCounts, checkMetrics, nodeMetr
 
   root.innerHTML = `
     <div class="stack">
-      <section class="panel">
-        <div class="panel-head">
-          <h3>Service Health</h3>
-          <p>Fast visual totals across all configured endpoint monitors.</p>
-        </div>
-        <div class="chart-strip">
-          <article class="chart-card">
-            <p class="subtle">Healthy</p>
-            <div class="chart-value">${summaryCounts.healthy}</div>
-          </article>
-          <article class="chart-card">
-            <p class="subtle">Unhealthy</p>
-            <div class="chart-value">${summaryCounts.unhealthy}</div>
-          </article>
-          <article class="chart-card">
-            <p class="subtle">Disabled</p>
-            <div class="chart-value">${summaryCounts.disabled}</div>
-          </article>
-          <article class="chart-card">
-            <p class="subtle">Total</p>
-            <div class="chart-value">${checks.length}</div>
-          </article>
-          <article class="chart-card">
-            <p class="subtle">Databases</p>
-            <div class="chart-value">${databaseChecks.length}</div>
-          </article>
-        </div>
+      <section class="dashboard-overview">
+        <article class="panel dashboard-primary">
+          <div class="panel-head">
+            <h3>Service Health</h3>
+            <p>Fast visual totals across all configured monitors.</p>
+          </div>
+          <div class="dashboard-kpis">
+            <article class="chart-card">
+              <p class="subtle">Healthy</p>
+              <div class="chart-value">${summaryCounts.healthy}</div>
+            </article>
+            <article class="chart-card">
+              <p class="subtle">Unhealthy</p>
+              <div class="chart-value">${summaryCounts.unhealthy}</div>
+            </article>
+            <article class="chart-card">
+              <p class="subtle">Disabled</p>
+              <div class="chart-value">${summaryCounts.disabled}</div>
+            </article>
+            <article class="chart-card">
+              <p class="subtle">Total Monitors</p>
+              <div class="chart-value">${checks.length}</div>
+            </article>
+          </div>
+        </article>
+
+        <article class="panel dashboard-secondary">
+          <div class="panel-head">
+            <h3>Cluster Snapshot</h3>
+            <p>Current node coverage and database monitor count.</p>
+          </div>
+          <div class="dashboard-summary-list">
+            <div class="dashboard-summary-row">
+              <span>Healthy Nodes</span>
+              <strong>${healthyNodeCount} / ${totalNodes}</strong>
+            </div>
+            <div class="dashboard-summary-row">
+              <span>Endpoint Monitors</span>
+              <strong>${endpointChecks.length}</strong>
+            </div>
+            <div class="dashboard-summary-row">
+              <span>Database Monitors</span>
+              <strong>${databaseChecks.length}</strong>
+            </div>
+            <div class="dashboard-summary-row">
+              <span>Cluster Mode</span>
+              <strong>${cluster?.enabled ? "Enabled" : "Standalone"}</strong>
+            </div>
+          </div>
+        </article>
       </section>
 
       <section class="panel">
         <div class="panel-head">
           <h3>Endpoint Monitors</h3>
-          <p>Each monitor gets its own live availability graph as new results arrive.</p>
+          <p>Live availability graphs for HTTP, DNS, auth, and generic endpoint checks.</p>
         </div>
         <div class="status-list">
           ${endpointCards || `<article class="guide-card"><p>No endpoint monitors are configured yet.</p></article>`}
@@ -490,7 +517,7 @@ function renderDashboard(overview, checks, summaryCounts, checkMetrics, nodeMetr
       <section class="panel">
         <div class="panel-head">
           <h3>Database</h3>
-          <p>Database availability graphs show the health of configured databases, including telemetry storage targets.</p>
+          <p>Database availability graphs for configured databases and telemetry storage targets.</p>
         </div>
         <div class="status-list">
           ${databaseCards || `<article class="guide-card"><p>No database monitors are configured yet.</p></article>`}
@@ -541,55 +568,121 @@ function monitorFormMarkup(check, mode) {
           <p>${isNew ? "Create a new endpoint monitor." : managed ? "This monitor is generated from service configuration and is read-only here." : "Save changes and the monitor will re-run immediately."}</p>
         </div>
         <form class="check-form" id="monitor-form" data-original-name="${escapeHtml(check.name || "")}">
-          <label><span>Name</span><input name="name" value="${escapeHtml(check.name || "")}" required ${readonlyAttr} /></label>
-          <label>
-            <span>Type</span>
-            <select name="type" ${readonlyAttr}>
-              <option value="http" ${check.type === "http" ? "selected" : ""}>HTTP</option>
-              <option value="dns" ${check.type === "dns" ? "selected" : ""}>DNS</option>
-              <option value="auth" ${check.type === "auth" ? "selected" : ""}>Auth</option>
-              <option value="database" ${check.type === "database" ? "selected" : ""}>Database</option>
-              <option value="generic" ${check.type === "generic" ? "selected" : ""}>Generic</option>
-            </select>
-          </label>
-          <label>
-            <span>Enabled</span>
-            <select name="enabled" ${readonlyAttr}>
-              <option value="true" ${check.enabled !== false ? "selected" : ""}>Enabled</option>
-              <option value="false" ${check.enabled === false ? "selected" : ""}>Disabled</option>
-            </select>
-          </label>
-          <label><span>Interval Seconds</span><input name="interval_seconds" type="number" min="1" value="${escapeHtml(check.interval_seconds || 300)}" required ${readonlyAttr} /></label>
-          <label><span>Timeout Seconds</span><input name="timeout_seconds" type="number" min="1" value="${escapeHtml(check.timeout_seconds || 10)}" ${readonlyAttr} /></label>
-          <label class="field-url ${["http", "auth"].includes(check.type) ? "" : "hidden"}"><span>URL</span><input name="url" value="${escapeHtml(check.url || "")}" ${readonlyAttr} /></label>
-          <label class="field-host ${["dns", "database", "generic"].includes(check.type) ? "" : "hidden"}"><span>Host</span><input name="host" value="${escapeHtml(check.host || "")}" ${readonlyAttr} /></label>
-          <label class="field-port ${["http", "auth", "database", "generic"].includes(check.type) ? "" : "hidden"}"><span>Port</span><input name="port" type="number" min="1" max="65535" value="${escapeHtml(check.port || "")}" ${readonlyAttr} /></label>
-          <label class="field-statuses ${["http", "auth"].includes(check.type) ? "" : "hidden"}"><span>Expected Statuses</span><input name="expected_statuses" value="${escapeHtml(csv(check.expected_statuses || [200]))}" ${readonlyAttr} /></label>
-          <label class="field-content ${["http", "auth"].includes(check.type) ? "" : "hidden"}"><span>Contains Text</span><input name="contains" value="${escapeHtml(csv(check.content_rules?.contains || []))}" ${readonlyAttr} /></label>
-          <label class="field-content ${["http", "auth"].includes(check.type) ? "" : "hidden"}"><span>Exclude Text</span><input name="not_contains" value="${escapeHtml(csv(check.content_rules?.not_contains || []))}" ${readonlyAttr} /></label>
-          <label class="field-content ${["http", "auth"].includes(check.type) ? "" : "hidden"}"><span>Regex</span><input name="regex" value="${escapeHtml(check.content_rules?.regex || "")}" ${readonlyAttr} /></label>
-          <label class="auth-only ${check.type !== "auth" ? "hidden" : ""}" data-auth-field="type">
-            <span>Auth Type</span>
-            <select name="auth_type" ${readonlyAttr}>
-              <option value="bearer" ${auth.type === "bearer" ? "selected" : ""}>Bearer</option>
-              <option value="basic" ${auth.type === "basic" ? "selected" : ""}>Basic</option>
-              <option value="header" ${auth.type === "header" ? "selected" : ""}>Header</option>
-            </select>
-          </label>
-          <label class="auth-only ${check.type !== "auth" || auth.type !== "bearer" ? "hidden" : ""}" data-auth-field="token"><span>Bearer Token</span><input name="token" value="${escapeHtml(auth.token || "")}" ${readonlyAttr} /></label>
-          <label class="auth-only ${check.type !== "auth" || auth.type !== "basic" ? "hidden" : ""}" data-auth-field="username"><span>Username</span><input name="username" value="${escapeHtml(auth.username || "")}" ${readonlyAttr} /></label>
-          <label class="auth-only ${check.type !== "auth" || auth.type !== "basic" ? "hidden" : ""}" data-auth-field="password"><span>Password</span><input name="password" type="password" value="${escapeHtml(auth.password || "")}" ${readonlyAttr} /></label>
-          <label class="auth-only ${check.type !== "auth" || auth.type !== "header" ? "hidden" : ""}" data-auth-field="header_name"><span>Header Name</span><input name="header_name" value="${escapeHtml(auth.header_name || "")}" ${readonlyAttr} /></label>
-          <label class="auth-only ${check.type !== "auth" || auth.type !== "header" ? "hidden" : ""}" data-auth-field="header_value"><span>Header Value</span><input name="header_value" value="${escapeHtml(auth.header_value || "")}" ${readonlyAttr} /></label>
-          <label class="database-only ${check.type !== "database" ? "hidden" : ""}"><span>Database Name</span><input name="database_name" value="${escapeHtml(check.database_name || "")}" ${readonlyAttr} /></label>
-          <label class="database-only ${check.type !== "database" ? "hidden" : ""}">
-            <span>Database Engine</span>
-            <select name="database_engine" ${readonlyAttr}>
-              <option value="mysql" ${(check.database_engine || "mysql") === "mysql" ? "selected" : ""}>MySQL</option>
-            </select>
-          </label>
-          <label class="database-only ${check.type !== "database" ? "hidden" : ""}"><span>Database Username</span><input name="database_username" value="${escapeHtml(auth.username || "")}" ${readonlyAttr} /></label>
-          <label class="database-only ${check.type !== "database" ? "hidden" : ""}"><span>Database Password</span><input name="database_password" type="password" value="${escapeHtml(auth.password || "")}" ${readonlyAttr} /></label>
+          <div class="accordion">
+            <details class="accordion-item" open>
+              <summary class="accordion-summary">
+                <div>
+                  <strong>Basics</strong>
+                  <div class="status-meta">
+                    <span>Name, type, and enabled state</span>
+                  </div>
+                </div>
+              </summary>
+              <div class="accordion-body">
+                <label><span>Name</span><input name="name" value="${escapeHtml(check.name || "")}" required ${readonlyAttr} /></label>
+                <label>
+                  <span>Type</span>
+                  <select name="type" ${readonlyAttr}>
+                    <option value="http" ${check.type === "http" ? "selected" : ""}>HTTP</option>
+                    <option value="dns" ${check.type === "dns" ? "selected" : ""}>DNS</option>
+                    <option value="auth" ${check.type === "auth" ? "selected" : ""}>Auth</option>
+                    <option value="database" ${check.type === "database" ? "selected" : ""}>Database</option>
+                    <option value="generic" ${check.type === "generic" ? "selected" : ""}>Generic</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Enabled</span>
+                  <select name="enabled" ${readonlyAttr}>
+                    <option value="true" ${check.enabled !== false ? "selected" : ""}>Enabled</option>
+                    <option value="false" ${check.enabled === false ? "selected" : ""}>Disabled</option>
+                  </select>
+                </label>
+              </div>
+            </details>
+
+            <details class="accordion-item" open>
+              <summary class="accordion-summary">
+                <div>
+                  <strong>Target And Schedule</strong>
+                  <div class="status-meta">
+                    <span>What to monitor and how often to run it</span>
+                  </div>
+                </div>
+              </summary>
+              <div class="accordion-body">
+                <label><span>Interval Seconds</span><input name="interval_seconds" type="number" min="1" value="${escapeHtml(check.interval_seconds || 300)}" required ${readonlyAttr} /></label>
+                <label><span>Timeout Seconds</span><input name="timeout_seconds" type="number" min="1" value="${escapeHtml(check.timeout_seconds || 10)}" ${readonlyAttr} /></label>
+                <label class="field-url ${["http", "auth"].includes(check.type) ? "" : "hidden"}"><span>URL</span><input name="url" value="${escapeHtml(check.url || "")}" ${readonlyAttr} /></label>
+                <label class="field-host ${["dns", "database", "generic"].includes(check.type) ? "" : "hidden"}"><span>Host</span><input name="host" value="${escapeHtml(check.host || "")}" ${readonlyAttr} /></label>
+                <label class="field-port ${["http", "auth", "database", "generic"].includes(check.type) ? "" : "hidden"}"><span>Port</span><input name="port" type="number" min="1" max="65535" value="${escapeHtml(check.port || "")}" ${readonlyAttr} /></label>
+              </div>
+            </details>
+
+            <details class="accordion-item ${["http", "auth"].includes(check.type) ? "validation-open" : ""}" ${["http", "auth"].includes(check.type) ? "open" : ""}>
+              <summary class="accordion-summary field-statuses ${["http", "auth"].includes(check.type) ? "" : "hidden"}">
+                <div>
+                  <strong>Validation Rules</strong>
+                  <div class="status-meta">
+                    <span>Status codes and content assertions</span>
+                  </div>
+                </div>
+              </summary>
+              <div class="accordion-body field-statuses ${["http", "auth"].includes(check.type) ? "" : "hidden"}">
+                <label class="field-statuses ${["http", "auth"].includes(check.type) ? "" : "hidden"}"><span>Expected Statuses</span><input name="expected_statuses" value="${escapeHtml(csv(check.expected_statuses || [200]))}" ${readonlyAttr} /></label>
+                <label class="field-content ${["http", "auth"].includes(check.type) ? "" : "hidden"}"><span>Contains Text</span><input name="contains" value="${escapeHtml(csv(check.content_rules?.contains || []))}" ${readonlyAttr} /></label>
+                <label class="field-content ${["http", "auth"].includes(check.type) ? "" : "hidden"}"><span>Exclude Text</span><input name="not_contains" value="${escapeHtml(csv(check.content_rules?.not_contains || []))}" ${readonlyAttr} /></label>
+                <label class="field-content ${["http", "auth"].includes(check.type) ? "" : "hidden"}"><span>Regex</span><input name="regex" value="${escapeHtml(check.content_rules?.regex || "")}" ${readonlyAttr} /></label>
+              </div>
+            </details>
+
+            <details class="accordion-item auth-only ${check.type !== "auth" ? "hidden" : ""}" ${check.type === "auth" ? "open" : ""}>
+              <summary class="accordion-summary auth-only ${check.type !== "auth" ? "hidden" : ""}">
+                <div>
+                  <strong>Authentication</strong>
+                  <div class="status-meta">
+                    <span>Credentials and auth headers for protected endpoints</span>
+                  </div>
+                </div>
+              </summary>
+              <div class="accordion-body auth-only ${check.type !== "auth" ? "hidden" : ""}">
+                <label class="auth-only ${check.type !== "auth" ? "hidden" : ""}" data-auth-field="type">
+                  <span>Auth Type</span>
+                  <select name="auth_type" ${readonlyAttr}>
+                    <option value="bearer" ${auth.type === "bearer" ? "selected" : ""}>Bearer</option>
+                    <option value="basic" ${auth.type === "basic" ? "selected" : ""}>Basic</option>
+                    <option value="header" ${auth.type === "header" ? "selected" : ""}>Header</option>
+                  </select>
+                </label>
+                <label class="auth-only ${check.type !== "auth" || auth.type !== "bearer" ? "hidden" : ""}" data-auth-field="token"><span>Bearer Token</span><input name="token" value="${escapeHtml(auth.token || "")}" ${readonlyAttr} /></label>
+                <label class="auth-only ${check.type !== "auth" || auth.type !== "basic" ? "hidden" : ""}" data-auth-field="username"><span>Username</span><input name="username" value="${escapeHtml(auth.username || "")}" ${readonlyAttr} /></label>
+                <label class="auth-only ${check.type !== "auth" || auth.type !== "basic" ? "hidden" : ""}" data-auth-field="password"><span>Password</span><input name="password" type="password" value="${escapeHtml(auth.password || "")}" ${readonlyAttr} /></label>
+                <label class="auth-only ${check.type !== "auth" || auth.type !== "header" ? "hidden" : ""}" data-auth-field="header_name"><span>Header Name</span><input name="header_name" value="${escapeHtml(auth.header_name || "")}" ${readonlyAttr} /></label>
+                <label class="auth-only ${check.type !== "auth" || auth.type !== "header" ? "hidden" : ""}" data-auth-field="header_value"><span>Header Value</span><input name="header_value" value="${escapeHtml(auth.header_value || "")}" ${readonlyAttr} /></label>
+              </div>
+            </details>
+
+            <details class="accordion-item database-only ${check.type !== "database" ? "hidden" : ""}" ${check.type === "database" ? "open" : ""}>
+              <summary class="accordion-summary database-only ${check.type !== "database" ? "hidden" : ""}">
+                <div>
+                  <strong>Database Settings</strong>
+                  <div class="status-meta">
+                    <span>Connection details for database monitoring</span>
+                  </div>
+                </div>
+              </summary>
+              <div class="accordion-body database-only ${check.type !== "database" ? "hidden" : ""}">
+                <label class="database-only ${check.type !== "database" ? "hidden" : ""}"><span>Database Name</span><input name="database_name" value="${escapeHtml(check.database_name || "")}" ${readonlyAttr} /></label>
+                <label class="database-only ${check.type !== "database" ? "hidden" : ""}">
+                  <span>Database Engine</span>
+                  <select name="database_engine" ${readonlyAttr}>
+                    <option value="mysql" ${(check.database_engine || "mysql") === "mysql" ? "selected" : ""}>MySQL</option>
+                  </select>
+                </label>
+                <label class="database-only ${check.type !== "database" ? "hidden" : ""}"><span>Database Username</span><input name="database_username" value="${escapeHtml(auth.username || "")}" ${readonlyAttr} /></label>
+                <label class="database-only ${check.type !== "database" ? "hidden" : ""}"><span>Database Password</span><input name="database_password" type="password" value="${escapeHtml(auth.password || "")}" ${readonlyAttr} /></label>
+              </div>
+            </details>
+          </div>
           <div class="button-row ${editable ? "" : "hidden"}">
             <button type="submit">${isNew ? "Create Monitor" : "Save Changes"}</button>
             ${
