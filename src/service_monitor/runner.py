@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import secrets
 import signal
 from dataclasses import asdict
 
@@ -9,7 +10,14 @@ import docker
 import httpx
 
 from service_monitor.cluster import ClusterCoordinator, PeerState
-from service_monitor.checks import CheckResult, run_auth_check, run_dns_check, run_http_check
+from service_monitor.checks import (
+    CheckResult,
+    run_auth_check,
+    run_database_check,
+    run_dns_check,
+    run_generic_check,
+    run_http_check,
+)
 from service_monitor.config import AppConfig, CheckConfig
 from service_monitor.notifier import EmailNotifier
 from service_monitor.state import MonitorState
@@ -112,14 +120,14 @@ class MonitorRunner:
                 pass
 
     async def _sync_check_tasks(self, client: httpx.AsyncClient) -> None:
-        active_names = {check.name for check in self.config.checks}
+        active_names = {check.name for check in self.runtime_checks()}
         for name, task in list(self.tasks.items()):
             if name not in active_names:
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
                 del self.tasks[name]
 
-        for check in self.config.checks:
+        for check in self.runtime_checks():
             if check.name not in self.tasks or self.tasks[check.name].done():
                 self.tasks[check.name] = asyncio.create_task(
                     self._run_check_loop(client, check),
@@ -178,10 +186,44 @@ class MonitorRunner:
                 continue
 
     def _get_check(self, name: str) -> CheckConfig | None:
-        for check in self.config.checks:
+        for check in self.runtime_checks():
             if check.name == name:
                 return check
         return None
+
+    def runtime_checks(self) -> list[CheckConfig]:
+        checks = list(self.config.checks)
+        telemetry_db = self._telemetry_database_check()
+        if telemetry_db is not None:
+            checks.append(telemetry_db)
+        return checks
+
+    def _telemetry_database_check(self) -> CheckConfig | None:
+        telemetry = self.config.telemetry
+        if not telemetry.enabled or not telemetry.host or not telemetry.port:
+            return None
+        return CheckConfig(
+            name="telemetry-database",
+            type="database",
+            interval_seconds=max(30.0, self.config.defaults.peer_poll_interval_seconds),
+            enabled=True,
+            timeout_seconds=self.config.defaults.timeout_seconds,
+            host=telemetry.host,
+            port=telemetry.port,
+            database_name=telemetry.database,
+            database_engine="mysql",
+            auth=(
+                None
+                if not telemetry.username
+                else self._telemetry_auth(telemetry.username, telemetry.password)
+            ),
+        )
+
+    @staticmethod
+    def _telemetry_auth(username: str, password: str | None):
+        from service_monitor.config import AuthConfig
+
+        return AuthConfig(type="basic", username=username, password=password)
 
     async def _execute_check(
         self, client: httpx.AsyncClient, check: CheckConfig
@@ -198,6 +240,10 @@ class MonitorRunner:
             return await run_http_check(client, check, timeout_seconds)
         if check.type == "auth":
             return await run_auth_check(client, check, timeout_seconds)
+        if check.type == "generic":
+            return await run_generic_check(check, timeout_seconds)
+        if check.type == "database":
+            return await run_database_check(check, timeout_seconds)
 
         raise ValueError(f"Unsupported check type: {check.type}")
 
@@ -218,11 +264,15 @@ class MonitorRunner:
         return {
             "name": check.name,
             "type": check.type,
+            "generated": check.name == "telemetry-database",
             "enabled": check.enabled,
             "interval_seconds": check.interval_seconds,
             "timeout_seconds": check.timeout_seconds,
             "url": check.url,
             "host": check.host,
+            "port": check.port,
+            "database_name": check.database_name,
+            "database_engine": check.database_engine,
             "expected_statuses": check.expected_statuses,
             "expect_authenticated_statuses": check.expect_authenticated_statuses,
             "has_auth": check.auth is not None,
@@ -290,7 +340,7 @@ class MonitorRunner:
                     "last_error": state.last_error if state else None,
                     "assigned_checks": [
                         check.name
-                        for check in self.config.checks
+                        for check in self.runtime_checks()
                         if self.cluster.owner_for_check(check.name) == peer.node_id
                     ]
                     if self.config.cluster.enabled
@@ -305,7 +355,7 @@ class MonitorRunner:
             "peers": peers,
             "local_assigned_checks": [
                 check.name
-                for check in self.config.checks
+                for check in self.runtime_checks()
                 if not self.config.cluster.enabled
                 or self.cluster.owner_for_check(check.name) == self.config.cluster.node_id
             ],
@@ -321,6 +371,8 @@ class MonitorRunner:
             if peer.container_name is not None
         }
         monitor_names.add(self.config.cluster.node_id)
+        if self.config.telemetry.provider == "local_mysql" and self.config.telemetry.local_container_name:
+            monitor_names.add(self.config.telemetry.local_container_name)
         for peer in self.config.cluster.peers:
             monitor_names.add(peer.node_id)
 
@@ -347,6 +399,11 @@ class MonitorRunner:
         if self.docker_client is None:
             raise ValueError("Docker is not available to the monitor service")
         return await asyncio.to_thread(self._create_monitor_container_sync, payload)
+
+    async def provision_local_mysql(self, telemetry_config) -> dict[str, object]:
+        if self.docker_client is None:
+            raise ValueError("Docker is not available to provision local MySQL")
+        return await asyncio.to_thread(self._provision_local_mysql_sync, telemetry_config)
 
     def _create_monitor_container_sync(self, payload: dict[str, object]) -> dict[str, object]:
         if self.docker_client is None:
@@ -393,6 +450,51 @@ class MonitorRunner:
             "status": "ok",
             "container": container.name,
             "state": container.status,
+        }
+
+    def _provision_local_mysql_sync(self, telemetry_config) -> dict[str, object]:
+        if self.docker_client is None:
+            raise ValueError("Docker is not available to provision local MySQL")
+
+        container_name = telemetry_config.local_container_name or "async-service-monitor-mysql"
+        port = int(telemetry_config.port or 3306)
+        database = telemetry_config.database or "async_service_monitor"
+        username = telemetry_config.username or "asm_telemetry"
+        password = telemetry_config.password or secrets.token_urlsafe(18)
+
+        try:
+            container = self.docker_client.containers.get(container_name)
+            if container.status != "running":
+                container.start()
+            container.reload()
+        except docker.errors.NotFound:
+            container = self.docker_client.containers.run(
+                "mysql:8.4",
+                name=container_name,
+                detach=True,
+                environment={
+                    "MYSQL_DATABASE": database,
+                    "MYSQL_USER": username,
+                    "MYSQL_PASSWORD": password,
+                    "MYSQL_ROOT_PASSWORD": password,
+                },
+                ports={"3306/tcp": port},
+            )
+            container.reload()
+
+        host_port = port
+        ports = container.attrs.get("NetworkSettings", {}).get("Ports", {}) if hasattr(container, "attrs") else {}
+        bindings = ports.get("3306/tcp") or []
+        if bindings and bindings[0].get("HostPort"):
+            host_port = int(bindings[0]["HostPort"])
+
+        return {
+            "container_name": container.name,
+            "host": "127.0.0.1",
+            "port": host_port,
+            "database": database,
+            "username": username,
+            "password": password,
         }
 
     async def manage_container(self, container_name: str, action: str) -> dict[str, object]:

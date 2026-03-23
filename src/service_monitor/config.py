@@ -124,6 +124,8 @@ class TelemetryConfig:
     password: str | None = None
     retention_hours: int = 2
     use_ssl: bool = False
+    auto_provision_local: bool = False
+    local_container_name: str = "async-service-monitor-mysql"
 
 
 @dataclass(slots=True)
@@ -162,12 +164,15 @@ class PortalAuthConfig:
 @dataclass(slots=True)
 class CheckConfig:
     name: str
-    type: Literal["http", "dns", "auth"]
+    type: Literal["http", "dns", "auth", "database", "generic"]
     interval_seconds: float
     enabled: bool = True
     timeout_seconds: float | None = None
     url: str | None = None
     host: str | None = None
+    port: int | None = None
+    database_name: str | None = None
+    database_engine: Literal["mysql"] = "mysql"
     expected_statuses: list[int] = field(default_factory=lambda: [200])
     expect_authenticated_statuses: list[int] = field(default_factory=lambda: [200])
     auth: AuthConfig | None = None
@@ -287,6 +292,8 @@ def _parse_telemetry(raw: dict[str, Any] | None) -> TelemetryConfig:
         password=raw.get("password"),
         retention_hours=int(raw.get("retention_hours", 2)),
         use_ssl=_as_bool(raw.get("use_ssl", False)),
+        auto_provision_local=_as_bool(raw.get("auto_provision_local", False)),
+        local_container_name=raw.get("local_container_name", "async-service-monitor-mysql"),
     )
 
 
@@ -338,6 +345,9 @@ def _parse_check(raw: dict[str, Any]) -> CheckConfig:
         ),
         url=raw.get("url"),
         host=raw.get("host"),
+        port=int(raw["port"]) if raw.get("port") is not None else None,
+        database_name=raw.get("database_name"),
+        database_engine=raw.get("database_engine", "mysql"),
         expected_statuses=list(raw.get("expected_statuses", [200])),
         expect_authenticated_statuses=list(raw.get("expect_authenticated_statuses", [200])),
         auth=_parse_auth(raw.get("auth")),
@@ -367,6 +377,12 @@ def validate_config(config: AppConfig) -> None:
 
         if check.type == "auth" and not check.auth:
             raise ValueError(f"Check '{check.name}' requires an auth block")
+
+        if check.type in {"generic", "database"}:
+            if not check.host:
+                raise ValueError(f"Check '{check.name}' requires a host")
+            if check.port is None:
+                raise ValueError(f"Check '{check.name}' requires a port")
 
     if config.cluster.enabled:
         peer_ids = {peer.node_id for peer in config.cluster.peers}

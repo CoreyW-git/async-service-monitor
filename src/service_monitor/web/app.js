@@ -2,6 +2,7 @@ const state = {
   pollingHandle: null,
   session: null,
   monitorsExpanded: false,
+  clusterExpanded: false,
 };
 
 const ROLE_LEVELS = {
@@ -117,28 +118,57 @@ function nodeSparkline(nodeId, nodeMetrics) {
   return sparklineMarkup(points, variant);
 }
 
+function checkTargetLabel(check) {
+  if (check.url) {
+    return `${check.url}${check.port ? `:${check.port}` : ""}`;
+  }
+  if (check.host) {
+    return `${check.host}${check.port ? `:${check.port}` : ""}`;
+  }
+  return check.port ? `Port ${check.port}` : "Target not configured";
+}
+
+function checkCategoryLabel(type) {
+  const labels = {
+    http: "HTTP",
+    dns: "DNS",
+    auth: "Auth",
+    generic: "Generic",
+    database: "Database",
+  };
+  return labels[type] || String(type || "Other").toUpperCase();
+}
+
+function monitorCardMarkup(check, checkMetrics) {
+  const points = checkMetrics[check.name] || [];
+  return `
+    <a class="status-row" href="/monitors/${encodeURIComponent(check.name)}" data-link>
+      <span class="dot ${statusClass(check.status)}"></span>
+      <div>
+        <strong>${escapeHtml(check.name)}</strong>
+        <div class="status-meta">
+          <span>${escapeHtml(checkCategoryLabel(check.type))}</span>
+          <span>${escapeHtml(checkTargetLabel(check))}</span>
+        </div>
+      </div>
+      <div>
+        ${endpointSparkline(check, checkMetrics)}
+        <div class="status-meta">
+          <span>Last run ${formatDuration(check.latest_result?.duration_ms)}</span>
+          <span>${escapeHtml(lastMetricLabel(points))}</span>
+        </div>
+      </div>
+      ${statusPill(check.status)}
+      <span class="subtle">${escapeHtml(check.latest_result?.message || "Waiting for result")}</span>
+    </a>
+  `;
+}
+
 function renderOverview(overview, checks) {
   const healthy = checks.filter((check) => check.status === "healthy").length;
   const unhealthy = checks.filter((check) => check.status === "unhealthy").length;
   const disabled = checks.filter((check) => check.status === "disabled").length;
-
-  const cards = [
-    { label: "Node", value: overview.node_id },
-    { label: "Checks", value: String(checks.length) },
-    { label: "Healthy", value: String(healthy) },
-    { label: "Unhealthy", value: String(unhealthy) },
-  ];
-
-  document.getElementById("overview-cards").innerHTML = cards
-    .map(
-      (card) => `
-        <article class="metric-card">
-          <p>${card.label}</p>
-          <strong>${escapeHtml(card.value)}</strong>
-        </article>
-      `
-    )
-    .join("");
+  document.getElementById("overview-cards").innerHTML = "";
 
   return { healthy, unhealthy, disabled };
 }
@@ -162,26 +192,40 @@ function renderSessionChip() {
   `;
 }
 
-function renderSidebar(checks) {
+function renderSidebar(checks, containersData) {
   const currentPath = window.location.pathname;
   const authenticated = Boolean(state.session?.authenticated);
-  document.querySelectorAll(".sidebar-nav a").forEach((link) => {
+  document.querySelectorAll(".sidebar-nav a, .sidebar-nav button[data-role-min]").forEach((link) => {
     const minRole = link.dataset.roleMin;
     const visible = authenticated && (!minRole || hasRole(minRole));
     link.classList.toggle("hidden", !visible);
-    link.classList.toggle("active", visible && link.getAttribute("href") === currentPath);
+    if (link.tagName === "A") {
+      link.classList.toggle("active", visible && link.getAttribute("href") === currentPath);
+    }
   });
 
   const monitorList = document.getElementById("sidebar-monitors");
   const sidebarSection = document.getElementById("configured-monitors-section");
   const toggle = document.getElementById("configured-monitors-toggle");
   const chevron = document.getElementById("configured-monitors-chevron");
+  const clusterList = document.getElementById("sidebar-cluster-containers");
+  const clusterSection = document.getElementById("cluster-section");
+  const clusterToggle = document.getElementById("cluster-toggle");
+  const clusterChevron = document.getElementById("cluster-chevron");
+  const configureLink = document.getElementById("configure-containers-link");
   sidebarSection.classList.toggle("hidden", !authenticated || !state.monitorsExpanded);
   toggle.classList.toggle("hidden", !authenticated);
   toggle.classList.toggle("active", state.monitorsExpanded);
   chevron.textContent = state.monitorsExpanded ? "-" : "+";
+  const clusterVisible = authenticated && hasRole("admin");
+  clusterSection.classList.toggle("hidden", !clusterVisible || !state.clusterExpanded);
+  clusterToggle.classList.toggle("hidden", !clusterVisible);
+  clusterToggle.classList.toggle("active", state.clusterExpanded || currentPath.startsWith("/cluster"));
+  clusterChevron.textContent = state.clusterExpanded ? "-" : "+";
+  configureLink.classList.toggle("active", currentPath === "/cluster/configure" || currentPath === "/containers");
   if (!authenticated) {
     monitorList.innerHTML = "";
+    clusterList.innerHTML = "";
     return;
   }
 
@@ -192,7 +236,7 @@ function renderSidebar(checks) {
     return acc;
   }, {});
 
-  const typeOrder = ["http", "dns", "auth"];
+  const typeOrder = ["http", "dns", "auth", "database", "generic"];
   const sortedKeys = Object.keys(groups).sort((a, b) => {
     const aIndex = typeOrder.indexOf(a);
     const bIndex = typeOrder.indexOf(b);
@@ -221,6 +265,20 @@ function renderSidebar(checks) {
       </div>
     `)
     .join("");
+
+  const containers = containersData?.available ? containersData.containers || [] : [];
+  clusterList.innerHTML = containers.length
+    ? containers
+        .map(
+          (container) => `
+            <a class="sidebar-link ${currentPath === `/cluster/${encodeURIComponent(container.name)}` ? "active" : ""}" href="/cluster/${encodeURIComponent(container.name)}" data-link>
+              <span>${escapeHtml(container.name)}</span>
+              <span class="dot ${container.status === "running" ? "healthy" : "disabled"}"></span>
+            </a>
+          `
+        )
+        .join("")
+    : `<div class="monitor-group"><div class="monitor-group-title"><strong>containers</strong><span>0</span></div><div class="subtle">No live cluster containers found.</div></div>`;
 }
 
 function setWorkspaceHeader(title, subtitle) {
@@ -323,34 +381,10 @@ function renderProfilePage(profile) {
 function renderDashboard(overview, checks, summaryCounts, checkMetrics, nodeMetrics, cluster) {
   setWorkspaceHeader("Dashboard", "Live endpoint availability and monitoring node health at a glance.");
   const root = document.getElementById("app-root");
-  const endpointCards = checks
-    .map(
-      (check) => {
-        const points = checkMetrics[check.name] || [];
-        return `
-        <a class="status-row" href="/monitors/${encodeURIComponent(check.name)}" data-link>
-          <span class="dot ${statusClass(check.status)}"></span>
-          <div>
-            <strong>${escapeHtml(check.name)}</strong>
-            <div class="status-meta">
-              <span>${escapeHtml(check.type.toUpperCase())}</span>
-              <span>${escapeHtml(check.url || check.host || "")}</span>
-            </div>
-          </div>
-          <div>
-            ${endpointSparkline(check, checkMetrics)}
-            <div class="status-meta">
-              <span>Last run ${formatDuration(check.latest_result?.duration_ms)}</span>
-              <span>${escapeHtml(lastMetricLabel(points))}</span>
-            </div>
-          </div>
-          ${statusPill(check.status)}
-          <span class="subtle">${escapeHtml(check.latest_result?.message || "Waiting for result")}</span>
-        </a>
-      `;
-      }
-    )
-    .join("");
+  const endpointChecks = checks.filter((check) => check.type !== "database");
+  const databaseChecks = checks.filter((check) => check.type === "database");
+  const endpointCards = endpointChecks.map((check) => monitorCardMarkup(check, checkMetrics)).join("");
+  const databaseCards = databaseChecks.map((check) => monitorCardMarkup(check, checkMetrics)).join("");
 
   const nodeIds = Array.from(
     new Set([
@@ -390,7 +424,7 @@ function renderDashboard(overview, checks, summaryCounts, checkMetrics, nodeMetr
     <div class="stack">
       <section class="panel">
         <div class="panel-head">
-          <h3>Outcome Snapshot</h3>
+          <h3>Service Health</h3>
           <p>Fast visual totals across all configured endpoint monitors.</p>
         </div>
         <div class="chart-strip">
@@ -410,6 +444,10 @@ function renderDashboard(overview, checks, summaryCounts, checkMetrics, nodeMetr
             <p class="subtle">Total</p>
             <div class="chart-value">${checks.length}</div>
           </article>
+          <article class="chart-card">
+            <p class="subtle">Databases</p>
+            <div class="chart-value">${databaseChecks.length}</div>
+          </article>
         </div>
       </section>
 
@@ -420,6 +458,16 @@ function renderDashboard(overview, checks, summaryCounts, checkMetrics, nodeMetr
         </div>
         <div class="status-list">
           ${endpointCards || `<article class="guide-card"><p>No endpoint monitors are configured yet.</p></article>`}
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Database</h3>
+          <p>Database availability graphs show the health of configured databases, including telemetry storage targets.</p>
+        </div>
+        <div class="status-list">
+          ${databaseCards || `<article class="guide-card"><p>No database monitors are configured yet.</p></article>`}
         </div>
       </section>
 
@@ -456,13 +504,15 @@ function monitorFormMarkup(check, mode) {
   const auth = check.auth || {};
   const isNew = mode === "create";
   const canWrite = hasRole("read_write");
-  const readonlyAttr = canWrite ? "" : "disabled";
+  const managed = Boolean(check.generated);
+  const editable = canWrite && !managed;
+  const readonlyAttr = editable ? "" : "disabled";
   return `
     <div class="detail-grid">
       <section class="panel">
         <div class="panel-head">
           <h3>${isNew ? "Add Monitor" : `Edit ${escapeHtml(check.name)}`}</h3>
-          <p>${isNew ? "Create a new endpoint monitor." : "Save changes and the monitor will re-run immediately."}</p>
+          <p>${isNew ? "Create a new endpoint monitor." : managed ? "This monitor is generated from service configuration and is read-only here." : "Save changes and the monitor will re-run immediately."}</p>
         </div>
         <form class="check-form" id="monitor-form" data-original-name="${escapeHtml(check.name || "")}">
           <label><span>Name</span><input name="name" value="${escapeHtml(check.name || "")}" required ${readonlyAttr} /></label>
@@ -472,6 +522,8 @@ function monitorFormMarkup(check, mode) {
               <option value="http" ${check.type === "http" ? "selected" : ""}>HTTP</option>
               <option value="dns" ${check.type === "dns" ? "selected" : ""}>DNS</option>
               <option value="auth" ${check.type === "auth" ? "selected" : ""}>Auth</option>
+              <option value="database" ${check.type === "database" ? "selected" : ""}>Database</option>
+              <option value="generic" ${check.type === "generic" ? "selected" : ""}>Generic</option>
             </select>
           </label>
           <label>
@@ -483,12 +535,13 @@ function monitorFormMarkup(check, mode) {
           </label>
           <label><span>Interval Seconds</span><input name="interval_seconds" type="number" min="1" value="${escapeHtml(check.interval_seconds || 300)}" required ${readonlyAttr} /></label>
           <label><span>Timeout Seconds</span><input name="timeout_seconds" type="number" min="1" value="${escapeHtml(check.timeout_seconds || 10)}" ${readonlyAttr} /></label>
-          <label class="field-url ${check.type === "dns" ? "hidden" : ""}"><span>URL</span><input name="url" value="${escapeHtml(check.url || "")}" ${readonlyAttr} /></label>
-          <label class="field-host ${check.type !== "dns" ? "hidden" : ""}"><span>Host</span><input name="host" value="${escapeHtml(check.host || "")}" ${readonlyAttr} /></label>
-          <label><span>Expected Statuses</span><input name="expected_statuses" value="${escapeHtml(csv(check.expected_statuses || [200]))}" ${readonlyAttr} /></label>
-          <label><span>Contains Text</span><input name="contains" value="${escapeHtml(csv(check.content_rules?.contains || []))}" ${readonlyAttr} /></label>
-          <label><span>Exclude Text</span><input name="not_contains" value="${escapeHtml(csv(check.content_rules?.not_contains || []))}" ${readonlyAttr} /></label>
-          <label><span>Regex</span><input name="regex" value="${escapeHtml(check.content_rules?.regex || "")}" ${readonlyAttr} /></label>
+          <label class="field-url ${["http", "auth"].includes(check.type) ? "" : "hidden"}"><span>URL</span><input name="url" value="${escapeHtml(check.url || "")}" ${readonlyAttr} /></label>
+          <label class="field-host ${["dns", "database", "generic"].includes(check.type) ? "" : "hidden"}"><span>Host</span><input name="host" value="${escapeHtml(check.host || "")}" ${readonlyAttr} /></label>
+          <label class="field-port ${["http", "auth", "database", "generic"].includes(check.type) ? "" : "hidden"}"><span>Port</span><input name="port" type="number" min="1" max="65535" value="${escapeHtml(check.port || "")}" ${readonlyAttr} /></label>
+          <label class="field-statuses ${["http", "auth"].includes(check.type) ? "" : "hidden"}"><span>Expected Statuses</span><input name="expected_statuses" value="${escapeHtml(csv(check.expected_statuses || [200]))}" ${readonlyAttr} /></label>
+          <label class="field-content ${["http", "auth"].includes(check.type) ? "" : "hidden"}"><span>Contains Text</span><input name="contains" value="${escapeHtml(csv(check.content_rules?.contains || []))}" ${readonlyAttr} /></label>
+          <label class="field-content ${["http", "auth"].includes(check.type) ? "" : "hidden"}"><span>Exclude Text</span><input name="not_contains" value="${escapeHtml(csv(check.content_rules?.not_contains || []))}" ${readonlyAttr} /></label>
+          <label class="field-content ${["http", "auth"].includes(check.type) ? "" : "hidden"}"><span>Regex</span><input name="regex" value="${escapeHtml(check.content_rules?.regex || "")}" ${readonlyAttr} /></label>
           <label class="auth-only ${check.type !== "auth" ? "hidden" : ""}" data-auth-field="type">
             <span>Auth Type</span>
             <select name="auth_type" ${readonlyAttr}>
@@ -502,7 +555,16 @@ function monitorFormMarkup(check, mode) {
           <label class="auth-only ${check.type !== "auth" || auth.type !== "basic" ? "hidden" : ""}" data-auth-field="password"><span>Password</span><input name="password" type="password" value="${escapeHtml(auth.password || "")}" ${readonlyAttr} /></label>
           <label class="auth-only ${check.type !== "auth" || auth.type !== "header" ? "hidden" : ""}" data-auth-field="header_name"><span>Header Name</span><input name="header_name" value="${escapeHtml(auth.header_name || "")}" ${readonlyAttr} /></label>
           <label class="auth-only ${check.type !== "auth" || auth.type !== "header" ? "hidden" : ""}" data-auth-field="header_value"><span>Header Value</span><input name="header_value" value="${escapeHtml(auth.header_value || "")}" ${readonlyAttr} /></label>
-          <div class="button-row ${canWrite ? "" : "hidden"}">
+          <label class="database-only ${check.type !== "database" ? "hidden" : ""}"><span>Database Name</span><input name="database_name" value="${escapeHtml(check.database_name || "")}" ${readonlyAttr} /></label>
+          <label class="database-only ${check.type !== "database" ? "hidden" : ""}">
+            <span>Database Engine</span>
+            <select name="database_engine" ${readonlyAttr}>
+              <option value="mysql" ${(check.database_engine || "mysql") === "mysql" ? "selected" : ""}>MySQL</option>
+            </select>
+          </label>
+          <label class="database-only ${check.type !== "database" ? "hidden" : ""}"><span>Database Username</span><input name="database_username" value="${escapeHtml(auth.username || "")}" ${readonlyAttr} /></label>
+          <label class="database-only ${check.type !== "database" ? "hidden" : ""}"><span>Database Password</span><input name="database_password" type="password" value="${escapeHtml(auth.password || "")}" ${readonlyAttr} /></label>
+          <div class="button-row ${editable ? "" : "hidden"}">
             <button type="submit">${isNew ? "Create Monitor" : "Save Changes"}</button>
             ${
               isNew
@@ -511,7 +573,7 @@ function monitorFormMarkup(check, mode) {
                    <button type="button" class="danger" id="delete-monitor-btn">Delete</button>`
             }
           </div>
-          <p class="form-status" id="monitor-form-status">${canWrite ? "" : "Read-only access: editing is disabled for this account."}</p>
+          <p class="form-status" id="monitor-form-status">${managed ? "This monitor is managed by service configuration." : canWrite ? "" : "Read-only access: editing is disabled for this account."}</p>
         </form>
       </section>
 
@@ -526,7 +588,7 @@ function monitorFormMarkup(check, mode) {
             <div>
               <strong>${escapeHtml(check.name || "New monitor")}</strong>
               <div class="status-meta">
-                <span>${escapeHtml(check.type?.toUpperCase() || "HTTP")}</span>
+                <span>${escapeHtml(checkCategoryLabel(check.type || "http"))}</span>
                 <span>${escapeHtml(authSummary(check))}</span>
               </div>
             </div>
@@ -543,6 +605,10 @@ function monitorFormMarkup(check, mode) {
             <p>${escapeHtml(check.owner || "monitor-1")}</p>
           </div>
           <div class="guide-card">
+            <h4>Target</h4>
+            <p>${escapeHtml(checkTargetLabel(check))}</p>
+          </div>
+          <div class="guide-card">
             <h4>Last Duration</h4>
             <p>${formatDuration(check.latest_result?.duration_ms)}</p>
           </div>
@@ -553,7 +619,7 @@ function monitorFormMarkup(check, mode) {
 }
 
 function renderContainersPage(peers, containers, nodeMetrics) {
-  setWorkspaceHeader("Containers", "Configure peer monitors, manage monitor containers, and add new ones live.");
+  setWorkspaceHeader("Configure Containers", "Configure peer monitors, add new nodes, and define how the cluster is managed.");
   const root = document.getElementById("app-root");
   const canAdmin = hasRole("admin");
   root.innerHTML = `
@@ -649,34 +715,145 @@ function renderContainersPage(peers, containers, nodeMetrics) {
   `;
 }
 
+function renderContainerDetailPage(container, peer, nodeMetrics) {
+  setWorkspaceHeader(container.name, "Manage the current live container and review its cluster health.");
+  const root = document.getElementById("app-root");
+  const canAdmin = hasRole("admin");
+  const status = container.status === "running" ? "healthy" : "disabled";
+  root.innerHTML = `
+    <div class="detail-grid">
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Live Container</h3>
+          <p>This page is for day-to-day control of the currently registered cluster container.</p>
+        </div>
+        <article class="guide-card">
+          <div class="status-row">
+            <span class="dot ${statusClass(status)}"></span>
+            <div>
+              <strong>${escapeHtml(container.name)}</strong>
+              <div class="status-meta">
+                <span>${escapeHtml(container.image || "unknown image")}</span>
+                <span>${escapeHtml(peer?.base_url || "No peer URL configured")}</span>
+              </div>
+            </div>
+            <div>${nodeSparkline(container.name, nodeMetrics)}</div>
+            ${statusPill(status)}
+            <span class="subtle">${escapeHtml(container.status)}</span>
+          </div>
+        </article>
+        <div class="button-row ${canAdmin ? "" : "hidden"}" style="margin-top: 16px;">
+          <button class="secondary" data-action="start" data-container="${escapeHtml(container.name)}">Start</button>
+          <button class="danger" data-action="stop" data-container="${escapeHtml(container.name)}">Stop</button>
+          <button data-action="restart" data-container="${escapeHtml(container.name)}">Restart</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Cluster Details</h3>
+          <p>Peer registration and recovery information for this container.</p>
+        </div>
+        <div class="stack">
+          <article class="guide-card">
+            <h4>Peer Node</h4>
+            <p>${escapeHtml(peer?.node_id || "Not mapped to a peer yet")}</p>
+          </article>
+          <article class="guide-card">
+            <h4>Base URL</h4>
+            <p>${escapeHtml(peer?.base_url || "n/a")}</p>
+          </article>
+          <article class="guide-card">
+            <h4>Recovery</h4>
+            <p>${peer?.recovery?.enabled ? "Enabled" : "Disabled"}</p>
+          </article>
+          <article class="guide-card">
+            <h4>Heartbeat</h4>
+            <p>${peer?.last_ok_at ? fmtTime(peer.last_ok_at) : "No heartbeat recorded yet"}</p>
+          </article>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
 function renderGuidePage() {
   setWorkspaceHeader("FAQ", "Answers to common setup, operations, scaling, and access questions.");
   const root = document.getElementById("app-root");
   root.innerHTML = `
-    <section class="panel">
-      <div class="panel-head">
-        <h3>Frequently Asked Questions</h3>
-        <p>Use this page for the most common operator questions about monitoring, editing, scaling, and access control.</p>
-      </div>
-      <div class="guide-grid">
-        <article class="guide-card">
-          <h4>How do I watch endpoint health?</h4>
-          <p>The dashboard shows every endpoint monitor with a health dot and a live availability trend graph.</p>
-        </article>
-        <article class="guide-card">
-          <h4>How do I edit a monitor?</h4>
-          <p>Select any monitor from the left sidebar to open a dedicated edit page for intervals, URLs, validation rules, and auth settings.</p>
-        </article>
-        <article class="guide-card">
-          <h4>How do I scale the monitoring fleet?</h4>
-          <p>The containers page lets admins manage peer monitors, control monitor containers, and add new nodes while the service is running.</p>
-        </article>
-        <article class="guide-card">
-          <h4>How do I manage portal access?</h4>
-          <p>The Administration page lets admins create read-only, read-write, and full admin accounts today, with OCI auth scaffolding ready for future integration.</p>
-        </article>
-      </div>
-    </section>
+    <div class="stack">
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Frequently Asked Questions</h3>
+          <p>Use this page for the most common operator questions about monitoring, editing, scaling, storage, and access control.</p>
+        </div>
+        <div class="guide-grid">
+          <article class="guide-card">
+            <h4>How do I watch endpoint health?</h4>
+            <p>The dashboard shows every endpoint monitor with a health dot and a live availability trend graph.</p>
+          </article>
+          <article class="guide-card">
+            <h4>How do I edit a monitor?</h4>
+            <p>Select any monitor from the left sidebar to open a dedicated edit page for intervals, URLs, validation rules, and auth settings.</p>
+          </article>
+          <article class="guide-card">
+            <h4>How do I scale the monitoring fleet?</h4>
+            <p>The containers page lets admins manage peer monitors, control monitor containers, and add new nodes while the service is running.</p>
+          </article>
+          <article class="guide-card">
+            <h4>How do I manage portal access?</h4>
+            <p>The Administration page lets admins create read-only, read-write, and full admin accounts today, with OCI auth scaffolding ready for future integration.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Service Flow Diagram</h3>
+          <p>This is the end-to-end flow from portal changes to monitor execution and telemetry storage.</p>
+        </div>
+        <div class="diagram-row">
+          <div class="diagram-node">Portal UI</div>
+          <div class="diagram-arrow">→</div>
+          <div class="diagram-node">Config Store</div>
+          <div class="diagram-arrow">→</div>
+          <div class="diagram-node">Monitor Runner</div>
+          <div class="diagram-arrow">→</div>
+          <div class="diagram-node">Checks + Peer Pollers</div>
+          <div class="diagram-arrow">→</div>
+          <div class="diagram-node">Dashboard + Telemetry</div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Cluster Coordination Diagram</h3>
+          <p>Monitoring nodes can watch the same targets, watch one another, and recover failed peers.</p>
+        </div>
+        <div class="diagram-grid">
+          <div class="diagram-node">Monitor Node A</div>
+          <div class="diagram-node">Monitor Node B</div>
+          <div class="diagram-node">Monitor Node C</div>
+          <div class="diagram-node wide">Shared Endpoints, Peer Health, Recovery Decisions, Email Alerts</div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Telemetry Storage Diagram</h3>
+          <p>Telemetry can stay local in memory or be retained in MySQL for two hours, locally or in OCI.</p>
+        </div>
+        <div class="diagram-row">
+          <div class="diagram-node">Check Result</div>
+          <div class="diagram-arrow">→</div>
+          <div class="diagram-node">Monitor State</div>
+          <div class="diagram-arrow">→</div>
+          <div class="diagram-node">Live Graphs</div>
+          <div class="diagram-arrow">+</div>
+          <div class="diagram-node">MySQL Retention</div>
+        </div>
+      </section>
+    </div>
   `;
 }
 
@@ -812,6 +989,14 @@ function renderAdminPage(users, telemetry, portalSettings) {
                   <option value="false" ${!telemetry?.use_ssl ? "selected" : ""}>Disabled</option>
                 </select>
               </label>
+              <label>
+                <span>Provision Local MySQL For Me</span>
+                <select name="auto_provision_local">
+                  <option value="true" ${telemetry?.auto_provision_local ? "selected" : ""}>Yes, provision it automatically</option>
+                  <option value="false" ${!telemetry?.auto_provision_local ? "selected" : ""}>No, I will point to my own server</option>
+                </select>
+              </label>
+              <label><span>Local MySQL Container Name</span><input name="local_container_name" value="${escapeHtml(telemetry?.local_container_name || "async-service-monitor-mysql")}" /></label>
               <button type="submit">Save Telemetry Settings</button>
               <p class="form-status" id="telemetry-status"></p>
             </form>
@@ -862,8 +1047,18 @@ function renderAdminPage(users, telemetry, portalSettings) {
 function hydrateFormVisibility(form) {
   const type = form.querySelector("select[name='type']")?.value;
   if (!type) return;
-  form.querySelectorAll(".field-url").forEach((node) => node.classList.toggle("hidden", type === "dns"));
-  form.querySelectorAll(".field-host").forEach((node) => node.classList.toggle("hidden", type !== "dns"));
+  const showUrl = type === "http" || type === "auth";
+  const showHost = type === "dns" || type === "database" || type === "generic";
+  const showPort = type === "http" || type === "auth" || type === "database" || type === "generic";
+  const showStatuses = type === "http" || type === "auth";
+  const showContent = type === "http" || type === "auth";
+  const showDatabase = type === "database";
+  form.querySelectorAll(".field-url").forEach((node) => node.classList.toggle("hidden", !showUrl));
+  form.querySelectorAll(".field-host").forEach((node) => node.classList.toggle("hidden", !showHost));
+  form.querySelectorAll(".field-port").forEach((node) => node.classList.toggle("hidden", !showPort));
+  form.querySelectorAll(".field-statuses").forEach((node) => node.classList.toggle("hidden", !showStatuses));
+  form.querySelectorAll(".field-content").forEach((node) => node.classList.toggle("hidden", !showContent));
+  form.querySelectorAll(".database-only").forEach((node) => node.classList.toggle("hidden", !showDatabase));
   const authType = form.querySelector("select[name='auth_type']")?.value || "bearer";
   form.querySelectorAll(".auth-only").forEach((node) => node.classList.toggle("hidden", type !== "auth"));
   form.querySelectorAll("[data-auth-field='token']").forEach((node) => node.classList.toggle("hidden", type !== "auth" || authType !== "bearer"));
@@ -874,6 +1069,9 @@ function hydrateFormVisibility(form) {
 function monitorFormPayload(form) {
   const formData = new FormData(form);
   const type = String(formData.get("type"));
+  const portValue = String(formData.get("port") || "").trim();
+  const databaseUsername = String(formData.get("database_username") || "").trim();
+  const databasePassword = String(formData.get("database_password") || "");
   return {
     name: String(formData.get("name")),
     type,
@@ -882,12 +1080,15 @@ function monitorFormPayload(form) {
     timeout_seconds: formData.get("timeout_seconds") ? Number(formData.get("timeout_seconds")) : null,
     url: formData.get("url") || null,
     host: formData.get("host") || null,
-    expected_statuses: parseCsv(formData.get("expected_statuses")).map(Number),
+    port: portValue ? Number(portValue) : null,
+    database_name: String(formData.get("database_name") || "") || null,
+    database_engine: String(formData.get("database_engine") || "mysql"),
+    expected_statuses: type === "http" || type === "auth" ? parseCsv(formData.get("expected_statuses")).map(Number) : [200],
     expect_authenticated_statuses: [200],
     content: {
-      contains: parseCsv(formData.get("contains")),
-      not_contains: parseCsv(formData.get("not_contains")),
-      regex: String(formData.get("regex") || "") || null,
+      contains: type === "http" || type === "auth" ? parseCsv(formData.get("contains")) : [],
+      not_contains: type === "http" || type === "auth" ? parseCsv(formData.get("not_contains")) : [],
+      regex: type === "http" || type === "auth" ? String(formData.get("regex") || "") || null : null,
     },
     auth:
       type === "auth"
@@ -899,6 +1100,15 @@ function monitorFormPayload(form) {
             header_name: formData.get("header_name") || null,
             header_value: formData.get("header_value") || null,
           }
+        : type === "database" && databaseUsername
+          ? {
+              type: "basic",
+              token: null,
+              username: databaseUsername,
+              password: databasePassword || null,
+              header_name: null,
+              header_value: null,
+            }
         : null,
   };
 }
@@ -941,6 +1151,8 @@ function telemetryFormPayload(form) {
     password: String(formData.get("password") || "") || null,
     retention_hours: Number(formData.get("retention_hours") || 2),
     use_ssl: String(formData.get("use_ssl")) === "true",
+    auto_provision_local: String(formData.get("auto_provision_local")) === "true",
+    local_container_name: String(formData.get("local_container_name") || "") || "async-service-monitor-mysql",
   };
 }
 
@@ -972,15 +1184,21 @@ async function renderRoute() {
   if (path.startsWith("/monitors/") && path !== "/monitors/new") {
     state.monitorsExpanded = true;
   }
+  if (path.startsWith("/cluster") || path === "/containers") {
+    state.clusterExpanded = true;
+  }
   if (!state.session?.authenticated) {
-    renderSidebar([]);
+    renderSidebar([], { available: false, containers: [] });
     renderLoginPage();
     return;
   }
 
   const [overview, checks] = await Promise.all([api("/api/overview"), api("/api/checks")]);
   const summaryCounts = renderOverview(overview, checks);
-  renderSidebar(checks);
+  const containersData = hasRole("admin")
+    ? await api("/api/containers").catch(() => ({ available: false, containers: [] }))
+    : { available: false, containers: [] };
+  renderSidebar(checks, containersData);
 
   if (path === "/" || path === "/monitors") {
     const [checkMetrics, nodeMetrics, cluster] = await Promise.all([
@@ -1026,6 +1244,9 @@ async function renderRoute() {
         enabled: true,
         interval_seconds: 300,
         timeout_seconds: 10,
+        port: null,
+        database_name: "",
+        database_engine: "mysql",
         expected_statuses: [200],
         content_rules: { contains: [], not_contains: [], regex: "" },
         status: "unknown",
@@ -1059,13 +1280,30 @@ async function renderRoute() {
     return;
   }
 
-  if (path === "/containers") {
+  if (path === "/containers" || path === "/cluster/configure" || path === "/cluster") {
     const [peers, containers, nodeMetrics] = await Promise.all([
       api("/api/peers"),
       api("/api/containers"),
       api("/api/metrics/nodes"),
     ]);
     renderContainersPage(peers, containers, nodeMetrics);
+    return;
+  }
+
+  if (path.startsWith("/cluster/")) {
+    const containerName = decodeURIComponent(path.split("/").pop());
+    const [peers, containers, nodeMetrics] = await Promise.all([
+      api("/api/peers"),
+      api("/api/containers"),
+      api("/api/metrics/nodes"),
+    ]);
+    const container = (containers.available ? containers.containers : []).find((item) => item.name === containerName);
+    if (!container) {
+      navigate("/cluster/configure");
+      return;
+    }
+    const peer = peers.find((item) => item.container_name === containerName || item.node_id === containerName);
+    renderContainerDetailPage(container, peer, nodeMetrics);
   }
 }
 
@@ -1172,11 +1410,11 @@ async function handleSubmit(event) {
     const status = document.getElementById("telemetry-status");
     try {
       setStatus(status, "Saving telemetry settings...");
-      await api("/api/settings/telemetry", {
+      const result = await api("/api/settings/telemetry", {
         method: "PUT",
         body: JSON.stringify(telemetryFormPayload(form)),
       });
-      setStatus(status, "Telemetry settings saved.");
+      setStatus(status, result.message || "Telemetry settings saved.");
     } catch (error) {
       setStatus(status, error.message, true);
     }
@@ -1341,6 +1579,12 @@ async function handleClick(event) {
 
   if (event.target.closest("#configured-monitors-toggle")) {
     state.monitorsExpanded = !state.monitorsExpanded;
+    await renderRoute();
+    return;
+  }
+
+  if (event.target.closest("#cluster-toggle")) {
+    state.clusterExpanded = !state.clusterExpanded;
     await renderRoute();
     return;
   }

@@ -445,6 +445,43 @@ button.danger {
   border: 1px solid var(--line);
 }
 
+.diagram-row,
+.diagram-grid {
+  display: grid;
+  gap: 12px;
+  align-items: center;
+}
+
+.diagram-row {
+  grid-template-columns: repeat(9, minmax(0, 1fr));
+}
+
+.diagram-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.diagram-node,
+.diagram-arrow {
+  border-radius: 18px;
+  padding: 16px 12px;
+  text-align: center;
+  font-weight: 700;
+}
+
+.diagram-node {
+  background: var(--surface-alt);
+  border: 1px solid var(--line);
+}
+
+.diagram-node.wide {
+  grid-column: 1 / -1;
+}
+
+.diagram-arrow {
+  color: var(--muted);
+  font-size: 1.3rem;
+}
+
 @media (max-width: 1100px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -458,7 +495,9 @@ button.danger {
   .workspace-hero,
   .split-panels,
   .detail-grid,
-  .guide-grid {
+  .guide-grid,
+  .diagram-grid,
+  .diagram-row {
     grid-template-columns: 1fr;
   }
 }

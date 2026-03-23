@@ -1,57 +1,109 @@
 # Async Service Monitor
 
-`async-service-monitor` is a Python service for monitoring endpoints, services, and peer monitor containers from a config file, a browser-based admin portal, or both.
+`async-service-monitor` is a Python monitoring platform for endpoint health, peer monitor coordination, Docker-based recovery, live administration, and short-retention telemetry storage.
 
 ## At A Glance
 
 | Area | What It Does |
 | --- | --- |
-| Endpoint Monitoring | HTTP, DNS, auth-aware checks, content validation |
-| Admin Portal | Dashboard, dedicated monitor pages, add-monitor flow |
-| Cluster Monitoring | Peer health, failover, recovery owner selection |
-| Container Ops | Start, stop, restart, and create monitor containers |
-| Telemetry Storage | Optional 2-hour MySQL retention for monitor events, node health, and config snapshots |
+| Endpoint Monitoring | HTTP, DNS, and auth-aware checks with content validation |
+| Admin Portal | Dashboard, dedicated monitor pages, FAQ, profile, and service configuration |
+| Cluster Monitoring | Peer health polling, failover ownership, and recovery decisions |
+| Container Ops | Start, stop, restart, and create monitor containers live |
+| Access Control | Read-only, read-write, and admin portal accounts |
+| Telemetry Storage | Optional 2-hour MySQL retention for monitor results, node health, and config snapshots |
 
-## Visual Flow
+## Architecture
+
+### Core Flow
 
 ```mermaid
 flowchart LR
     A["Admin Portal"] --> B["Config Store"]
     B --> C["Monitor Runner"]
     C --> D["Endpoint Checks"]
-    C --> E["Peer Monitors"]
-    E --> F["Monitor Containers"]
-    E --> G["Recovery + Alerts"]
+    C --> E["Peer Polling"]
+    D --> F["Live Dashboard State"]
+    E --> F
+    F --> G["Optional MySQL Telemetry"]
 ```
 
-## Main Screens
+### Cluster Behavior
+
+```mermaid
+flowchart TD
+    A["Monitor Node A"] --> D["Shared Endpoint Targets"]
+    B["Monitor Node B"] --> D
+    C["Monitor Node C"] --> D
+    A --> E["Peer Health Checks"]
+    B --> E
+    C --> E
+    E --> F["Failover + Recovery"]
+    F --> G["Email Notifications"]
+```
+
+### Telemetry Retention
+
+```mermaid
+flowchart LR
+    A["Check Result"] --> B["MonitorState"]
+    B --> C["Dashboard Graphs"]
+    B --> D["Telemetry Store"]
+    D --> E["Local MySQL"]
+    D --> F["OCI MySQL"]
+```
+
+## Main Portal Areas
+
+### FAQ
+
+- Visual service-flow diagrams
+- Answers for monitoring, scaling, auth, and telemetry storage
 
 ### Dashboard
 
-- Endpoint monitors listed with simple health dots
-- Outcome summary cards for healthy, unhealthy, disabled, and total
-- Sidebar navigation to each configured monitor
+- Endpoint health dots
+- Live availability graphs
+- Node-health graphs
+- Last-fired timestamps and latest result summaries
 
-### Dedicated Monitor Pages
+### Monitor Pages
 
 - One page per monitor
-- Edit URL or host
-- Update auth details
-- Save and trigger an immediate re-check
+- Edit targets, timing, validation, and auth settings
+- Enable, disable, and delete checks
 
 ### Containers
 
-- Configure peer monitor entries
-- Enable or disable monitor containers
-- Start, stop, or restart containers
+- Manage peer monitor definitions
+- Control monitor containers
 - Add new monitor containers live
 
-### Using The Service
+### Administration
 
-- Built-in guide page in the portal
-- Operator-focused explanations for monitoring, editing, and scaling
+- User and role management
+- Service configuration for telemetry and OCI auth scaffolding
+- Self-service local MySQL provisioning for telemetry storage
 
-## Local Run
+## Telemetry Storage
+
+Telemetry storage is optional and can retain up to 2 hours of:
+
+- endpoint monitor results
+- node heartbeat history
+- configuration snapshots
+
+You can point telemetry at:
+
+1. A local MySQL instance
+2. An OCI-hosted MySQL instance
+
+If you select local MySQL in the admin portal, you can also enable self-service provisioning. In that mode the service will attempt to start a local MySQL Docker container for you using `mysql:8.4`, then persist the generated connection details back into the config.
+
+Assumption:
+This self-service local setup expects Docker Engine to be available on the machine running the admin portal.
+
+## Running Locally
 
 ```powershell
 py -3 -m venv .venv
@@ -62,7 +114,7 @@ py -3 -m service_monitor --config config.yaml
 
 Open [http://localhost:8000](http://localhost:8000).
 
-## Docker Run
+## Running With Docker
 
 ```powershell
 docker build -t async-service-monitor .
@@ -78,10 +130,12 @@ docker compose up --build
 ## Key Files
 
 - `src/service_monitor/admin.py`
+- `src/service_monitor/auth.py`
 - `src/service_monitor/runner.py`
 - `src/service_monitor/cluster.py`
 - `src/service_monitor/config.py`
 - `src/service_monitor/config_store.py`
+- `src/service_monitor/telemetry.py`
 - `src/service_monitor/web/index.html`
 - `src/service_monitor/web/app.css`
 - `src/service_monitor/web/app.js`
@@ -89,6 +143,6 @@ docker compose up --build
 ## Notes
 
 - Monitor config edits are written back to the YAML file.
-- Updated monitors now re-run immediately after save.
-- Creating monitor containers live requires Docker access and an image that already exists or can be pulled.
-- Cluster recovery requires Docker Engine access from the monitoring runtime.
+- Updated monitors re-run immediately after save.
+- The portal uses session-based login today and includes OCI auth scaffolding for future integration.
+- Local MySQL self-provisioning uses Docker and is intended to reduce manual setup when telemetry storage is enabled.

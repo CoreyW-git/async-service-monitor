@@ -25,6 +25,8 @@ telemetry:
   port: 3306
   retention_hours: 2
   use_ssl: false
+  auto_provision_local: false
+  local_container_name: async-service-monitor-mysql
 portal:
   enabled: true
   provider: basic
@@ -36,7 +38,7 @@ portal:
     last_name: Wright
     role: admin
     enabled: true
-    last_login_at: 1774220915.0518746
+    last_login_at: 1774224268.3076305
   oci:
     enabled: false
 checks:
@@ -46,6 +48,7 @@ checks:
   enabled: false
   timeout_seconds: 10.0
   url: https://www.yahoo.com
+  database_engine: mysql
   expected_statuses:
   - 200
   expect_authenticated_statuses:
@@ -65,6 +68,7 @@ checks:
   enabled: true
   timeout_seconds: 10.0
   host: www.yahoo.com
+  database_engine: mysql
   expected_statuses:
   - 200
   expect_authenticated_statuses:
@@ -80,6 +84,7 @@ checks:
   enabled: true
   timeout_seconds: 10.0
   url: https://www.google.com
+  database_engine: mysql
   expected_statuses:
   - 200
   expect_authenticated_statuses:

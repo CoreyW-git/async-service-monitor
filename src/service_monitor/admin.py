@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import secrets
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -47,12 +48,15 @@ class AuthPayload(BaseModel):
 
 class CheckPayload(BaseModel):
     name: str
-    type: Literal["http", "dns", "auth"]
+    type: Literal["http", "dns", "auth", "database", "generic"]
     enabled: bool = True
     interval_seconds: float
     timeout_seconds: float | None = None
     url: str | None = None
     host: str | None = None
+    port: int | None = None
+    database_name: str | None = None
+    database_engine: Literal["mysql"] = "mysql"
     expected_statuses: list[int] = Field(default_factory=lambda: [200])
     expect_authenticated_statuses: list[int] = Field(default_factory=lambda: [200])
     auth: AuthPayload | None = None
@@ -129,6 +133,8 @@ class TelemetryPayload(BaseModel):
     password: str | None = None
     retention_hours: int = 2
     use_ssl: bool = False
+    auto_provision_local: bool = False
+    local_container_name: str = "async-service-monitor-mysql"
 
 
 class PortalSettingsPayload(BaseModel):
@@ -163,6 +169,9 @@ def _check_from_payload(payload: CheckPayload) -> CheckConfig:
         timeout_seconds=payload.timeout_seconds,
         url=payload.url,
         host=payload.host,
+        port=payload.port,
+        database_name=payload.database_name,
+        database_engine=payload.database_engine,
         expected_statuses=payload.expected_statuses,
         expect_authenticated_statuses=payload.expect_authenticated_statuses,
         auth=_auth_from_payload(payload.auth),
@@ -252,6 +261,18 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
 
     @app.get("/containers", response_class=HTMLResponse)
     async def containers_page() -> str:
+        return HTMLResponse(_frontend_html(), headers=_no_cache_headers())
+
+    @app.get("/cluster", response_class=HTMLResponse)
+    async def cluster_page() -> str:
+        return HTMLResponse(_frontend_html(), headers=_no_cache_headers())
+
+    @app.get("/cluster/configure", response_class=HTMLResponse)
+    async def cluster_configure_page() -> str:
+        return HTMLResponse(_frontend_html(), headers=_no_cache_headers())
+
+    @app.get("/cluster/{container_name:path}", response_class=HTMLResponse)
+    async def cluster_container_page(container_name: str) -> str:
         return HTMLResponse(_frontend_html(), headers=_no_cache_headers())
 
     @app.get("/guide", response_class=HTMLResponse)
@@ -363,14 +384,14 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
             "config_path": runtime["config_path"],
             "node_id": config.cluster.node_id,
             "cluster_enabled": config.cluster.enabled,
-            "total_checks": len(config.checks),
+            "total_checks": len(runner.runtime_checks()),
             "summary": summary,
         }
 
     @app.get("/api/checks")
     async def checks(current_user: dict[str, str] = Depends(require_read_only)) -> list[dict[str, object]]:
         runner = _get_runner()
-        return [runner.describe_check(check) for check in runner.config.checks]
+        return [runner.describe_check(check) for check in runner.runtime_checks()]
 
     @app.get("/api/checks/{check_name}")
     async def check_detail(
@@ -402,6 +423,8 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
         payload: CheckPayload,
         current_user: dict[str, str] = Depends(require_read_write),
     ) -> dict[str, object]:
+        if check_name == "telemetry-database":
+            raise HTTPException(status_code=400, detail="Telemetry database monitor is managed by service configuration")
         check = _check_from_payload(payload)
         try:
             store.update_check(check_name, check)
@@ -418,6 +441,8 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
         payload: CheckStatePayload,
         current_user: dict[str, str] = Depends(require_read_write),
     ) -> dict[str, object]:
+        if check_name == "telemetry-database":
+            raise HTTPException(status_code=400, detail="Telemetry database monitor is managed by service configuration")
         try:
             store.set_check_enabled(check_name, payload.enabled)
         except ValueError as exc:
@@ -431,6 +456,8 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
     async def delete_check(
         check_name: str, current_user: dict[str, str] = Depends(require_read_write)
     ) -> dict[str, object]:
+        if check_name == "telemetry-database":
+            raise HTTPException(status_code=400, detail="Telemetry database monitor is managed by service configuration")
         try:
             store.delete_check(check_name)
         except ValueError as exc:
@@ -644,6 +671,8 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
             "password": telemetry.password,
             "retention_hours": telemetry.retention_hours,
             "use_ssl": telemetry.use_ssl,
+            "auto_provision_local": telemetry.auto_provision_local,
+            "local_container_name": telemetry.local_container_name,
         }
 
     @app.put("/api/settings/telemetry")
@@ -651,13 +680,29 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
         payload: TelemetryPayload,
         current_user: dict[str, object] = Depends(require_admin),
     ) -> dict[str, object]:
+        telemetry = TelemetryConfig(**payload.model_dump())
+        message = "Telemetry settings saved."
+        runner = _get_runner()
+        if telemetry.enabled and telemetry.provider == "local_mysql" and telemetry.auto_provision_local:
+            if not telemetry.database:
+                telemetry.database = "async_service_monitor"
+            if not telemetry.username:
+                telemetry.username = "asm_telemetry"
+            if not telemetry.password:
+                telemetry.password = secrets.token_urlsafe(18)
+            if not telemetry.host:
+                telemetry.host = "127.0.0.1"
+            provisioned = await runner.provision_local_mysql(telemetry)
+            telemetry.host = str(provisioned["host"])
+            telemetry.port = int(provisioned["port"])
+            telemetry.local_container_name = str(provisioned["container_name"])
+            message = f"Telemetry settings saved and local MySQL is available in container '{telemetry.local_container_name}'."
         try:
-            store.update_telemetry(TelemetryConfig(**payload.model_dump()))
+            store.update_telemetry(telemetry)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        runner = _get_runner()
         await runner.apply_config(store.load())
-        return {"status": "ok"}
+        return {"status": "ok", "message": message}
 
     @app.get("/api/settings/portal")
     async def portal_settings(

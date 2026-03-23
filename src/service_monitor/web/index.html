@@ -26,7 +26,16 @@
           <section class="sidebar-section hidden" id="configured-monitors-section">
             <div id="sidebar-monitors" class="sidebar-monitors"></div>
           </section>
-          <a href="/containers" data-link data-role-min="admin">Containers</a>
+          <button type="button" id="cluster-toggle" class="sidebar-toggle hidden" data-role-min="admin">
+            <span>Cluster</span>
+            <span id="cluster-chevron">+</span>
+          </button>
+          <section class="sidebar-section hidden" id="cluster-section">
+            <div class="sidebar-monitors">
+              <a href="/cluster/configure" id="configure-containers-link" class="sidebar-link" data-link>Configure Containers</a>
+              <div id="sidebar-cluster-containers" class="sidebar-monitors"></div>
+            </div>
+          </section>
           <a href="/admin" data-link data-role-min="admin">Administration</a>
         </nav>
 
