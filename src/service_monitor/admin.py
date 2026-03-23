@@ -122,6 +122,7 @@ class ProfilePayload(BaseModel):
     first_name: str = ""
     last_name: str = ""
     password: str | None = None
+    dark_mode: bool | None = None
 
 
 class TelemetryPayload(BaseModel):
@@ -207,6 +208,19 @@ def _peer_from_payload(payload: PeerPayload) -> PeerConfig:
             enabled=payload.recovery.enabled,
             container_name=payload.recovery.container_name,
         ),
+    )
+
+
+def _user_from_payload(payload: PortalUserPayload, existing: PortalUserConfig | None = None) -> PortalUserConfig:
+    return PortalUserConfig(
+        username=payload.username,
+        password=payload.password,
+        first_name=payload.first_name,
+        last_name=payload.last_name,
+        dark_mode=existing.dark_mode if existing is not None else False,
+        role=payload.role,
+        enabled=payload.enabled,
+        last_login_at=existing.last_login_at if existing is not None else None,
     )
 
 
@@ -379,6 +393,7 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
             payload.first_name,
             payload.last_name,
             payload.password,
+            payload.dark_mode,
         )
         return {
             "status": "ok",
@@ -388,6 +403,7 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
                 "last_name": user.last_name,
                 "role": user.role,
                 "enabled": user.enabled,
+                "dark_mode": user.dark_mode,
                 "last_login_at": user.last_login_at,
                 "provider": current_user["provider"],
                 "authenticated": True,
@@ -632,6 +648,7 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
                 "last_name": user.last_name,
                 "role": user.role,
                 "enabled": user.enabled,
+                "dark_mode": user.dark_mode,
                 "last_login_at": user.last_login_at,
             }
             for user in config.portal.users
@@ -642,7 +659,7 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
         payload: PortalUserPayload, current_user: dict[str, str] = Depends(require_admin)
     ) -> dict[str, object]:
         try:
-            store.add_user(PortalUserConfig(**payload.model_dump()))
+            store.add_user(_user_from_payload(payload))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         runner = _get_runner()
@@ -656,7 +673,10 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
         current_user: dict[str, str] = Depends(require_admin),
     ) -> dict[str, object]:
         try:
-            store.update_user(username, PortalUserConfig(**payload.model_dump()))
+            existing = store.find_user(username)
+            if existing is None:
+                raise ValueError(f"User '{username}' was not found")
+            store.update_user(username, _user_from_payload(payload, existing))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         runner = _get_runner()

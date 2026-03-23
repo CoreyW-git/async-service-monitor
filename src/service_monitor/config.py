@@ -138,6 +138,7 @@ class PortalUserConfig:
     password: str
     first_name: str = ""
     last_name: str = ""
+    dark_mode: bool = False
     role: Literal["read_only", "read_write", "admin"] = "read_only"
     enabled: bool = True
     last_login_at: float | None = None
@@ -311,6 +312,7 @@ def _parse_portal_user(raw: dict[str, Any]) -> PortalUserConfig:
         password=raw["password"],
         first_name=raw.get("first_name", ""),
         last_name=raw.get("last_name", ""),
+        dark_mode=_as_bool(raw.get("dark_mode", False)),
         role=raw.get("role", "read_only"),
         enabled=_as_bool(raw.get("enabled", True), default=True),
         last_login_at=float(raw["last_login_at"]) if raw.get("last_login_at") is not None else None,

@@ -190,14 +190,21 @@ function renderSessionChip() {
   }
   chip.classList.remove("hidden");
   chip.innerHTML = `
-    <a href="/profile" data-link class="sidebar-link active" style="display:block; color: white;">
+    <a href="/profile" data-link class="profile-link-card">
+      <span class="profile-link-label">Personal Settings</span>
       <strong>${escapeHtml([state.session.first_name, state.session.last_name].filter(Boolean).join(" ") || state.session.username)}</strong><br />
       <span>${escapeHtml(state.session.username)} · ${escapeHtml(state.session.role.replaceAll("_", " "))}</span>
+      <span class="profile-link-hint">Open profile, password, and theme preferences</span>
     </a>
     <div class="button-row" style="margin-top: 10px;">
       <button type="button" class="secondary" id="logout-btn">Log Out</button>
     </div>
   `;
+}
+
+function applyTheme(session = state.session) {
+  const theme = session?.authenticated && session?.dark_mode ? "dark" : "light";
+  document.body.dataset.theme = theme;
 }
 
 function renderSidebar(checks, containersData) {
@@ -356,6 +363,13 @@ function renderProfilePage(profile) {
           <label><span>First Name</span><input name="first_name" value="${escapeHtml(profile.first_name || "")}" /></label>
           <label><span>Last Name</span><input name="last_name" value="${escapeHtml(profile.last_name || "")}" /></label>
           <label><span>Username</span><input name="username" value="${escapeHtml(profile.username)}" disabled /></label>
+          <label>
+            <span>Theme</span>
+            <select name="dark_mode">
+              <option value="false" ${!profile.dark_mode ? "selected" : ""}>Light Mode</option>
+              <option value="true" ${profile.dark_mode ? "selected" : ""}>Dark Mode</option>
+            </select>
+          </label>
           <label><span>New Password</span><input name="password" type="password" placeholder="Leave blank to keep your current password" /></label>
           <button type="submit">Save Profile</button>
           <p class="form-status" id="profile-status"></p>
@@ -379,6 +393,10 @@ function renderProfilePage(profile) {
           <article class="guide-card">
             <h4>Auth Provider</h4>
             <p>${escapeHtml(profile.provider || "basic")}</p>
+          </article>
+          <article class="guide-card">
+            <h4>Theme Preference</h4>
+            <p>${profile.dark_mode ? "Dark mode" : "Light mode"}</p>
           </article>
         </div>
       </section>
@@ -1338,6 +1356,7 @@ function isInteractiveRoute(path = window.location.pathname) {
 
 async function renderRoute() {
   state.session = await api("/api/session");
+  applyTheme();
   renderSessionChip();
 
   const path = window.location.pathname;
@@ -1555,6 +1574,7 @@ async function handleSubmit(event) {
           first_name: String(data.get("first_name") || ""),
           last_name: String(data.get("last_name") || ""),
           password: String(data.get("password") || "") || null,
+          dark_mode: String(data.get("dark_mode")) === "true",
         }),
       });
       await renderRoute();

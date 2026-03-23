@@ -12,6 +12,20 @@
   --shadow: 0 20px 60px rgba(24, 26, 32, 0.14);
 }
 
+body[data-theme="dark"] {
+  --ink: #edf2ff;
+  --muted: #a6b1c7;
+  --line: rgba(220, 231, 255, 0.12);
+  --surface: rgba(20, 28, 44, 0.94);
+  --surface-alt: #202b43;
+  --sidebar: #0d1423;
+  --sidebar-accent: #8dd3cb;
+  --green: #37c978;
+  --red: #ff7b72;
+  --gray: #8b96ad;
+  --shadow: 0 24px 64px rgba(0, 0, 0, 0.35);
+}
+
 * {
   box-sizing: border-box;
 }
@@ -24,6 +38,12 @@ body {
   background:
     radial-gradient(circle at top left, rgba(141, 211, 203, 0.2), transparent 28%),
     linear-gradient(180deg, #f4eee1 0%, #ece5d7 100%);
+}
+
+body[data-theme="dark"] {
+  background:
+    radial-gradient(circle at top left, rgba(141, 211, 203, 0.16), transparent 24%),
+    linear-gradient(180deg, #111827 0%, #0b1020 100%);
 }
 
 .app-shell {
@@ -88,6 +108,29 @@ body {
 
 .session-chip a {
   text-decoration: none;
+}
+
+.profile-link-card {
+  display: block;
+  color: white;
+  text-decoration: none;
+}
+
+.profile-link-label {
+  display: inline-block;
+  margin-bottom: 6px;
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--sidebar-accent);
+  font-weight: 700;
+}
+
+.profile-link-hint {
+  display: block;
+  margin-top: 6px;
+  color: rgba(255, 255, 255, 0.76);
+  font-size: 0.85rem;
 }
 
 .sidebar-nav,

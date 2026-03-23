@@ -29,6 +29,7 @@ class AuthManager:
                 "username": "anonymous",
                 "first_name": "",
                 "last_name": "",
+                "dark_mode": False,
                 "role": "admin",
                 "provider": "disabled",
                 "last_login_at": None,
@@ -123,6 +124,7 @@ class AuthManager:
             password=password,
             first_name=first_name,
             last_name=last_name,
+            dark_mode=False,
             role="read_only",
             enabled=True,
         )
@@ -138,6 +140,7 @@ class AuthManager:
             password=password,
             first_name=existing.first_name,
             last_name=existing.last_name,
+            dark_mode=existing.dark_mode,
             role=existing.role,
             enabled=existing.enabled,
             last_login_at=existing.last_login_at,
@@ -151,6 +154,7 @@ class AuthManager:
         first_name: str,
         last_name: str,
         password: str | None,
+        dark_mode: bool | None,
     ) -> PortalUserConfig:
         existing = self.store.find_user(username)
         if existing is None:
@@ -160,6 +164,7 @@ class AuthManager:
             password=password or existing.password,
             first_name=first_name,
             last_name=last_name,
+            dark_mode=existing.dark_mode if dark_mode is None else dark_mode,
             role=existing.role,
             enabled=existing.enabled,
             last_login_at=existing.last_login_at,

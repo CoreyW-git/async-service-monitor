@@ -40,13 +40,15 @@ portal:
     password: admin
     first_name: Corey
     last_name: Wright
+    dark_mode: true
     role: admin
     enabled: true
-    last_login_at: 1774225488.399996
+    last_login_at: 1774226736.0936763
   - username: JDoe
     password: password
     first_name: John
     last_name: Doe
+    dark_mode: false
     role: read_only
     enabled: true
     last_login_at: 1774225105.7372577
