@@ -196,6 +196,9 @@ class MonitorRunner:
         telemetry_db = self._telemetry_database_check()
         if telemetry_db is not None:
             checks.append(telemetry_db)
+        email_service = self._email_service_check()
+        if email_service is not None:
+            checks.append(email_service)
         return checks
 
     def _telemetry_database_check(self) -> CheckConfig | None:
@@ -217,6 +220,20 @@ class MonitorRunner:
                 if not telemetry.username
                 else self._telemetry_auth(telemetry.username, telemetry.password)
             ),
+        )
+
+    def _email_service_check(self) -> CheckConfig | None:
+        email = self.config.notifications.email
+        if not email.enabled or not email.host or not email.port:
+            return None
+        return CheckConfig(
+            name="notification-email-service",
+            type="generic",
+            interval_seconds=max(30.0, self.config.defaults.peer_poll_interval_seconds),
+            enabled=True,
+            timeout_seconds=self.config.defaults.timeout_seconds,
+            host=email.host,
+            port=email.port,
         )
 
     @staticmethod
@@ -264,7 +281,7 @@ class MonitorRunner:
         return {
             "name": check.name,
             "type": check.type,
-            "generated": check.name == "telemetry-database",
+            "generated": check.name in {"telemetry-database", "notification-email-service"},
             "enabled": check.enabled,
             "interval_seconds": check.interval_seconds,
             "timeout_seconds": check.timeout_seconds,
@@ -373,6 +390,11 @@ class MonitorRunner:
         monitor_names.add(self.config.cluster.node_id)
         if self.config.telemetry.provider == "local_mysql" and self.config.telemetry.local_container_name:
             monitor_names.add(self.config.telemetry.local_container_name)
+        if (
+            self.config.notifications.email.auto_provision_local
+            and self.config.notifications.email.local_container_name
+        ):
+            monitor_names.add(self.config.notifications.email.local_container_name)
         for peer in self.config.cluster.peers:
             monitor_names.add(peer.node_id)
 
@@ -404,6 +426,11 @@ class MonitorRunner:
         if self.docker_client is None:
             raise ValueError("Docker is not available to provision local MySQL")
         return await asyncio.to_thread(self._provision_local_mysql_sync, telemetry_config)
+
+    async def provision_local_email_service(self, email_config) -> dict[str, object]:
+        if self.docker_client is None:
+            raise ValueError("Docker is not available to provision a local email service")
+        return await asyncio.to_thread(self._provision_local_email_service_sync, email_config)
 
     def _create_monitor_container_sync(self, payload: dict[str, object]) -> dict[str, object]:
         if self.docker_client is None:
@@ -495,6 +522,49 @@ class MonitorRunner:
             "database": database,
             "username": username,
             "password": password,
+        }
+
+    def _provision_local_email_service_sync(self, email_config) -> dict[str, object]:
+        if self.docker_client is None:
+            raise ValueError("Docker is not available to provision a local email service")
+
+        container_name = email_config.local_container_name or "async-service-monitor-mailpit"
+        smtp_port = int(email_config.port or 1025)
+        ui_port = int(email_config.local_ui_port or 8025)
+
+        try:
+            container = self.docker_client.containers.get(container_name)
+            if container.status != "running":
+                container.start()
+            container.reload()
+        except docker.errors.NotFound:
+            container = self.docker_client.containers.run(
+                "axllent/mailpit:latest",
+                name=container_name,
+                detach=True,
+                ports={"1025/tcp": smtp_port, "8025/tcp": ui_port},
+            )
+            container.reload()
+
+        ports = (
+            container.attrs.get("NetworkSettings", {}).get("Ports", {})
+            if hasattr(container, "attrs")
+            else {}
+        )
+        smtp_bindings = ports.get("1025/tcp") or []
+        ui_bindings = ports.get("8025/tcp") or []
+        host_smtp_port = smtp_port
+        host_ui_port = ui_port
+        if smtp_bindings and smtp_bindings[0].get("HostPort"):
+            host_smtp_port = int(smtp_bindings[0]["HostPort"])
+        if ui_bindings and ui_bindings[0].get("HostPort"):
+            host_ui_port = int(ui_bindings[0]["HostPort"])
+
+        return {
+            "container_name": container.name,
+            "host": "127.0.0.1",
+            "port": host_smtp_port,
+            "ui_port": host_ui_port,
         }
 
     async def manage_container(self, container_name: str, action: str) -> dict[str, object]:

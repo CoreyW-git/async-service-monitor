@@ -11,6 +11,14 @@ const ROLE_LEVELS = {
   admin: 3,
 };
 
+const EMAIL_PROVIDER_DEFAULTS = {
+  m365: { host: "smtp.office365.com", port: 587, use_tls: true, use_ssl: false },
+  yahoo: { host: "smtp.mail.yahoo.com", port: 587, use_tls: true, use_ssl: false },
+  gmail: { host: "smtp.gmail.com", port: 587, use_tls: true, use_ssl: false },
+  outlook: { host: "smtp-mail.outlook.com", port: 587, use_tls: true, use_ssl: false },
+  custom: { host: "", port: 587, use_tls: true, use_ssl: false },
+};
+
 async function api(path, options = {}) {
   const response = await fetch(path, {
     headers: { "Content-Type": "application/json" },
@@ -857,7 +865,7 @@ function renderGuidePage() {
   `;
 }
 
-function renderAdminPage(users, telemetry, portalSettings) {
+function renderAdminPage(users, telemetry, portalSettings, emailSettings) {
   setWorkspaceHeader("Administration", "Create accounts and control who can view, edit, or fully administer the platform.");
   const root = document.getElementById("app-root");
   root.innerHTML = `
@@ -953,7 +961,7 @@ function renderAdminPage(users, telemetry, portalSettings) {
       <section class="panel">
         <div class="panel-head">
           <h3>Service Configuration</h3>
-          <p>Point the service at local or OCI-managed MySQL, and configure OCI-backed portal auth scaffolding here.</p>
+          <p>Point the service at MySQL, configure outbound email notifications, and manage portal auth scaffolding here.</p>
         </div>
         <div class="split-panels">
           <div class="guide-card">
@@ -999,6 +1007,64 @@ function renderAdminPage(users, telemetry, portalSettings) {
               <label><span>Local MySQL Container Name</span><input name="local_container_name" value="${escapeHtml(telemetry?.local_container_name || "async-service-monitor-mysql")}" /></label>
               <button type="submit">Save Telemetry Settings</button>
               <p class="form-status" id="telemetry-status"></p>
+            </form>
+          </div>
+
+          <div class="guide-card">
+            <div class="panel-head">
+              <h3>Email Notifications</h3>
+              <p>Send failure alerts through Microsoft 365, Yahoo, Gmail, Outlook, a custom SMTP service, or a self-provisioned local mail container.</p>
+            </div>
+            <form id="email-settings-form" class="check-form">
+              <label>
+                <span>Enabled</span>
+                <select name="enabled">
+                  <option value="true" ${emailSettings?.enabled ? "selected" : ""}>Enabled</option>
+                  <option value="false" ${!emailSettings?.enabled ? "selected" : ""}>Disabled</option>
+                </select>
+              </label>
+              <label>
+                <span>Email Provider</span>
+                <select name="provider">
+                  <option value="m365" ${emailSettings?.provider === "m365" ? "selected" : ""}>Microsoft 365</option>
+                  <option value="yahoo" ${emailSettings?.provider === "yahoo" ? "selected" : ""}>Yahoo Mail</option>
+                  <option value="gmail" ${emailSettings?.provider === "gmail" ? "selected" : ""}>Gmail</option>
+                  <option value="outlook" ${emailSettings?.provider === "outlook" ? "selected" : ""}>Outlook</option>
+                  <option value="custom" ${!emailSettings?.provider || emailSettings?.provider === "custom" ? "selected" : ""}>Custom Email Service</option>
+                </select>
+              </label>
+              <label>
+                <span>Provision Local Email Service For Me</span>
+                <select name="auto_provision_local">
+                  <option value="true" ${emailSettings?.auto_provision_local ? "selected" : ""}>Yes, build and wire a local mail container</option>
+                  <option value="false" ${!emailSettings?.auto_provision_local ? "selected" : ""}>No, I will use an existing email service</option>
+                </select>
+              </label>
+              <label><span>SMTP Host</span><input name="host" value="${escapeHtml(emailSettings?.host || "")}" placeholder="smtp.gmail.com" /></label>
+              <label><span>SMTP Port</span><input name="port" type="number" min="1" value="${escapeHtml(emailSettings?.port || 587)}" /></label>
+              <label><span>Username</span><input name="username" value="${escapeHtml(emailSettings?.username || "")}" placeholder="alerts@example.com" /></label>
+              <label><span>Password</span><input name="password" type="password" value="${escapeHtml(emailSettings?.password || "")}" /></label>
+              <label><span>From Address</span><input name="from_address" value="${escapeHtml(emailSettings?.from_address || "")}" placeholder="monitor@example.com" /></label>
+              <label><span>To Addresses</span><input name="to_addresses" value="${escapeHtml(csv(emailSettings?.to_addresses || []))}" placeholder="admin@example.com, oncall@example.com" /></label>
+              <label><span>Subject Prefix</span><input name="subject_prefix" value="${escapeHtml(emailSettings?.subject_prefix || "[async-service-monitor]")}" /></label>
+              <label>
+                <span>Use STARTTLS</span>
+                <select name="use_tls">
+                  <option value="true" ${emailSettings?.use_tls !== false ? "selected" : ""}>Enabled</option>
+                  <option value="false" ${emailSettings?.use_tls === false ? "selected" : ""}>Disabled</option>
+                </select>
+              </label>
+              <label>
+                <span>Use SSL</span>
+                <select name="use_ssl">
+                  <option value="true" ${emailSettings?.use_ssl ? "selected" : ""}>Enabled</option>
+                  <option value="false" ${!emailSettings?.use_ssl ? "selected" : ""}>Disabled</option>
+                </select>
+              </label>
+              <label><span>Local Email Container Name</span><input name="local_container_name" value="${escapeHtml(emailSettings?.local_container_name || "async-service-monitor-mailpit")}" /></label>
+              <label><span>Local Email UI Port</span><input name="local_ui_port" type="number" min="1" value="${escapeHtml(emailSettings?.local_ui_port || 8025)}" /></label>
+              <button type="submit">Save Email Settings</button>
+              <p class="form-status" id="email-settings-status"></p>
             </form>
           </div>
 
@@ -1170,6 +1236,49 @@ function portalSettingsPayload(form) {
   };
 }
 
+function emailSettingsPayload(form) {
+  const formData = new FormData(form);
+  return {
+    enabled: String(formData.get("enabled")) === "true",
+    provider: String(formData.get("provider") || "custom"),
+    host: String(formData.get("host") || "") || null,
+    port: Number(formData.get("port") || 587),
+    username: String(formData.get("username") || "") || null,
+    password: String(formData.get("password") || "") || null,
+    from_address: String(formData.get("from_address") || "") || null,
+    to_addresses: parseCsv(formData.get("to_addresses") || ""),
+    subject_prefix: String(formData.get("subject_prefix") || "[async-service-monitor]"),
+    use_tls: String(formData.get("use_tls")) === "true",
+    use_ssl: String(formData.get("use_ssl")) === "true",
+    auto_provision_local: String(formData.get("auto_provision_local")) === "true",
+    local_container_name: String(formData.get("local_container_name") || "") || "async-service-monitor-mailpit",
+    local_ui_port: Number(formData.get("local_ui_port") || 8025),
+  };
+}
+
+function hydrateEmailSettingsForm(form) {
+  if (!form) return;
+  const autoProvision = form.querySelector("select[name='auto_provision_local']")?.value === "true";
+  const provider = form.querySelector("select[name='provider']")?.value || "custom";
+  const hostInput = form.querySelector("input[name='host']");
+  const portInput = form.querySelector("input[name='port']");
+  const tlsSelect = form.querySelector("select[name='use_tls']");
+  const sslSelect = form.querySelector("select[name='use_ssl']");
+  const defaults = EMAIL_PROVIDER_DEFAULTS[provider] || EMAIL_PROVIDER_DEFAULTS.custom;
+
+  if (autoProvision) {
+    hostInput.value = "127.0.0.1";
+    portInput.value = "1025";
+    tlsSelect.value = "false";
+    sslSelect.value = "false";
+  } else if (!hostInput.value || Object.values(EMAIL_PROVIDER_DEFAULTS).some((item) => item.host === hostInput.value)) {
+    hostInput.value = defaults.host;
+    portInput.value = String(defaults.port);
+    tlsSelect.value = defaults.use_tls ? "true" : "false";
+    sslSelect.value = defaults.use_ssl ? "true" : "false";
+  }
+}
+
 function setStatus(element, text, isError = false) {
   if (!element) return;
   element.textContent = text;
@@ -1237,12 +1346,14 @@ async function renderRoute() {
       navigate("/");
       return;
     }
-    const [users, telemetry, portalSettings] = await Promise.all([
+    const [users, telemetry, portalSettings, emailSettings] = await Promise.all([
       api("/api/users"),
       api("/api/settings/telemetry"),
       api("/api/settings/portal"),
+      api("/api/settings/email"),
     ]);
-    renderAdminPage(users, telemetry, portalSettings);
+    renderAdminPage(users, telemetry, portalSettings, emailSettings);
+    hydrateEmailSettingsForm(document.getElementById("email-settings-form"));
     return;
   }
 
@@ -1444,6 +1555,24 @@ async function handleSubmit(event) {
         body: JSON.stringify(portalSettingsPayload(form)),
       });
       setStatus(status, "Portal settings saved.");
+    } catch (error) {
+      setStatus(status, error.message, true);
+    }
+    return;
+  }
+
+  if (event.target.id === "email-settings-form") {
+    event.preventDefault();
+    if (!hasRole("admin")) return;
+    const form = event.target;
+    const status = document.getElementById("email-settings-status");
+    try {
+      setStatus(status, "Saving email settings...");
+      const result = await api("/api/settings/email", {
+        method: "PUT",
+        body: JSON.stringify(emailSettingsPayload(form)),
+      });
+      setStatus(status, result.message || "Email settings saved.");
     } catch (error) {
       setStatus(status, error.message, true);
     }
@@ -1671,6 +1800,14 @@ async function handleClick(event) {
 function handleChange(event) {
   if (event.target.matches("select[name='type'], select[name='auth_type']")) {
     hydrateFormVisibility(event.target.closest("form"));
+    return;
+  }
+
+  if (
+    event.target.matches("#email-settings-form select[name='provider']") ||
+    event.target.matches("#email-settings-form select[name='auto_provision_local']")
+  ) {
+    hydrateEmailSettingsForm(event.target.closest("form"));
   }
 }
 

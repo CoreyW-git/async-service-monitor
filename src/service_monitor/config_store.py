@@ -9,6 +9,7 @@ import yaml
 from service_monitor.config import (
     AppConfig,
     CheckConfig,
+    EmailConfig,
     OCIAuthConfig,
     PeerConfig,
     PortalAuthConfig,
@@ -184,6 +185,12 @@ class ConfigStore:
     def update_telemetry(self, telemetry: TelemetryConfig) -> AppConfig:
         config = self.load()
         config.telemetry = telemetry
+        self.save(config)
+        return config
+
+    def update_email_settings(self, email: EmailConfig) -> AppConfig:
+        config = self.load()
+        config.notifications.email = email
         self.save(config)
         return config
 

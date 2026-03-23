@@ -20,6 +20,7 @@ from service_monitor.config import (
     CheckConfig,
     ContentConfig,
     DockerRecoveryConfig,
+    EmailConfig,
     OCIAuthConfig,
     PeerConfig,
     PortalAuthConfig,
@@ -148,6 +149,23 @@ class PortalSettingsPayload(BaseModel):
     group_claim: str | None = None
 
 
+class EmailSettingsPayload(BaseModel):
+    enabled: bool = False
+    provider: Literal["m365", "yahoo", "gmail", "outlook", "custom"] = "custom"
+    host: str | None = None
+    port: int = 587
+    username: str | None = None
+    password: str | None = None
+    from_address: str | None = None
+    to_addresses: list[str] = Field(default_factory=list)
+    subject_prefix: str = "[async-service-monitor]"
+    use_tls: bool = True
+    use_ssl: bool = False
+    auto_provision_local: bool = False
+    local_container_name: str = "async-service-monitor-mailpit"
+    local_ui_port: int = 8025
+
+
 def _auth_from_payload(payload: AuthPayload | None) -> AuthConfig | None:
     if payload is None:
         return None
@@ -229,6 +247,7 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
     require_read_only = auth_manager.require_role("read_only")
     require_read_write = auth_manager.require_role("read_write")
     require_admin = auth_manager.require_role("admin")
+    generated_check_names = {"telemetry-database", "notification-email-service"}
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -423,8 +442,8 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
         payload: CheckPayload,
         current_user: dict[str, str] = Depends(require_read_write),
     ) -> dict[str, object]:
-        if check_name == "telemetry-database":
-            raise HTTPException(status_code=400, detail="Telemetry database monitor is managed by service configuration")
+        if check_name in generated_check_names:
+            raise HTTPException(status_code=400, detail="This generated monitor is managed by service configuration")
         check = _check_from_payload(payload)
         try:
             store.update_check(check_name, check)
@@ -441,8 +460,8 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
         payload: CheckStatePayload,
         current_user: dict[str, str] = Depends(require_read_write),
     ) -> dict[str, object]:
-        if check_name == "telemetry-database":
-            raise HTTPException(status_code=400, detail="Telemetry database monitor is managed by service configuration")
+        if check_name in generated_check_names:
+            raise HTTPException(status_code=400, detail="This generated monitor is managed by service configuration")
         try:
             store.set_check_enabled(check_name, payload.enabled)
         except ValueError as exc:
@@ -456,8 +475,8 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
     async def delete_check(
         check_name: str, current_user: dict[str, str] = Depends(require_read_write)
     ) -> dict[str, object]:
-        if check_name == "telemetry-database":
-            raise HTTPException(status_code=400, detail="Telemetry database monitor is managed by service configuration")
+        if check_name in generated_check_names:
+            raise HTTPException(status_code=400, detail="This generated monitor is managed by service configuration")
         try:
             store.delete_check(check_name)
         except ValueError as exc:
@@ -699,6 +718,57 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
             message = f"Telemetry settings saved and local MySQL is available in container '{telemetry.local_container_name}'."
         try:
             store.update_telemetry(telemetry)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        await runner.apply_config(store.load())
+        return {"status": "ok", "message": message}
+
+    @app.get("/api/settings/email")
+    async def email_settings(
+        current_user: dict[str, object] = Depends(require_admin),
+    ) -> dict[str, object]:
+        email = _get_runtime_config().notifications.email
+        return {
+            "enabled": email.enabled,
+            "provider": email.provider,
+            "host": email.host,
+            "port": email.port,
+            "username": email.username,
+            "password": email.password,
+            "from_address": email.from_address,
+            "to_addresses": email.to_addresses,
+            "subject_prefix": email.subject_prefix,
+            "use_tls": email.use_tls,
+            "use_ssl": email.use_ssl,
+            "auto_provision_local": email.auto_provision_local,
+            "local_container_name": email.local_container_name,
+            "local_ui_port": email.local_ui_port,
+        }
+
+    @app.put("/api/settings/email")
+    async def update_email_settings(
+        payload: EmailSettingsPayload,
+        current_user: dict[str, object] = Depends(require_admin),
+    ) -> dict[str, object]:
+        email = EmailConfig(**payload.model_dump())
+        message = "Email service settings saved."
+        runner = _get_runner()
+        if email.enabled and email.auto_provision_local:
+            if not email.host:
+                email.host = "127.0.0.1"
+            provisioned = await runner.provision_local_email_service(email)
+            email.host = str(provisioned["host"])
+            email.port = int(provisioned["port"])
+            email.local_container_name = str(provisioned["container_name"])
+            email.local_ui_port = int(provisioned["ui_port"])
+            if not email.from_address:
+                email.from_address = "monitor@localhost"
+            message = (
+                "Email settings saved and local email service is available in "
+                f"container '{email.local_container_name}'."
+            )
+        try:
+            store.update_email_settings(email)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         await runner.apply_config(store.load())

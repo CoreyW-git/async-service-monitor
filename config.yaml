@@ -15,10 +15,14 @@ cluster:
 notifications:
   email:
     enabled: false
+    provider: custom
     port: 587
     subject_prefix: '[async-service-monitor]'
     use_tls: true
     use_ssl: false
+    auto_provision_local: false
+    local_container_name: async-service-monitor-mailpit
+    local_ui_port: 8025
 telemetry:
   enabled: false
   provider: local_mysql
@@ -38,7 +42,14 @@ portal:
     last_name: Wright
     role: admin
     enabled: true
-    last_login_at: 1774224268.3076305
+    last_login_at: 1774225488.399996
+  - username: JDoe
+    password: password
+    first_name: John
+    last_name: Doe
+    role: read_only
+    enabled: true
+    last_login_at: 1774225105.7372577
   oci:
     enabled: false
 checks:

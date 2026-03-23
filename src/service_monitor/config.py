@@ -97,6 +97,7 @@ class ClusterConfig:
 @dataclass(slots=True)
 class EmailConfig:
     enabled: bool = False
+    provider: Literal["m365", "yahoo", "gmail", "outlook", "custom"] = "custom"
     host: str | None = None
     port: int = 587
     username: str | None = None
@@ -106,6 +107,9 @@ class EmailConfig:
     subject_prefix: str = "[async-service-monitor]"
     use_tls: bool = True
     use_ssl: bool = False
+    auto_provision_local: bool = False
+    local_container_name: str = "async-service-monitor-mailpit"
+    local_ui_port: int = 8025
 
 
 @dataclass(slots=True)
@@ -261,6 +265,7 @@ def _parse_email(raw: dict[str, Any] | None) -> EmailConfig:
         return EmailConfig()
     return EmailConfig(
         enabled=_as_bool(raw.get("enabled", False)),
+        provider=raw.get("provider", "custom"),
         host=raw.get("host"),
         port=int(raw.get("port", 587)),
         username=raw.get("username"),
@@ -270,6 +275,9 @@ def _parse_email(raw: dict[str, Any] | None) -> EmailConfig:
         subject_prefix=raw.get("subject_prefix", "[async-service-monitor]"),
         use_tls=_as_bool(raw.get("use_tls", True), default=True),
         use_ssl=_as_bool(raw.get("use_ssl", False)),
+        auto_provision_local=_as_bool(raw.get("auto_provision_local", False)),
+        local_container_name=raw.get("local_container_name", "async-service-monitor-mailpit"),
+        local_ui_port=int(raw.get("local_ui_port", 8025)),
     )
 
 
@@ -405,6 +413,10 @@ def validate_config(config: AppConfig) -> None:
             raise ValueError(
                 "notifications.email requires host, from_address, and to_addresses"
             )
+        if email.port <= 0:
+            raise ValueError("notifications.email.port must be > 0")
+        if email.local_ui_port <= 0:
+            raise ValueError("notifications.email.local_ui_port must be > 0")
 
     if config.telemetry.enabled:
         required = [
