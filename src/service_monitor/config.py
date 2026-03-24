@@ -16,7 +16,10 @@ def _expand_env(value: Any) -> Any:
     if isinstance(value, list):
         return [_expand_env(item) for item in value]
     if isinstance(value, str):
-        return os.path.expandvars(value)
+        expanded = os.path.expandvars(value)
+        if expanded == value and value.startswith("${") and value.endswith("}"):
+            return None
+        return expanded
     return value
 
 
@@ -256,7 +259,7 @@ def _parse_cluster(raw: dict[str, Any] | None) -> ClusterConfig:
         return ClusterConfig()
     return ClusterConfig(
         enabled=_as_bool(raw.get("enabled", False)),
-        node_id=raw.get("node_id", "monitor-1"),
+        node_id=raw.get("node_id") or "monitor-1",
         bind_host=raw.get("bind_host"),
         bind_port=int(raw["bind_port"]) if raw.get("bind_port") is not None else None,
         peers=[_parse_peer(item) for item in raw.get("peers", [])],
@@ -270,7 +273,7 @@ def _parse_email(raw: dict[str, Any] | None) -> EmailConfig:
         enabled=_as_bool(raw.get("enabled", False)),
         provider=raw.get("provider", "custom"),
         host=raw.get("host"),
-        port=int(raw.get("port", 587)),
+        port=int(raw.get("port") or 587),
         username=raw.get("username"),
         password=raw.get("password"),
         from_address=raw.get("from_address"),
@@ -280,7 +283,7 @@ def _parse_email(raw: dict[str, Any] | None) -> EmailConfig:
         use_ssl=_as_bool(raw.get("use_ssl", False)),
         auto_provision_local=_as_bool(raw.get("auto_provision_local", False)),
         local_container_name=raw.get("local_container_name", "async-service-monitor-mailpit"),
-        local_ui_port=int(raw.get("local_ui_port", 8025)),
+        local_ui_port=int(raw.get("local_ui_port") or 8025),
     )
 
 
@@ -297,11 +300,11 @@ def _parse_telemetry(raw: dict[str, Any] | None) -> TelemetryConfig:
         enabled=_as_bool(raw.get("enabled", False)),
         provider=raw.get("provider", "local_mysql"),
         host=raw.get("host"),
-        port=int(raw.get("port", 3306)),
+        port=int(raw.get("port") or 3306),
         database=raw.get("database"),
         username=raw.get("username"),
         password=raw.get("password"),
-        retention_hours=int(raw.get("retention_hours", 2)),
+        retention_hours=int(raw.get("retention_hours") or 2),
         use_ssl=_as_bool(raw.get("use_ssl", False)),
         auto_provision_local=_as_bool(raw.get("auto_provision_local", False)),
         local_container_name=raw.get("local_container_name", "async-service-monitor-mysql"),
@@ -477,18 +480,18 @@ def load_config(path: str | Path) -> AppConfig:
 
     defaults_raw = raw.get("defaults", {})
     defaults = DefaultsConfig(
-        timeout_seconds=float(defaults_raw.get("timeout_seconds", 10.0)),
-        user_agent=defaults_raw.get("user_agent", "async-service-monitor/0.1.0"),
-        peer_timeout_seconds=float(defaults_raw.get("peer_timeout_seconds", 3.0)),
+        timeout_seconds=float(defaults_raw.get("timeout_seconds") or 10.0),
+        user_agent=defaults_raw.get("user_agent") or "async-service-monitor/0.1.0",
+        peer_timeout_seconds=float(defaults_raw.get("peer_timeout_seconds") or 3.0),
         peer_poll_interval_seconds=float(
-            defaults_raw.get("peer_poll_interval_seconds", 15.0)
+            defaults_raw.get("peer_poll_interval_seconds") or 15.0
         ),
         recovery_cooldown_seconds=float(
-            defaults_raw.get("recovery_cooldown_seconds", 300.0)
+            defaults_raw.get("recovery_cooldown_seconds") or 300.0
         ),
-        bind_host=defaults_raw.get("bind_host", "0.0.0.0"),
-        bind_port=int(defaults_raw.get("bind_port", 8080)),
-        metrics_history_limit=int(defaults_raw.get("metrics_history_limit", 120)),
+        bind_host=defaults_raw.get("bind_host") or "0.0.0.0",
+        bind_port=int(defaults_raw.get("bind_port") or 8080),
+        metrics_history_limit=int(defaults_raw.get("metrics_history_limit") or 120),
     )
 
     config = AppConfig(
