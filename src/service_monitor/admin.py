@@ -4,6 +4,7 @@ import asyncio
 import secrets
 import time
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 from typing import Literal
@@ -26,6 +27,7 @@ from service_monitor.config import (
     PortalAuthConfig,
     PortalUserConfig,
     TelemetryConfig,
+    UnauthenticatedProbeConfig,
 )
 from service_monitor.config_store import ConfigStore
 from service_monitor.runner import MonitorRunner
@@ -67,6 +69,14 @@ class CheckPayload(BaseModel):
 
 
 class CheckStatePayload(BaseModel):
+    enabled: bool
+
+
+class BulkCheckSelectionPayload(BaseModel):
+    names: list[str] = Field(default_factory=list)
+
+
+class BulkCheckEnabledPayload(BulkCheckSelectionPayload):
     enabled: bool
 
 
@@ -211,6 +221,18 @@ def _check_from_payload(payload: CheckPayload) -> CheckConfig:
     )
 
 
+def _auth_test_check_from_payload(payload: CheckPayload) -> CheckConfig:
+    if payload.type not in {"http", "auth"}:
+        raise ValueError("Authentication tests are only available for HTTP and auth monitors")
+    check = _check_from_payload(payload)
+    check.type = "auth"
+    check.expect_authenticated_statuses = (
+        payload.expect_authenticated_statuses or payload.expected_statuses or [200]
+    )
+    check.unauthenticated_probe = UnauthenticatedProbeConfig(enabled=False)
+    return check
+
+
 def _peer_from_payload(payload: PeerPayload) -> PeerConfig:
     return PeerConfig(
         node_id=payload.node_id,
@@ -300,6 +322,10 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
 
     @app.get("/monitors/new", response_class=HTMLResponse)
     async def monitor_create_page() -> str:
+        return HTMLResponse(_frontend_html(), headers=_no_cache_headers())
+
+    @app.get("/configured-monitors", response_class=HTMLResponse)
+    async def configured_monitors_page() -> str:
         return HTMLResponse(_frontend_html(), headers=_no_cache_headers())
 
     @app.get("/monitors/{check_name:path}", response_class=HTMLResponse)
@@ -452,6 +478,75 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
     async def checks(current_user: dict[str, str] = Depends(require_read_only)) -> list[dict[str, object]]:
         runner = _get_runner()
         return [runner.describe_check(check) for check in runner.runtime_checks()]
+
+    @app.post("/api/checks/test")
+    async def test_check(
+        payload: CheckPayload,
+        current_user: dict[str, str] = Depends(require_read_write),
+    ) -> dict[str, object]:
+        check = _check_from_payload(payload)
+        runner = _get_runner()
+        result = await runner.execute_check_preview(check)
+        return asdict(result)
+
+    @app.post("/api/checks/test-auth")
+    async def test_check_auth(
+        payload: CheckPayload,
+        current_user: dict[str, str] = Depends(require_read_write),
+    ) -> dict[str, object]:
+        try:
+            check = _auth_test_check_from_payload(payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        runner = _get_runner()
+        result = await runner.execute_check_preview(check)
+        return asdict(result)
+
+    @app.patch("/api/checks/bulk/enabled")
+    async def set_checks_enabled_bulk(
+        payload: BulkCheckEnabledPayload,
+        current_user: dict[str, str] = Depends(require_read_write),
+    ) -> dict[str, object]:
+        requested_names = [name for name in payload.names if name]
+        if not requested_names:
+            raise HTTPException(status_code=400, detail="Select at least one monitor")
+        protected_names = sorted(name for name in requested_names if name in generated_check_names)
+        if protected_names:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Generated monitors cannot be updated here: {', '.join(protected_names)}",
+            )
+        for check_name in requested_names:
+            try:
+                store.set_check_enabled(check_name, payload.enabled)
+            except ValueError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+        runner = _get_runner()
+        await runner.apply_config(store.load())
+        return {"status": "ok", "updated": len(requested_names)}
+
+    @app.post("/api/checks/bulk/delete")
+    async def delete_checks_bulk(
+        payload: BulkCheckSelectionPayload,
+        current_user: dict[str, str] = Depends(require_read_write),
+    ) -> dict[str, object]:
+        requested_names = [name for name in payload.names if name]
+        if not requested_names:
+            raise HTTPException(status_code=400, detail="Select at least one monitor")
+        protected_names = sorted(name for name in requested_names if name in generated_check_names)
+        if protected_names:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Generated monitors cannot be deleted here: {', '.join(protected_names)}",
+            )
+        for check_name in requested_names:
+            try:
+                store.delete_check(check_name)
+            except ValueError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+        runner = _get_runner()
+        await runner.apply_config(store.load())
+        return {"status": "ok", "deleted": len(requested_names)}
 
     @app.get("/api/checks/{check_name}")
     async def check_detail(

@@ -1,8 +1,12 @@
 const state = {
   pollingHandle: null,
   session: null,
-  monitorsExpanded: false,
   clusterExpanded: false,
+  configuredMonitors: {
+    query: "",
+    type: "all",
+    enabled: "all",
+  },
   dashboardPanels: {
     enabledMonitors: false,
     monitoringNodes: false,
@@ -224,19 +228,11 @@ function renderSidebar(checks, containersData) {
     }
   });
 
-  const monitorList = document.getElementById("sidebar-monitors");
-  const sidebarSection = document.getElementById("configured-monitors-section");
-  const toggle = document.getElementById("configured-monitors-toggle");
-  const chevron = document.getElementById("configured-monitors-chevron");
   const clusterList = document.getElementById("sidebar-cluster-containers");
   const clusterSection = document.getElementById("cluster-section");
   const clusterToggle = document.getElementById("cluster-toggle");
   const clusterChevron = document.getElementById("cluster-chevron");
   const configureLink = document.getElementById("configure-containers-link");
-  sidebarSection.classList.toggle("hidden", !authenticated || !state.monitorsExpanded);
-  toggle.classList.toggle("hidden", !authenticated);
-  toggle.classList.toggle("active", state.monitorsExpanded);
-  chevron.textContent = state.monitorsExpanded ? "-" : "+";
   const clusterVisible = authenticated && hasRole("admin");
   clusterSection.classList.toggle("hidden", !clusterVisible || !state.clusterExpanded);
   clusterToggle.classList.toggle("hidden", !clusterVisible);
@@ -244,47 +240,9 @@ function renderSidebar(checks, containersData) {
   clusterChevron.textContent = state.clusterExpanded ? "-" : "+";
   configureLink.classList.toggle("active", currentPath === "/cluster/configure" || currentPath === "/containers");
   if (!authenticated) {
-    monitorList.innerHTML = "";
     clusterList.innerHTML = "";
     return;
   }
-
-  const groups = checks.reduce((acc, check) => {
-    const key = check.type || "other";
-    acc[key] = acc[key] || [];
-    acc[key].push(check);
-    return acc;
-  }, {});
-
-  const typeOrder = ["http", "dns", "auth", "database", "generic"];
-  const sortedKeys = Object.keys(groups).sort((a, b) => {
-    const aIndex = typeOrder.indexOf(a);
-    const bIndex = typeOrder.indexOf(b);
-    return (aIndex === -1 ? 99 : aIndex) - (bIndex === -1 ? 99 : bIndex) || a.localeCompare(b);
-  });
-
-  monitorList.innerHTML = sortedKeys
-    .map((type) => `
-      <div class="monitor-group">
-        <div class="monitor-group-title">
-          <strong>${escapeHtml(type)}</strong>
-          <span>${groups[type].length}</span>
-        </div>
-        <div class="monitor-group-list">
-          ${groups[type]
-            .map(
-              (check) => `
-                <a class="sidebar-link ${currentPath === `/monitors/${encodeURIComponent(check.name)}` ? "active" : ""}" href="/monitors/${encodeURIComponent(check.name)}" data-link>
-                  <span>${escapeHtml(check.name)}</span>
-                  <span class="dot ${statusClass(check.status)}"></span>
-                </a>
-              `
-            )
-            .join("")}
-        </div>
-      </div>
-    `)
-    .join("");
 
   const containers = containersData?.available ? containersData.containers || [] : [];
   clusterList.innerHTML = containers.length
@@ -383,6 +341,187 @@ function renderBootstrapPage() {
       </section>
     </div>
   `;
+}
+
+function monitorEnabledPill(check) {
+  return check.enabled
+    ? `<span class="pill">Enabled</span>`
+    : `<span class="pill neutral">Disabled</span>`;
+}
+
+function configuredMonitorFilters(checks) {
+  const types = Array.from(new Set(checks.map((check) => check.type).filter(Boolean))).sort();
+  return {
+    query: state.configuredMonitors.query.trim().toLowerCase(),
+    type: state.configuredMonitors.type,
+    enabled: state.configuredMonitors.enabled,
+    types,
+  };
+}
+
+function applyConfiguredMonitorFilters(checks) {
+  const filters = configuredMonitorFilters(checks);
+  return checks.filter((check) => {
+    const matchesQuery =
+      !filters.query ||
+      check.name.toLowerCase().includes(filters.query) ||
+      checkCategoryLabel(check.type).toLowerCase().includes(filters.query);
+    const matchesType = filters.type === "all" || check.type === filters.type;
+    const matchesEnabled =
+      filters.enabled === "all" ||
+      (filters.enabled === "enabled" && check.enabled) ||
+      (filters.enabled === "disabled" && !check.enabled);
+    return matchesQuery && matchesType && matchesEnabled;
+  });
+}
+
+function renderConfiguredMonitorsPage(checks) {
+  setWorkspaceHeader("Configured Monitors", "Select one or more monitors and apply bulk enable, disable, or delete actions.");
+  document.getElementById("overview-cards").innerHTML = "";
+  const root = document.getElementById("app-root");
+  const sortedChecks = [...checks].sort((a, b) => a.name.localeCompare(b.name));
+  const filters = configuredMonitorFilters(sortedChecks);
+  const visibleChecks = applyConfiguredMonitorFilters(sortedChecks);
+  const rows = visibleChecks.length
+    ? visibleChecks
+        .map(
+          (check) => `
+            <label class="bulk-monitor-row">
+              <span class="bulk-monitor-check">
+                <input type="checkbox" class="monitor-bulk-checkbox" value="${escapeHtml(check.name)}" />
+              </span>
+              <span class="bulk-monitor-name">
+                <a href="/monitors/${encodeURIComponent(check.name)}" data-link>${escapeHtml(check.name)}</a>
+              </span>
+              <span class="bulk-monitor-type">${escapeHtml(checkCategoryLabel(check.type))}</span>
+              <span class="bulk-monitor-state">${monitorEnabledPill(check)}</span>
+            </label>
+          `
+        )
+        .join("")
+    : sortedChecks.length
+      ? `<div class="guide-card"><h4>No monitors match the current filters</h4><p class="subtle">Adjust the search text or filter selections to broaden the list.</p></div>`
+      : `<div class="guide-card"><h4>No monitors configured</h4><p class="subtle">Add your first monitor to start building a bulk-manageable list.</p></div>`;
+
+  root.innerHTML = `
+    <section class="panel">
+      <div class="panel-head">
+        <h3>Bulk Monitor Management</h3>
+        <p>Select monitors from the list below, then use the bulk actions to manage large monitor sets quickly.</p>
+      </div>
+      <div class="bulk-filter-grid">
+        <label>
+          <span>Search</span>
+          <input type="search" id="configured-monitors-search" placeholder="Find a monitor by name or type" value="${escapeHtml(state.configuredMonitors.query)}" />
+        </label>
+        <label>
+          <span>Type</span>
+          <select id="configured-monitors-type-filter">
+            <option value="all" ${filters.type === "all" ? "selected" : ""}>All Types</option>
+            ${filters.types
+              .map((type) => `<option value="${escapeHtml(type)}" ${filters.type === type ? "selected" : ""}>${escapeHtml(checkCategoryLabel(type))}</option>`)
+              .join("")}
+          </select>
+        </label>
+        <label>
+          <span>Status</span>
+          <select id="configured-monitors-enabled-filter">
+            <option value="all" ${filters.enabled === "all" ? "selected" : ""}>Enabled + Disabled</option>
+            <option value="enabled" ${filters.enabled === "enabled" ? "selected" : ""}>Enabled Only</option>
+            <option value="disabled" ${filters.enabled === "disabled" ? "selected" : ""}>Disabled Only</option>
+          </select>
+        </label>
+      </div>
+      <div class="button-row">
+        <button type="button" class="danger" id="bulk-delete-btn" ${hasRole("read_write") ? "" : "disabled"}>Delete</button>
+        <button type="button" class="secondary" id="bulk-disable-btn" ${hasRole("read_write") ? "" : "disabled"}>Disable</button>
+        <button type="button" id="bulk-enable-btn" ${hasRole("read_write") ? "" : "disabled"}>Enable</button>
+      </div>
+      <div class="status-meta bulk-toolbar">
+        <label class="bulk-select-all">
+          <input type="checkbox" id="configured-monitors-select-all" />
+          <span>Select All</span>
+        </label>
+        <span id="configured-monitors-selection-count">0 selected</span>
+        <span id="configured-monitors-visible-count">${visibleChecks.length} shown of ${sortedChecks.length}</span>
+      </div>
+      <p class="form-status" id="configured-monitors-status"></p>
+      <div class="bulk-monitor-list">
+        <div class="bulk-monitor-header">
+          <span></span>
+          <span>Monitor</span>
+          <span>Type</span>
+          <span>Status</span>
+        </div>
+        ${rows}
+      </div>
+    </section>
+  `;
+  updateConfiguredMonitorSelection();
+}
+
+function selectedMonitorNames() {
+  return Array.from(document.querySelectorAll(".monitor-bulk-checkbox:checked")).map((node) => node.value);
+}
+
+function updateConfiguredMonitorSelection() {
+  const checkboxes = Array.from(document.querySelectorAll(".monitor-bulk-checkbox"));
+  const checked = checkboxes.filter((node) => node.checked);
+  const countLabel = document.getElementById("configured-monitors-selection-count");
+  const selectAll = document.getElementById("configured-monitors-select-all");
+  if (countLabel) {
+    countLabel.textContent = `${checked.length} selected`;
+  }
+  if (selectAll) {
+    selectAll.checked = checkboxes.length > 0 && checked.length === checkboxes.length;
+    selectAll.indeterminate = checked.length > 0 && checked.length < checkboxes.length;
+  }
+}
+
+function updateConfiguredMonitorsFilters(event) {
+  if (event.target.id === "configured-monitors-search") {
+    state.configuredMonitors.query = event.target.value || "";
+  }
+  if (event.target.id === "configured-monitors-type-filter") {
+    state.configuredMonitors.type = event.target.value || "all";
+  }
+  if (event.target.id === "configured-monitors-enabled-filter") {
+    state.configuredMonitors.enabled = event.target.value || "all";
+  }
+}
+
+async function runBulkMonitorAction(action) {
+  if (!hasRole("read_write")) return;
+  const names = selectedMonitorNames();
+  const status = document.getElementById("configured-monitors-status");
+  if (!names.length) {
+    setStatus(status, "Select at least one monitor first.", true);
+    return;
+  }
+  if (action === "delete" && !window.confirm(`Delete ${names.length} selected monitor(s)?`)) {
+    return;
+  }
+
+  try {
+    if (action === "enable" || action === "disable") {
+      setStatus(status, `${action === "enable" ? "Enabling" : "Disabling"} ${names.length} monitor(s)...`);
+      await api("/api/checks/bulk/enabled", {
+        method: "PATCH",
+        body: JSON.stringify({ names, enabled: action === "enable" }),
+      });
+      setStatus(status, `${action === "enable" ? "Enabled" : "Disabled"} ${names.length} monitor(s).`);
+    } else {
+      setStatus(status, `Deleting ${names.length} monitor(s)...`);
+      await api("/api/checks/bulk/delete", {
+        method: "POST",
+        body: JSON.stringify({ names }),
+      });
+      setStatus(status, `Deleted ${names.length} monitor(s).`);
+    }
+    await renderRoute();
+  } catch (error) {
+    setStatus(status, error.message, true);
+  }
 }
 
 function renderProfilePage(profile) {
@@ -708,6 +847,7 @@ function disableForm(form, disabled) {
 
 function monitorFormMarkup(check, mode, cluster = { node_id: "monitor-1", peers: [], healthy_nodes: [] }) {
   const auth = check.auth || {};
+  const authType = auth.type || (check.type === "auth" ? "bearer" : "none");
   const isNew = mode === "create";
   const canWrite = hasRole("read_write");
   const managed = Boolean(check.generated);
@@ -826,29 +966,34 @@ function monitorFormMarkup(check, mode, cluster = { node_id: "monitor-1", peers:
               </div>
             </details>
 
-            <details class="accordion-item auth-only ${check.type !== "auth" ? "hidden" : ""}" ${check.type === "auth" ? "open" : ""}>
-              <summary class="accordion-summary auth-only ${check.type !== "auth" ? "hidden" : ""}">
+            <details class="accordion-item auth-only ${!["http", "auth"].includes(check.type) ? "hidden" : ""}" ${["http", "auth"].includes(check.type) ? "open" : ""}>
+              <summary class="accordion-summary auth-only ${!["http", "auth"].includes(check.type) ? "hidden" : ""}">
                 <div>
                   <strong>Authentication</strong>
                   <div class="status-meta">
-                    <span>Credentials and auth headers for protected endpoints</span>
+                    <span>Credentials and auth headers for protected HTTP endpoints</span>
                   </div>
                 </div>
               </summary>
-              <div class="accordion-body auth-only ${check.type !== "auth" ? "hidden" : ""}">
-                <label class="auth-only ${check.type !== "auth" ? "hidden" : ""}" data-auth-field="type">
+              <div class="accordion-body auth-only ${!["http", "auth"].includes(check.type) ? "hidden" : ""}">
+                <label class="auth-only ${!["http", "auth"].includes(check.type) ? "hidden" : ""}" data-auth-field="type">
                   <span>Auth Type</span>
                   <select name="auth_type" ${readonlyAttr}>
-                    <option value="bearer" ${auth.type === "bearer" ? "selected" : ""}>Bearer</option>
-                    <option value="basic" ${auth.type === "basic" ? "selected" : ""}>Basic</option>
-                    <option value="header" ${auth.type === "header" ? "selected" : ""}>Header</option>
+                    <option value="none" ${authType === "none" ? "selected" : ""}>None</option>
+                    <option value="bearer" ${authType === "bearer" ? "selected" : ""}>Bearer</option>
+                    <option value="basic" ${authType === "basic" ? "selected" : ""}>Basic</option>
+                    <option value="header" ${authType === "header" ? "selected" : ""}>Header</option>
                   </select>
                 </label>
-                <label class="auth-only ${check.type !== "auth" || auth.type !== "bearer" ? "hidden" : ""}" data-auth-field="token"><span>Bearer Token</span><input name="token" value="${escapeHtml(auth.token || "")}" ${readonlyAttr} /></label>
-                <label class="auth-only ${check.type !== "auth" || auth.type !== "basic" ? "hidden" : ""}" data-auth-field="username"><span>Username</span><input name="username" value="${escapeHtml(auth.username || "")}" ${readonlyAttr} /></label>
-                <label class="auth-only ${check.type !== "auth" || auth.type !== "basic" ? "hidden" : ""}" data-auth-field="password"><span>Password</span><input name="password" type="password" value="${escapeHtml(auth.password || "")}" ${readonlyAttr} /></label>
-                <label class="auth-only ${check.type !== "auth" || auth.type !== "header" ? "hidden" : ""}" data-auth-field="header_name"><span>Header Name</span><input name="header_name" value="${escapeHtml(auth.header_name || "")}" ${readonlyAttr} /></label>
-                <label class="auth-only ${check.type !== "auth" || auth.type !== "header" ? "hidden" : ""}" data-auth-field="header_value"><span>Header Value</span><input name="header_value" value="${escapeHtml(auth.header_value || "")}" ${readonlyAttr} /></label>
+                <label class="auth-only ${!["http", "auth"].includes(check.type) || authType !== "bearer" ? "hidden" : ""}" data-auth-field="token"><span>Bearer Token</span><input name="token" value="${escapeHtml(auth.token || "")}" ${readonlyAttr} /></label>
+                <label class="auth-only ${!["http", "auth"].includes(check.type) || authType !== "basic" ? "hidden" : ""}" data-auth-field="username"><span>Username</span><input name="username" value="${escapeHtml(auth.username || "")}" ${readonlyAttr} /></label>
+                <label class="auth-only ${!["http", "auth"].includes(check.type) || authType !== "basic" ? "hidden" : ""}" data-auth-field="password"><span>Password</span><input name="password" type="password" value="${escapeHtml(auth.password || "")}" ${readonlyAttr} /></label>
+                <label class="auth-only ${!["http", "auth"].includes(check.type) || authType !== "header" ? "hidden" : ""}" data-auth-field="header_name"><span>Header Name</span><input name="header_name" value="${escapeHtml(auth.header_name || "")}" ${readonlyAttr} /></label>
+                <label class="auth-only ${!["http", "auth"].includes(check.type) || authType !== "header" ? "hidden" : ""}" data-auth-field="header_value"><span>Header Value</span><input name="header_value" value="${escapeHtml(auth.header_value || "")}" ${readonlyAttr} /></label>
+                <div class="button-row ${editable ? "" : "hidden"}">
+                  <button type="button" class="secondary" id="test-auth-btn">Test Auth</button>
+                </div>
+                <p class="form-status" id="test-auth-status"></p>
               </div>
             </details>
 
@@ -875,6 +1020,7 @@ function monitorFormMarkup(check, mode, cluster = { node_id: "monitor-1", peers:
             </details>
           </div>
           <div class="button-row ${editable ? "" : "hidden"}">
+            <button type="button" class="secondary" id="test-monitor-btn">Test Monitor</button>
             <button type="submit">${isNew ? "Create Monitor" : "Save Changes"}</button>
             ${
               isNew
@@ -1574,18 +1720,20 @@ function hydrateFormVisibility(form) {
   form.querySelectorAll(".field-statuses").forEach((node) => node.classList.toggle("hidden", !showStatuses));
   form.querySelectorAll(".field-content").forEach((node) => node.classList.toggle("hidden", !showContent));
   form.querySelectorAll(".database-only").forEach((node) => node.classList.toggle("hidden", !showDatabase));
-  const authType = form.querySelector("select[name='auth_type']")?.value || "bearer";
+  const authType = form.querySelector("select[name='auth_type']")?.value || (type === "auth" ? "bearer" : "none");
   const placementMode = form.querySelector("select[name='placement_mode']")?.value || "auto";
-  form.querySelectorAll(".auth-only").forEach((node) => node.classList.toggle("hidden", type !== "auth"));
-  form.querySelectorAll("[data-auth-field='token']").forEach((node) => node.classList.toggle("hidden", type !== "auth" || authType !== "bearer"));
-  form.querySelectorAll("[data-auth-field='username'], [data-auth-field='password']").forEach((node) => node.classList.toggle("hidden", type !== "auth" || authType !== "basic"));
-  form.querySelectorAll("[data-auth-field='header_name'], [data-auth-field='header_value']").forEach((node) => node.classList.toggle("hidden", type !== "auth" || authType !== "header"));
+  const showAuth = type === "http" || type === "auth";
+  form.querySelectorAll(".auth-only").forEach((node) => node.classList.toggle("hidden", !showAuth));
+  form.querySelectorAll("[data-auth-field='token']").forEach((node) => node.classList.toggle("hidden", !showAuth || authType !== "bearer"));
+  form.querySelectorAll("[data-auth-field='username'], [data-auth-field='password']").forEach((node) => node.classList.toggle("hidden", !showAuth || authType !== "basic"));
+  form.querySelectorAll("[data-auth-field='header_name'], [data-auth-field='header_value']").forEach((node) => node.classList.toggle("hidden", !showAuth || authType !== "header"));
   form.querySelectorAll(".field-assigned-node").forEach((node) => node.classList.toggle("hidden", placementMode !== "specific"));
 }
 
 function monitorFormPayload(form) {
   const formData = new FormData(form);
   const type = String(formData.get("type"));
+  const authType = String(formData.get("auth_type") || (type === "auth" ? "bearer" : "none"));
   const placementMode = String(formData.get("placement_mode") || "auto");
   const portValue = String(formData.get("port") || "").trim();
   const databaseUsername = String(formData.get("database_username") || "").trim();
@@ -1604,16 +1752,16 @@ function monitorFormPayload(form) {
     database_name: String(formData.get("database_name") || "") || null,
     database_engine: String(formData.get("database_engine") || "mysql"),
     expected_statuses: type === "http" || type === "auth" ? parseCsv(formData.get("expected_statuses")).map(Number) : [200],
-    expect_authenticated_statuses: [200],
+    expect_authenticated_statuses: type === "auth" ? parseCsv(formData.get("expected_statuses")).map(Number) : [200],
     content: {
       contains: type === "http" || type === "auth" ? parseCsv(formData.get("contains")) : [],
       not_contains: type === "http" || type === "auth" ? parseCsv(formData.get("not_contains")) : [],
       regex: type === "http" || type === "auth" ? String(formData.get("regex") || "") || null : null,
     },
     auth:
-      type === "auth"
+      (type === "http" || type === "auth") && authType !== "none"
         ? {
-            type: String(formData.get("auth_type") || "bearer"),
+            type: authType,
             token: formData.get("token") || null,
             username: formData.get("username") || null,
             password: formData.get("password") || null,
@@ -1631,6 +1779,26 @@ function monitorFormPayload(form) {
             }
         : null,
   };
+}
+
+async function runMonitorTest(kind) {
+  if (!hasRole("read_write")) return;
+  const form = document.getElementById("monitor-form");
+  if (!form) return;
+  const payload = monitorFormPayload(form);
+  const statusId = kind === "auth" ? "test-auth-status" : "monitor-form-status";
+  const status = document.getElementById(statusId);
+  try {
+    setStatus(status, kind === "auth" ? "Testing authentication..." : "Testing monitor...");
+    const result = await api(kind === "auth" ? "/api/checks/test-auth" : "/api/checks/test", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    const prefix = result.success ? "Success" : "Failed";
+    setStatus(status, `${prefix}: ${result.message} (${Math.round(Number(result.duration_ms || 0))} ms)`, !result.success);
+  } catch (error) {
+    setStatus(status, error.message, true);
+  }
 }
 
 function peerFormPayload(form) {
@@ -1742,6 +1910,7 @@ function setStatus(element, text, isError = false) {
 
 function isInteractiveRoute(path = window.location.pathname) {
   return (
+    path === "/configured-monitors" ||
     path === "/monitors/new" ||
     path.startsWith("/monitors/") ||
     path === "/profile" ||
@@ -1757,9 +1926,6 @@ async function renderRoute() {
   renderSessionChip();
 
   const path = window.location.pathname;
-  if (path.startsWith("/monitors/") && path !== "/monitors/new") {
-    state.monitorsExpanded = true;
-  }
   if (path.startsWith("/cluster") || path === "/containers") {
     state.clusterExpanded = true;
   }
@@ -1788,6 +1954,15 @@ async function renderRoute() {
       api("/api/cluster"),
     ]);
     renderDashboard(overview, checks, summaryCounts, checkMetrics, nodeMetrics, cluster);
+    return;
+  }
+
+  if (path === "/configured-monitors") {
+    if (!hasRole("read_write")) {
+      navigate("/");
+      return;
+    }
+    renderConfiguredMonitorsPage(checks);
     return;
   }
 
@@ -2221,21 +2396,40 @@ async function handleClick(event) {
     return;
   }
 
-  if (event.target.closest("#configured-monitors-toggle")) {
-    state.monitorsExpanded = !state.monitorsExpanded;
-    await renderRoute();
-    return;
-  }
-
   if (event.target.closest("#cluster-toggle")) {
     state.clusterExpanded = !state.clusterExpanded;
     await renderRoute();
     return;
   }
 
+  if (event.target.id === "bulk-enable-btn") {
+    await runBulkMonitorAction("enable");
+    return;
+  }
+
+  if (event.target.id === "bulk-disable-btn") {
+    await runBulkMonitorAction("disable");
+    return;
+  }
+
+  if (event.target.id === "bulk-delete-btn") {
+    await runBulkMonitorAction("delete");
+    return;
+  }
+
   if (event.target.id === "logout-btn") {
     await api("/api/auth/logout", { method: "POST" });
     navigate("/");
+    return;
+  }
+
+  if (event.target.id === "test-monitor-btn") {
+    await runMonitorTest("monitor");
+    return;
+  }
+
+  if (event.target.id === "test-auth-btn") {
+    await runMonitorTest("auth");
     return;
   }
 
@@ -2302,6 +2496,28 @@ async function handleClick(event) {
 }
 
 function handleChange(event) {
+  if (
+    event.target.id === "configured-monitors-type-filter" ||
+    event.target.id === "configured-monitors-enabled-filter"
+  ) {
+    updateConfiguredMonitorsFilters(event);
+    renderRoute().catch((error) => alert(error.message));
+    return;
+  }
+
+  if (event.target.id === "configured-monitors-select-all") {
+    document.querySelectorAll(".monitor-bulk-checkbox").forEach((node) => {
+      node.checked = event.target.checked;
+    });
+    updateConfiguredMonitorSelection();
+    return;
+  }
+
+  if (event.target.matches(".monitor-bulk-checkbox")) {
+    updateConfiguredMonitorSelection();
+    return;
+  }
+
   if (event.target.matches("select[name='type'], select[name='auth_type']")) {
     hydrateFormVisibility(event.target.closest("form"));
     return;
@@ -2315,10 +2531,18 @@ function handleChange(event) {
   }
 }
 
+function handleInput(event) {
+  if (event.target.id === "configured-monitors-search") {
+    updateConfiguredMonitorsFilters(event);
+    renderRoute().catch((error) => alert(error.message));
+  }
+}
+
 function boot() {
   document.addEventListener("click", (event) => handleClick(event).catch((error) => alert(error.message)));
   document.addEventListener("submit", (event) => handleSubmit(event).catch((error) => alert(error.message)));
   document.addEventListener("change", handleChange);
+  document.addEventListener("input", handleInput);
   document.addEventListener("toggle", handleToggle, true);
   window.addEventListener("popstate", () => renderRoute().catch((error) => alert(error.message)));
   renderRoute().catch((error) => alert(error.message));

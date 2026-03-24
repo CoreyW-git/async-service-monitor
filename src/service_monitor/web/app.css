@@ -225,6 +225,84 @@ body[data-theme="dark"] .dashboard-summary-row {
   gap: 8px;
 }
 
+.bulk-toolbar {
+  justify-content: space-between;
+  margin: 16px 0 10px;
+}
+
+.bulk-filter-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1.6fr) minmax(180px, 0.7fr) minmax(180px, 0.7fr);
+  margin-bottom: 16px;
+}
+
+.bulk-filter-grid label {
+  display: grid;
+  gap: 6px;
+}
+
+.bulk-filter-grid span {
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.bulk-select-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 700;
+}
+
+.bulk-select-all input {
+  width: auto;
+}
+
+.bulk-monitor-list {
+  display: grid;
+  gap: 10px;
+}
+
+.bulk-monitor-header,
+.bulk-monitor-row {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1.6fr) minmax(100px, 0.7fr) minmax(120px, 0.7fr);
+  gap: 14px;
+  align-items: center;
+}
+
+.bulk-monitor-header {
+  padding: 0 16px;
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.bulk-monitor-row {
+  padding: 16px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: var(--surface-alt);
+}
+
+.bulk-monitor-check input {
+  width: 18px;
+  height: 18px;
+}
+
+.bulk-monitor-name a {
+  color: var(--ink);
+  text-decoration: none;
+  font-weight: 700;
+}
+
+.bulk-monitor-type,
+.bulk-monitor-state {
+  color: var(--muted);
+}
+
 .workspace {
   padding: 28px;
 }
@@ -796,7 +874,10 @@ body[data-theme="dark"] .accordion-item.aggregate-bad {
   .grafana-health-grid,
   .guide-grid,
   .diagram-grid,
-  .diagram-row {
+  .diagram-row,
+  .bulk-filter-grid,
+  .bulk-monitor-header,
+  .bulk-monitor-row {
     grid-template-columns: 1fr;
   }
 }

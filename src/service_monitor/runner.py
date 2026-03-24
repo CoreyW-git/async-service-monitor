@@ -280,6 +280,14 @@ class MonitorRunner:
 
         raise ValueError(f"Unsupported check type: {check.type}")
 
+    async def execute_check_preview(self, check: CheckConfig) -> CheckResult:
+        if self.client is not None:
+            return await self._execute_check(self.client, check)
+        async with httpx.AsyncClient(
+            headers={"User-Agent": self.config.defaults.user_agent}
+        ) as client:
+            return await self._execute_check(client, check)
+
     def _emit_result(self, result: CheckResult) -> None:
         print(json.dumps(asdict(result), default=str), flush=True)
 
