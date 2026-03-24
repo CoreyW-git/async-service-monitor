@@ -483,6 +483,11 @@ class MonitorRunner:
             raise ValueError("Docker is not available to the monitor service")
         return await asyncio.to_thread(self._create_monitor_container_sync, payload)
 
+    async def plan_container_creation(self, payload: dict[str, object]) -> dict[str, object]:
+        if self.docker_client is None:
+            raise ValueError("Docker is not available to the monitor service")
+        return await asyncio.to_thread(self._plan_container_creation_sync, payload)
+
     async def provision_local_mysql(self, telemetry_config) -> dict[str, object]:
         if self.docker_client is None:
             raise ValueError("Docker is not available to provision local MySQL")
@@ -496,15 +501,14 @@ class MonitorRunner:
     def _create_monitor_container_sync(self, payload: dict[str, object]) -> dict[str, object]:
         if self.docker_client is None:
             raise ValueError("Docker is not available to the monitor service")
-
-        defaults = self._container_creation_defaults_sync()
-        node_id = str(payload["node_id"])
-        container_name = str(payload.get("container_name") or node_id)
-        image = str(payload.get("image") or defaults["image"])
-        host_port = payload.get("host_port")
-        network = payload.get("network") or defaults["network"]
-        config_path = payload.get("config_path")
-        monitor_scope = str(payload.get("monitor_scope") or "full")
+        plan = self._plan_container_creation_sync(payload)
+        container_name = str(plan["container_name"])
+        image = str(plan["image"])
+        host_port = plan.get("host_port")
+        network = plan.get("network")
+        config_path = plan.get("config_path")
+        monitor_scope = str(plan["monitor_scope"])
+        node_id = str(plan["node_id"])
 
         environment = {"MONITOR_NODE_ID": node_id, "MONITOR_SCOPE": monitor_scope}
         command = [
@@ -555,6 +559,37 @@ class MonitorRunner:
             "host_port": published_port,
             "base_url": base_url,
             "monitor_scope": monitor_scope,
+        }
+
+    def _plan_container_creation_sync(self, payload: dict[str, object]) -> dict[str, object]:
+        defaults = self._container_creation_defaults_sync()
+        node_id = str(payload["node_id"])
+        container_name = str(payload.get("container_name") or node_id)
+        image = str(payload.get("image") or defaults["image"])
+        host_port = int(payload["host_port"]) if payload.get("host_port") else None
+        network = payload.get("network") or defaults["network"]
+        monitor_scope = str(payload.get("monitor_scope") or "full")
+        config_path = payload.get("config_bind_source") or os.getenv("ASM_CONFIG_BIND_SOURCE") or payload.get("config_path")
+        if not config_path and os.getenv("ASM_CONFIG_BIND_SOURCE"):
+            config_path = os.getenv("ASM_CONFIG_BIND_SOURCE")
+        if str(payload.get("config_path") or "") == "/app/config.yaml" and not os.getenv("ASM_CONFIG_BIND_SOURCE"):
+            raise ValueError(
+                "Container creation from a Dockerized admin requires ASM_CONFIG_BIND_SOURCE to point at the host path of the shared config file."
+            )
+        base_url = (
+            f"http://{container_name}:8000"
+            if network
+            else f"http://127.0.0.1:{host_port or 8000}"
+        )
+        return {
+            "node_id": node_id,
+            "container_name": container_name,
+            "image": image,
+            "host_port": host_port,
+            "network": network,
+            "config_path": config_path,
+            "monitor_scope": monitor_scope,
+            "base_url": base_url,
         }
 
     def _container_creation_defaults_sync(self) -> dict[str, object]:

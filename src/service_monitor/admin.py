@@ -728,28 +728,52 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
         payload: ContainerCreatePayload, current_user: dict[str, str] = Depends(require_admin)
     ) -> dict[str, object]:
         runner = _get_runner()
+        request_payload = payload.model_dump()
+        request_payload["config_path"] = runtime["config_path"]
+        added_peer = False
         try:
-            request_payload = payload.model_dump()
-            request_payload["config_path"] = runtime["config_path"]
-            result = await runner.create_monitor_container(request_payload)
+            planned = await runner.plan_container_creation(request_payload)
             store.add_peer(
                 PeerConfig(
                     node_id=payload.node_id,
-                    base_url=str(result.get("base_url") or payload.base_url or "").rstrip("/"),
+                    base_url=str(planned.get("base_url") or payload.base_url or "").rstrip("/"),
                     enabled=payload.enabled,
-                    container_name=str(result.get("container") or payload.container_name or payload.node_id),
+                    container_name=str(planned.get("container_name") or payload.container_name or payload.node_id),
                     monitor_scope=payload.monitor_scope,
                     recovery=DockerRecoveryConfig(
                         enabled=payload.recovery_enabled,
-                        container_name=str(result.get("container") or payload.container_name or payload.node_id),
+                        container_name=str(planned.get("container_name") or payload.container_name or payload.node_id),
                     ),
                 )
             )
+            added_peer = True
+            await runner.apply_config(store.load())
+            result = await runner.create_monitor_container(request_payload)
+            if str(result.get("base_url") or "") != str(planned.get("base_url") or ""):
+                existing = store.load()
+                peer_config = next((peer for peer in existing.cluster.peers if peer.node_id == payload.node_id), None)
+                if peer_config is not None:
+                    peer_config.base_url = str(result.get("base_url") or peer_config.base_url).rstrip("/")
+                    peer_config.container_name = str(result.get("container") or peer_config.container_name or payload.node_id)
+                    peer_config.recovery.container_name = str(result.get("container") or peer_config.recovery.container_name or payload.node_id)
+                    store.update_peer(payload.node_id, peer_config)
+                    await runner.apply_config(store.load())
         except ValueError as exc:
+            try:
+                if added_peer:
+                    store.delete_peer(payload.node_id)
+                    await runner.apply_config(store.load())
+            except Exception:
+                pass
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except docker.errors.DockerException as exc:
+            try:
+                if added_peer:
+                    store.delete_peer(payload.node_id)
+                    await runner.apply_config(store.load())
+            except Exception:
+                pass
             raise HTTPException(status_code=500, detail=str(exc)) from exc
-        await runner.apply_config(store.load())
         return result
 
     @app.get("/api/stream")

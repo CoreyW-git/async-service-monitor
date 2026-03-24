@@ -10,7 +10,7 @@ COPY src /app/src
 
 RUN pip install --no-cache-dir .
 
-COPY config.example.yaml /app/config.yaml
+COPY config.docker.yaml /app/config.yaml
 
 EXPOSE 8000 8080
 

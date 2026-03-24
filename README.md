@@ -177,6 +177,8 @@ Important:
 
 ## Running With Docker
 
+The baked-in Docker image now defaults to a single-node config so a plain `docker run` does not show fake unhealthy peers.
+
 PowerShell:
 
 ```powershell
@@ -203,6 +205,20 @@ WSL / bash:
 
 ```bash
 docker run --rm -p 8000:8000 -e ASM_CONFIG_PASSPHRASE="$ASM_CONFIG_PASSPHRASE" -v "$(pwd)/config.yaml:/app/config.yaml" async-service-monitor
+```
+
+If you want to create additional monitor containers from the admin UI while the main app is itself running in Docker, also pass the host-side config path through `ASM_CONFIG_BIND_SOURCE` so new peer containers can mount the same shared config file.
+
+PowerShell:
+
+```powershell
+docker run --rm -p 8000:8000 -e ASM_CONFIG_BIND_SOURCE="${PWD}\config.yaml" -e ASM_CONFIG_PASSPHRASE=${env:ASM_CONFIG_PASSPHRASE} -v ${PWD}/config.yaml:/app/config.yaml async-service-monitor
+```
+
+WSL / bash:
+
+```bash
+docker run --rm -p 8000:8000 -e ASM_CONFIG_BIND_SOURCE="$(pwd)/config.yaml" -e ASM_CONFIG_PASSPHRASE="$ASM_CONFIG_PASSPHRASE" -v "$(pwd)/config.yaml:/app/config.yaml" async-service-monitor
 ```
 
 ## Offline-Friendly Deployment

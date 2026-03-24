@@ -1,0 +1,54 @@
+defaults:
+  timeout_seconds: 10
+  user_agent: async-service-monitor/0.1.0
+  peer_timeout_seconds: 3
+  peer_poll_interval_seconds: 15
+  recovery_cooldown_seconds: 300
+  bind_host: 0.0.0.0
+  bind_port: 8080
+
+cluster:
+  enabled: false
+  node_id: monitor-1
+
+notifications:
+  email:
+    enabled: false
+    provider: custom
+    port: 587
+    subject_prefix: "[async-service-monitor]"
+    use_tls: true
+    use_ssl: false
+
+telemetry:
+  enabled: false
+  provider: local_mysql
+  port: 3306
+  retention_hours: 2
+  use_ssl: false
+  auto_provision_local: false
+  local_container_name: async-service-monitor-mysql
+
+portal:
+  enabled: true
+  provider: basic
+  realm: Async Service Monitor
+  users: []
+  oci:
+    enabled: false
+
+checks:
+  - name: yahoo-http
+    type: http
+    url: https://www.yahoo.com
+    interval_seconds: 300
+    expected_statuses: [200]
+    content:
+      contains:
+        - Yahoo
+        - news
+
+  - name: yahoo-dns
+    type: dns
+    host: www.yahoo.com
+    interval_seconds: 300
