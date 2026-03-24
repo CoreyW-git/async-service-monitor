@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import os
 import secrets
+from pathlib import Path
 from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -10,6 +11,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 CONFIG_PASSPHRASE_ENV = "ASM_CONFIG_PASSPHRASE"
+LOCAL_CONFIG_PASSPHRASE_FILE = ".asm-config-passphrase.env"
 ENCRYPTION_METADATA_KEY = "_encryption"
 ENCRYPTED_VALUE_PREFIX = "enc::"
 PBKDF2_ITERATIONS = 390000
@@ -28,14 +30,35 @@ _SENSITIVE_PATHS: tuple[tuple[str, ...], ...] = (
 )
 
 
-def get_config_passphrase() -> str | None:
+def get_config_passphrase(
+    config_path: str | Path | None = None,
+    create_if_missing: bool = False,
+) -> str | None:
     value = os.getenv(CONFIG_PASSPHRASE_ENV)
-    if not value:
-        return None
-    return value.strip() or None
+    if value:
+        return value.strip() or None
+
+    passphrase_file = _passphrase_file(config_path)
+    if passphrase_file and passphrase_file.exists():
+        for line in passphrase_file.read_text(encoding="utf-8").splitlines():
+            if line.startswith(f"{CONFIG_PASSPHRASE_ENV}="):
+                return line.split("=", 1)[1].strip() or None
+
+    if create_if_missing and passphrase_file:
+        generated = secrets.token_urlsafe(32)
+        passphrase_file.write_text(
+            f"{CONFIG_PASSPHRASE_ENV}={generated}\n",
+            encoding="utf-8",
+        )
+        return generated
+
+    return None
 
 
-def decrypt_config_payload(payload: dict[str, Any]) -> dict[str, Any]:
+def decrypt_config_payload(
+    payload: dict[str, Any],
+    config_path: str | Path | None = None,
+) -> dict[str, Any]:
     metadata = payload.get(ENCRYPTION_METADATA_KEY)
     raw_payload = {
         key: value for key, value in payload.items() if key != ENCRYPTION_METADATA_KEY
@@ -45,7 +68,7 @@ def decrypt_config_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if not _contains_encrypted_values(raw_payload):
         return raw_payload
 
-    passphrase = get_config_passphrase()
+    passphrase = get_config_passphrase(config_path)
     if not passphrase:
         raise ValueError(
             f"Configuration contains encrypted secrets. Set {CONFIG_PASSPHRASE_ENV} before starting the service."
@@ -67,14 +90,17 @@ def decrypt_config_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return _transform_sensitive_values(raw_payload, decryptor)
 
 
-def encrypt_config_payload(payload: dict[str, Any]) -> dict[str, Any]:
+def encrypt_config_payload(
+    payload: dict[str, Any],
+    config_path: str | Path | None = None,
+) -> dict[str, Any]:
     raw_payload = {
         key: value for key, value in payload.items() if key != ENCRYPTION_METADATA_KEY
     }
     if not _has_sensitive_plaintext(raw_payload):
         return raw_payload
 
-    passphrase = get_config_passphrase()
+    passphrase = get_config_passphrase(config_path, create_if_missing=True)
     if not passphrase:
         raise ValueError(
             f"Sensitive values are present in the config. Set {CONFIG_PASSPHRASE_ENV} before saving so secrets are encrypted at rest."
@@ -178,3 +204,11 @@ def _path_matches(pattern: tuple[str, ...], path: tuple[str, ...]) -> bool:
 
 def _is_env_placeholder(value: str) -> bool:
     return value.startswith("${") and value.endswith("}") and len(value) > 3
+
+
+def _passphrase_file(config_path: str | Path | None) -> Path | None:
+    if config_path is None:
+        return None
+    base_path = Path(config_path)
+    directory = base_path if base_path.is_dir() else base_path.parent
+    return directory / LOCAL_CONFIG_PASSPHRASE_FILE

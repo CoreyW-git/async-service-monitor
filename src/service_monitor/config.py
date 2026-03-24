@@ -475,7 +475,7 @@ def validate_config(config: AppConfig) -> None:
 def load_config(path: str | Path) -> AppConfig:
     config_path = Path(path)
     raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
-    raw = decrypt_config_payload(raw)
+    raw = decrypt_config_payload(raw, config_path)
     raw = _expand_env(raw)
 
     defaults_raw = raw.get("defaults", {})

@@ -43,7 +43,7 @@ class ConfigStore:
     def save(self, config: AppConfig) -> None:
         validate_config(config)
         payload = _strip_none(asdict(config))
-        payload = encrypt_config_payload(payload)
+        payload = encrypt_config_payload(payload, self.path)
         self.path.write_text(
             yaml.safe_dump(payload, sort_keys=False, default_flow_style=False),
             encoding="utf-8",
