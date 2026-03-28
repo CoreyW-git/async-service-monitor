@@ -18,6 +18,8 @@ from service_monitor.auth import AuthManager
 from service_monitor.config import (
     AppConfig,
     AuthConfig,
+    BrowserConfig,
+    BrowserStepConfig,
     CheckConfig,
     ContentConfig,
     DockerRecoveryConfig,
@@ -49,9 +51,35 @@ class AuthPayload(BaseModel):
     header_value: str | None = None
 
 
+class BrowserStepPayload(BaseModel):
+    name: str
+    action: Literal[
+        "navigate",
+        "wait_for_selector",
+        "click",
+        "fill",
+        "press",
+        "assert_text",
+        "assert_url_contains",
+        "wait_for_timeout",
+    ]
+    selector: str | None = None
+    value: str | None = None
+    timeout_seconds: float | None = None
+
+
+class BrowserPayload(BaseModel):
+    expected_title_contains: str | None = None
+    required_selectors: list[str] = Field(default_factory=list)
+    wait_until: Literal["load", "domcontentloaded", "networkidle"] = "networkidle"
+    viewport_width: int = 1440
+    viewport_height: int = 900
+    steps: list[BrowserStepPayload] = Field(default_factory=list)
+
+
 class CheckPayload(BaseModel):
     name: str
-    type: Literal["http", "dns", "auth", "database", "generic"]
+    type: Literal["http", "dns", "auth", "database", "generic", "browser"]
     enabled: bool = True
     interval_seconds: float
     placement_mode: Literal["auto", "specific"] = "auto"
@@ -66,6 +94,7 @@ class CheckPayload(BaseModel):
     expect_authenticated_statuses: list[int] = Field(default_factory=lambda: [200])
     auth: AuthPayload | None = None
     content: ContentPayload | None = None
+    browser: BrowserPayload | None = None
 
 
 class CheckStatePayload(BaseModel):
@@ -200,6 +229,28 @@ def _content_from_payload(payload: ContentPayload | None) -> ContentConfig | Non
     return ContentConfig(**payload.model_dump())
 
 
+def _browser_from_payload(payload: BrowserPayload | None) -> BrowserConfig | None:
+    if payload is None:
+        return None
+    return BrowserConfig(
+        expected_title_contains=payload.expected_title_contains,
+        required_selectors=payload.required_selectors,
+        wait_until=payload.wait_until,
+        viewport_width=payload.viewport_width,
+        viewport_height=payload.viewport_height,
+        steps=[
+            BrowserStepConfig(
+                name=step.name,
+                action=step.action,
+                selector=step.selector,
+                value=step.value,
+                timeout_seconds=step.timeout_seconds,
+            )
+            for step in payload.steps
+        ],
+    )
+
+
 def _check_from_payload(payload: CheckPayload) -> CheckConfig:
     return CheckConfig(
         name=payload.name,
@@ -218,6 +269,7 @@ def _check_from_payload(payload: CheckPayload) -> CheckConfig:
         expect_authenticated_statuses=payload.expect_authenticated_statuses,
         auth=_auth_from_payload(payload.auth),
         content=_content_from_payload(payload.content),
+        browser=_browser_from_payload(payload.browser),
     )
 
 
@@ -261,7 +313,13 @@ def _user_from_payload(payload: PortalUserPayload, existing: PortalUserConfig | 
 
 
 def _frontend_html() -> str:
-    return (Path(__file__).parent / "web" / "index.html").read_text(encoding="utf-8")
+    web_dir = Path(__file__).parent / "web"
+    html = (web_dir / "index.html").read_text(encoding="utf-8")
+    css_version = int((web_dir / "app.css").stat().st_mtime)
+    js_version = int((web_dir / "app.js").stat().st_mtime)
+    html = html.replace('href="/app.css"', f'href="/app.css?v={css_version}"')
+    html = html.replace('src="/app.js"', f'src="/app.js?v={js_version}"')
+    return html
 
 
 def _no_cache_headers() -> dict[str, str]:
@@ -318,6 +376,14 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
 
     @app.get("/monitors", response_class=HTMLResponse)
     async def monitors_page() -> str:
+        return HTMLResponse(_frontend_html(), headers=_no_cache_headers())
+
+    @app.get("/dashboards", response_class=HTMLResponse)
+    async def dashboards_page() -> str:
+        return HTMLResponse(_frontend_html(), headers=_no_cache_headers())
+
+    @app.get("/dashboards/{check_name:path}", response_class=HTMLResponse)
+    async def dashboard_detail_page(check_name: str) -> str:
         return HTMLResponse(_frontend_html(), headers=_no_cache_headers())
 
     @app.get("/monitors/new", response_class=HTMLResponse)

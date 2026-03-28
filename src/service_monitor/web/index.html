@@ -16,8 +16,8 @@
         </div>
 
         <nav class="sidebar-nav">
-          <a href="/guide" data-link>FAQ</a>
-          <a href="/" data-link>Dashboard</a>
+          <a href="/" data-link>Home</a>
+          <a href="/dashboards" data-link data-role-min="read_only">Dashboards</a>
           <a href="/monitors" data-link data-role-min="read_only">Monitors</a>
           <button type="button" id="cluster-toggle" class="sidebar-toggle hidden" data-role-min="admin">
             <span>Cluster</span>
@@ -30,6 +30,7 @@
             </div>
           </section>
           <a href="/admin" data-link data-role-min="admin">Administration</a>
+          <a href="/guide" data-link>Help</a>
         </nav>
 
         <div id="session-chip" class="session-chip hidden"></div>
@@ -40,7 +41,7 @@
           <div>
             <nav id="workspace-breadcrumbs" class="workspace-breadcrumbs"></nav>
             <p class="eyebrow">Status</p>
-            <h2 id="workspace-title">Dashboard</h2>
+            <h2 id="workspace-title">Home</h2>
             <p id="workspace-subtitle" class="workspace-copy">Healthy, unhealthy, and disabled endpoint monitors at a glance.</p>
           </div>
           <div class="hero-metrics" id="overview-cards"></div>

@@ -75,6 +75,34 @@ class UnauthenticatedProbeConfig:
 
 
 @dataclass(slots=True)
+class BrowserStepConfig:
+    name: str
+    action: Literal[
+        "navigate",
+        "wait_for_selector",
+        "click",
+        "fill",
+        "press",
+        "assert_text",
+        "assert_url_contains",
+        "wait_for_timeout",
+    ]
+    selector: str | None = None
+    value: str | None = None
+    timeout_seconds: float | None = None
+
+
+@dataclass(slots=True)
+class BrowserConfig:
+    expected_title_contains: str | None = None
+    required_selectors: list[str] = field(default_factory=list)
+    wait_until: Literal["load", "domcontentloaded", "networkidle"] = "networkidle"
+    viewport_width: int = 1440
+    viewport_height: int = 900
+    steps: list[BrowserStepConfig] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class DockerRecoveryConfig:
     enabled: bool = False
     container_name: str | None = None
@@ -171,7 +199,7 @@ class PortalAuthConfig:
 @dataclass(slots=True)
 class CheckConfig:
     name: str
-    type: Literal["http", "dns", "auth", "database", "generic"]
+    type: Literal["http", "dns", "auth", "database", "generic", "browser"]
     interval_seconds: float
     enabled: bool = True
     placement_mode: Literal["auto", "specific"] = "auto"
@@ -186,6 +214,7 @@ class CheckConfig:
     expect_authenticated_statuses: list[int] = field(default_factory=lambda: [200])
     auth: AuthConfig | None = None
     content: ContentConfig | None = None
+    browser: BrowserConfig | None = None
     unauthenticated_probe: UnauthenticatedProbeConfig = field(
         default_factory=UnauthenticatedProbeConfig
     )
@@ -230,6 +259,31 @@ def _parse_probe(raw: dict[str, Any] | None) -> UnauthenticatedProbeConfig:
     return UnauthenticatedProbeConfig(
         enabled=_as_bool(raw.get("enabled", False)),
         expect_statuses=list(raw.get("expect_statuses", [401, 403])),
+    )
+
+
+def _parse_browser_step(raw: dict[str, Any]) -> BrowserStepConfig:
+    return BrowserStepConfig(
+        name=raw.get("name") or raw.get("action") or "Step",
+        action=raw["action"],
+        selector=raw.get("selector"),
+        value=raw.get("value"),
+        timeout_seconds=(
+            float(raw["timeout_seconds"]) if raw.get("timeout_seconds") is not None else None
+        ),
+    )
+
+
+def _parse_browser(raw: dict[str, Any] | None) -> BrowserConfig | None:
+    if not raw:
+        return None
+    return BrowserConfig(
+        expected_title_contains=raw.get("expected_title_contains"),
+        required_selectors=list(raw.get("required_selectors", [])),
+        wait_until=raw.get("wait_until", "networkidle"),
+        viewport_width=int(raw.get("viewport_width") or 1440),
+        viewport_height=int(raw.get("viewport_height") or 900),
+        steps=[_parse_browser_step(item) for item in raw.get("steps", [])],
     )
 
 
@@ -369,6 +423,7 @@ def _parse_check(raw: dict[str, Any]) -> CheckConfig:
         expect_authenticated_statuses=list(raw.get("expect_authenticated_statuses", [200])),
         auth=_parse_auth(raw.get("auth")),
         content=_parse_content(raw.get("content")),
+        browser=_parse_browser(raw.get("browser")),
         unauthenticated_probe=_parse_probe(raw.get("unauthenticated_probe")),
     )
 
@@ -395,7 +450,7 @@ def validate_config(config: AppConfig) -> None:
                 f"Check '{check.name}' must define assigned_node_id when placement_mode is 'specific'"
             )
 
-        if check.type in {"http", "auth"} and not check.url:
+        if check.type in {"http", "auth", "browser"} and not check.url:
             raise ValueError(f"Check '{check.name}' requires a url")
 
         if check.type == "dns" and not check.host:
@@ -409,6 +464,36 @@ def validate_config(config: AppConfig) -> None:
                 raise ValueError(f"Check '{check.name}' requires a host")
             if check.port is None:
                 raise ValueError(f"Check '{check.name}' requires a port")
+
+        if check.type == "browser":
+            if check.browser is None:
+                raise ValueError(f"Check '{check.name}' requires a browser block")
+            allowed_actions = {
+                "navigate",
+                "wait_for_selector",
+                "click",
+                "fill",
+                "press",
+                "assert_text",
+                "assert_url_contains",
+                "wait_for_timeout",
+            }
+            for step in check.browser.steps:
+                if step.action not in allowed_actions:
+                    raise ValueError(
+                        f"Check '{check.name}' has unsupported browser step action '{step.action}'"
+                    )
+                if step.action in {"wait_for_selector", "click", "fill", "assert_text"} and not step.selector:
+                    raise ValueError(
+                        f"Check '{check.name}' browser step '{step.name}' requires a selector"
+                    )
+                if step.action in {"fill", "press", "assert_text", "assert_url_contains"} and step.value in {
+                    None,
+                    "",
+                }:
+                    raise ValueError(
+                        f"Check '{check.name}' browser step '{step.name}' requires a value"
+                    )
 
     if config.cluster.enabled:
         peer_ids = {peer.node_id for peer in config.cluster.peers}

@@ -7,6 +7,7 @@
 | Area | What It Does |
 | --- | --- |
 | Endpoint Monitoring | HTTP, DNS, and auth-aware checks with content validation |
+| Browser Health Monitoring | Synthetic browser journeys with step validation, timing, and request breakdowns |
 | Admin Portal | Dashboard, dedicated monitor pages, FAQ, profile, and service configuration |
 | Cluster Monitoring | Peer health polling, failover ownership, and recovery decisions |
 | Container Ops | Start, stop, restart, and create monitor containers live |
@@ -238,8 +239,9 @@ Offline assets live under:
 From a connected machine, prepare:
 
 1. Python wheels for the app and every dependency
+2. The Playwright Chromium browser bundle used by Browser Health Monitors
 2. Docker image tar files for:
-   - `python:3.12-slim`
+   - `mcr.microsoft.com/playwright/python:v1.53.0-jammy`
    - `async-service-monitor:offline`
    - `mysql:8.4`
    - `axllent/mailpit:latest`
@@ -253,6 +255,7 @@ From a connected machine, prepare:
 That script will:
 
 - build a local wheelhouse into `offline/wheelhouse`
+- download the Playwright Chromium browser payload into `offline/playwright-browsers`
 - pull the required base/support images
 - build the offline app image with [Dockerfile.offline](C:\Users\pipsq\OneDrive\Documents\async-service-monitor\Dockerfile.offline)
 - export image tar files into `offline/images`
@@ -270,6 +273,20 @@ Once `offline/wheelhouse` has been populated, the image can be rebuilt without i
 ```powershell
 docker build -f Dockerfile.offline -t async-service-monitor:offline .
 ```
+
+### Offline Local Python Installs
+
+If you need to run the service directly on a disconnected host instead of Docker, use the staged browser bundle too:
+
+```powershell
+$env:PLAYWRIGHT_BROWSERS_PATH = "$PWD\\offline\\playwright-browsers"
+py -3 -m pip install --no-index --find-links .\\offline\\wheelhouse async-service-monitor
+```
+
+That gives the local Python install both:
+
+- the offline Python wheels, including `playwright`
+- the offline Chromium browser payload needed by Browser Health Monitors
 
 ### Load Prebuilt Offline Images In An Air-Gapped Environment
 
@@ -301,6 +318,8 @@ docker compose -f docker-compose.offline.yml up
 
 - Local self-provisioned MySQL still expects `mysql:8.4` to already be loaded into Docker.
 - Local self-provisioned Mailpit still expects `axllent/mailpit:latest` to already be loaded into Docker.
+- Browser Health Monitors in offline Docker deployments depend on the staged Playwright-ready base image `mcr.microsoft.com/playwright/python:v1.53.0-jammy`.
+- Browser Health Monitors in offline local Python installs depend on `offline/playwright-browsers` being present and `PLAYWRIGHT_BROWSERS_PATH` pointing to it.
 - If you plan to use OCI MySQL or external email providers in an offline environment, those endpoints still need network reachability from that environment.
 
 ## Clustered Compose

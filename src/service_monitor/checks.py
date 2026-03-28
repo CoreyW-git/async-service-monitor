@@ -5,6 +5,7 @@ import re
 import socket
 import time
 from dataclasses import dataclass, field
+from typing import Any
 from urllib.parse import urlparse, urlunparse
 
 import httpx
@@ -317,4 +318,325 @@ async def run_database_check(check: CheckConfig, timeout_seconds: float) -> Chec
                 "database_name": check.database_name,
                 "database_engine": check.database_engine,
             },
+        )
+
+
+async def run_browser_check(check: CheckConfig, timeout_seconds: float) -> CheckResult:
+    started = time.perf_counter()
+    browser_config = check.browser
+    if browser_config is None:
+        duration_ms = (time.perf_counter() - started) * 1000
+        return CheckResult(
+            name=check.name,
+            check_type=check.type,
+            success=False,
+            message="browser configuration is missing",
+            duration_ms=duration_ms,
+        )
+
+    try:
+        from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+        from playwright.async_api import async_playwright
+    except ImportError:
+        duration_ms = (time.perf_counter() - started) * 1000
+        return CheckResult(
+            name=check.name,
+            check_type=check.type,
+            success=False,
+            message=(
+                "browser health checks require Playwright. Install the playwright package and Chromium browser runtime."
+            ),
+            duration_ms=duration_ms,
+        )
+
+    step_results: list[dict[str, Any]] = []
+    network_entries: dict[str, dict[str, Any]] = {}
+    network_log: list[dict[str, Any]] = []
+    console_messages: list[dict[str, Any]] = []
+    page_errors: list[str] = []
+
+    async def record_step(name: str, action: str, coro):
+        step_started = time.perf_counter()
+        try:
+            value = await coro
+            step_results.append(
+                {
+                    "name": name,
+                    "action": action,
+                    "success": True,
+                    "duration_ms": round((time.perf_counter() - step_started) * 1000, 2),
+                    "message": "ok",
+                }
+            )
+            return value
+        except Exception as exc:
+            step_results.append(
+                {
+                    "name": name,
+                    "action": action,
+                    "success": False,
+                    "duration_ms": round((time.perf_counter() - step_started) * 1000, 2),
+                    "message": str(exc),
+                }
+            )
+            raise
+
+    async def _assert_text(page, selector: str, expected: str) -> None:
+        text = await page.locator(selector).inner_text(timeout=int(timeout_seconds * 1000))
+        if expected not in text:
+            raise ValueError(f"expected text '{expected}' was not found in {selector}")
+
+    async def _assert_title_contains(page, expected: str) -> None:
+        title = await page.title()
+        if expected not in title:
+            raise ValueError(f"title '{title}' does not contain '{expected}'")
+
+    async def _assert_url_contains(page, expected: str) -> None:
+        current = page.url or ""
+        if expected not in current:
+            raise ValueError(f"url '{current}' does not contain '{expected}'")
+
+    try:
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch(headless=True)
+            context = await browser.new_context(
+                viewport={
+                    "width": browser_config.viewport_width,
+                    "height": browser_config.viewport_height,
+                }
+            )
+            page = await context.new_page()
+
+            page.on(
+                "console",
+                lambda message: console_messages.append(
+                    {
+                        "type": message.type,
+                        "text": message.text,
+                    }
+                ),
+            )
+            page.on("pageerror", lambda error: page_errors.append(str(error)))
+
+            def on_request(request) -> None:
+                request_id = str(id(request))
+                network_entries[request_id] = {
+                    "method": request.method,
+                    "url": request.url,
+                    "resource_type": request.resource_type,
+                    "request_started_at": time.perf_counter(),
+                    "status": None,
+                    "ok": None,
+                    "failure": None,
+                    "duration_ms": None,
+                }
+
+            def on_response(response) -> None:
+                request_id = str(id(response.request))
+                entry = network_entries.get(request_id)
+                if entry is None:
+                    return
+                entry["status"] = response.status
+                entry["ok"] = response.ok
+                entry["duration_ms"] = round(
+                    (time.perf_counter() - float(entry["request_started_at"])) * 1000,
+                    2,
+                )
+                network_log.append(
+                    {
+                        "method": entry["method"],
+                        "url": entry["url"],
+                        "resource_type": entry["resource_type"],
+                        "status": entry["status"],
+                        "ok": entry["ok"],
+                        "failure": None,
+                        "duration_ms": entry["duration_ms"],
+                    }
+                )
+
+            def on_request_failed(request) -> None:
+                request_id = str(id(request))
+                entry = network_entries.get(request_id)
+                if entry is None:
+                    return
+                failure = request.failure
+                if isinstance(failure, str):
+                    failure_text = failure
+                elif failure is None:
+                    failure_text = "request failed"
+                else:
+                    failure_text = getattr(failure, "error_text", None) or str(failure)
+                entry["failure"] = failure_text
+                entry["ok"] = False
+                entry["duration_ms"] = round(
+                    (time.perf_counter() - float(entry["request_started_at"])) * 1000,
+                    2,
+                )
+                network_log.append(
+                    {
+                        "method": entry["method"],
+                        "url": entry["url"],
+                        "resource_type": entry["resource_type"],
+                        "status": None,
+                        "ok": False,
+                        "failure": failure_text,
+                        "duration_ms": entry["duration_ms"],
+                    }
+                )
+
+            page.on("request", on_request)
+            page.on("response", on_response)
+            page.on("requestfailed", on_request_failed)
+
+            await record_step(
+                "Navigate",
+                "navigate",
+                page.goto(
+                    _resolved_url(check),
+                    wait_until=browser_config.wait_until,
+                    timeout=int(timeout_seconds * 1000),
+                ),
+            )
+
+            if browser_config.expected_title_contains:
+                await record_step(
+                    "Validate title",
+                    "assert_title_contains",
+                    _assert_title_contains(page, browser_config.expected_title_contains),
+                )
+
+            for selector in browser_config.required_selectors:
+                await record_step(
+                    f"Wait for {selector}",
+                    "wait_for_selector",
+                    page.wait_for_selector(selector, timeout=int(timeout_seconds * 1000)),
+                )
+
+            for step in browser_config.steps:
+                step_timeout_ms = int((step.timeout_seconds or timeout_seconds) * 1000)
+                if step.action == "navigate":
+                    await record_step(
+                        step.name,
+                        step.action,
+                        page.goto(
+                            step.value or _resolved_url(check),
+                            wait_until=browser_config.wait_until,
+                            timeout=step_timeout_ms,
+                        ),
+                    )
+                elif step.action == "wait_for_selector":
+                    await record_step(
+                        step.name,
+                        step.action,
+                        page.wait_for_selector(step.selector or "", timeout=step_timeout_ms),
+                    )
+                elif step.action == "click":
+                    await record_step(
+                        step.name,
+                        step.action,
+                        page.locator(step.selector or "").click(timeout=step_timeout_ms),
+                    )
+                elif step.action == "fill":
+                    await record_step(
+                        step.name,
+                        step.action,
+                        page.locator(step.selector or "").fill(step.value or "", timeout=step_timeout_ms),
+                    )
+                elif step.action == "press":
+                    await record_step(
+                        step.name,
+                        step.action,
+                        page.locator(step.selector or "body").press(step.value or "", timeout=step_timeout_ms),
+                    )
+                elif step.action == "assert_text":
+                    await record_step(
+                        step.name,
+                        step.action,
+                        _assert_text(page, step.selector or "", step.value or ""),
+                    )
+                elif step.action == "assert_url_contains":
+                    await record_step(
+                        step.name,
+                        step.action,
+                        _assert_url_contains(page, step.value or ""),
+                    )
+                elif step.action == "wait_for_timeout":
+                    await record_step(
+                        step.name,
+                        step.action,
+                        page.wait_for_timeout(float(step.value or 0)),
+                    )
+
+            perf = await page.evaluate(
+                """
+                () => {
+                  const nav = performance.getEntriesByType('navigation')[0];
+                  const resources = performance.getEntriesByType('resource') || [];
+                  return {
+                    title: document.title,
+                    url: window.location.href,
+                    domContentLoadedMs: nav ? nav.domContentLoadedEventEnd : null,
+                    loadMs: nav ? nav.loadEventEnd : null,
+                    transferSize: resources.reduce((sum, entry) => sum + (entry.transferSize || 0), 0),
+                    encodedBodySize: resources.reduce((sum, entry) => sum + (entry.encodedBodySize || 0), 0),
+                    resourceCount: resources.length,
+                  };
+                }
+                """
+            )
+            await context.close()
+            await browser.close()
+
+        successful_steps = sum(1 for step in step_results if step.get("success"))
+        failed_scripts = [
+            entry
+            for entry in network_log
+            if entry.get("resource_type") == "script" and (entry.get("failure") or entry.get("ok") is False)
+        ]
+        duration_ms = (time.perf_counter() - started) * 1000
+        success = not page_errors and not failed_scripts and all(step.get("success") for step in step_results)
+        message = (
+            f"browser journey passed with {successful_steps} successful steps"
+            if success
+            else "browser journey found one or more step, script, or page failures"
+        )
+        return CheckResult(
+            name=check.name,
+            check_type=check.type,
+            success=success,
+            message=message,
+            duration_ms=duration_ms,
+            details={
+                "title": perf.get("title"),
+                "final_url": perf.get("url"),
+                "performance": perf,
+                "steps": step_results,
+                "network": sorted(
+                    network_log,
+                    key=lambda item: (item.get("duration_ms") is None, -(item.get("duration_ms") or 0)),
+                ),
+                "console": console_messages[-50:],
+                "page_errors": page_errors[-20:],
+                "script_failures": failed_scripts,
+            },
+        )
+    except PlaywrightTimeoutError as exc:
+        duration_ms = (time.perf_counter() - started) * 1000
+        return CheckResult(
+            name=check.name,
+            check_type=check.type,
+            success=False,
+            message=f"browser journey timed out: {exc}",
+            duration_ms=duration_ms,
+            details={"steps": step_results, "network": network_log, "console": console_messages, "page_errors": page_errors},
+        )
+    except Exception as exc:
+        duration_ms = (time.perf_counter() - started) * 1000
+        return CheckResult(
+            name=check.name,
+            check_type=check.type,
+            success=False,
+            message=f"browser monitor failed: {exc}",
+            duration_ms=duration_ms,
+            details={"steps": step_results, "network": network_log, "console": console_messages, "page_errors": page_errors},
         )

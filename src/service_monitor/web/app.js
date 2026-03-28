@@ -12,6 +12,12 @@ const state = {
     monitoringNodes: false,
     disabledMonitors: false,
   },
+  dashboardWorkspace: {
+    query: "",
+    status: "all",
+    type: "all",
+  },
+  dashboardDetailContext: null,
 };
 
 const ROLE_LEVELS = {
@@ -122,6 +128,118 @@ function sparklineMarkup(points, variant = "good") {
   `;
 }
 
+function historyChartMarkup(points, variant = "good", width = 720, height = 180) {
+  const normalized = Array.isArray(points) && points.length
+    ? points.map((point) => ({
+        timestamp: Number(point.timestamp || 0),
+        healthy: point.healthy ? 1 : 0,
+        duration: Number(point.duration_ms || 0),
+      }))
+    : [{ timestamp: 0, healthy: 0, duration: 0 }];
+  const minTime = Math.min(...normalized.map((point) => point.timestamp));
+  const maxTime = Math.max(...normalized.map((point) => point.timestamp));
+  const maxDuration = Math.max(...normalized.map((point) => point.duration), 1);
+  const plotWidth = width - 24;
+  const plotHeight = height - 28;
+  const baseX = 12;
+  const baseY = 8;
+  const coords = normalized.map((point, index) => {
+    const x = normalized.length === 1
+      ? baseX + plotWidth / 2
+      : baseX + (((point.timestamp - minTime) / Math.max(maxTime - minTime, 1)) * plotWidth);
+    const y = baseY + ((1 - point.healthy) * plotHeight);
+    const durationY = baseY + plotHeight - ((point.duration / maxDuration) * plotHeight);
+    return { x, y, durationY, healthy: point.healthy };
+  });
+  const availabilityLine = coords.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`).join(" ");
+  const durationLine = coords.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x.toFixed(1)} ${point.durationY.toFixed(1)}`).join(" ");
+  return `
+    <svg class="history-chart ${variant}" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true">
+      <line x1="12" y1="${height - 20}" x2="${width - 12}" y2="${height - 20}" class="axis"></line>
+      <line x1="12" y1="8" x2="12" y2="${height - 20}" class="axis"></line>
+      <path class="availability-line" d="${availabilityLine}"></path>
+      <path class="duration-line" d="${durationLine}"></path>
+      ${coords.map((point, index) => {
+        const source = normalized[index];
+        const title = `${point.healthy ? "Healthy" : "Unhealthy"} run | ${fmtTime(source.timestamp)} | ${formatDuration(source.duration)}`;
+        return `
+          <g>
+            <title>${escapeHtml(title)}</title>
+            <circle cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="4" class="availability-dot ${point.healthy ? "healthy" : "unhealthy"}"></circle>
+            <circle cx="${point.x.toFixed(1)}" cy="${point.durationY.toFixed(1)}" r="3.5" class="duration-dot"></circle>
+          </g>
+        `;
+      }).join("")}
+    </svg>
+  `;
+}
+
+function outcomeBarsMarkup(points, width = 720, height = 96) {
+  const normalized = Array.isArray(points) && points.length
+    ? points.map((point) => ({
+        timestamp: Number(point.timestamp || 0),
+        healthy: Boolean(point.healthy),
+        duration: Number(point.duration_ms || 0),
+      }))
+    : [];
+  if (!normalized.length) {
+    return `
+      <div class="empty-chart-state">
+        <p>No monitor output has been captured yet.</p>
+      </div>
+    `;
+  }
+  const maxDuration = Math.max(...normalized.map((point) => point.duration), 1);
+  const barGap = 4;
+  const chartWidth = width - 20;
+  const barWidth = Math.max(8, (chartWidth - (barGap * (normalized.length - 1))) / normalized.length);
+  return `
+    <svg class="outcome-bars-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true">
+      <line x1="10" y1="${height - 14}" x2="${width - 10}" y2="${height - 14}" class="axis"></line>
+      ${normalized.map((point, index) => {
+        const x = 10 + index * (barWidth + barGap);
+        const barHeight = Math.max(10, ((point.duration || 1) / maxDuration) * (height - 28));
+        const y = height - 14 - barHeight;
+        const cls = point.healthy ? "healthy" : "unhealthy";
+        const title = `${point.healthy ? "Healthy" : "Unhealthy"} run | ${fmtTime(point.timestamp)} | ${formatDuration(point.duration)}`;
+        return `
+          <g>
+            <title>${escapeHtml(title)}</title>
+            <rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${barHeight.toFixed(1)}" rx="4" class="outcome-bar ${cls}"></rect>
+          </g>
+        `;
+      }).join("")}
+    </svg>
+  `;
+}
+
+function incidentTimelineMarkup(failures = []) {
+  if (!failures.length) {
+    return `<div class="guide-card"><h4>Incident Timeline</h4><p>No failed monitor sessions have been recorded for this monitor.</p></div>`;
+  }
+  const sorted = [...failures].sort((left, right) => Number(left.timestamp || 0) - Number(right.timestamp || 0));
+  const first = Number(sorted[0].timestamp || 0);
+  const last = Number(sorted[sorted.length - 1].timestamp || 0);
+  return `
+    <div class="incident-timeline">
+      ${sorted.map((failure) => {
+        const ratio = first === last ? 0 : ((Number(failure.timestamp || 0) - first) / (last - first)) * 100;
+        return `
+          <article class="incident-card">
+            <div class="incident-marker" style="left: ${ratio.toFixed(2)}%;"></div>
+            <h4>${escapeHtml(failure.message || "Failure recorded")}</h4>
+            <div class="status-meta">
+              <span>${fmtTime(failure.timestamp)}</span>
+              <span>${formatDuration(failure.duration_ms)}</span>
+              <span>${escapeHtml(failure.owner || "monitor-1")}</span>
+            </div>
+          </article>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
 function endpointSparkline(check, checkMetrics) {
   const points = checkMetrics[check.name] || [];
   const variant = check.status === "unhealthy" ? "bad" : check.status === "disabled" ? "neutral" : "good";
@@ -152,8 +270,28 @@ function checkCategoryLabel(type) {
     auth: "Auth",
     generic: "Generic",
     database: "Database",
+    browser: "Browser",
   };
   return labels[type] || String(type || "Other").toUpperCase();
+}
+
+function dashboardVariant(check) {
+  return check.status === "unhealthy" ? "bad" : check.status === "disabled" ? "neutral" : "good";
+}
+
+function dashboardMonitorMatches(check) {
+  const query = state.dashboardWorkspace.query.trim().toLowerCase();
+  const statusFilter = state.dashboardWorkspace.status;
+  const typeFilter = state.dashboardWorkspace.type;
+  const target = checkTargetLabel(check).toLowerCase();
+  const typeLabel = checkCategoryLabel(check.type).toLowerCase();
+  const matchesQuery = !query
+    || check.name.toLowerCase().includes(query)
+    || target.includes(query)
+    || typeLabel.includes(query);
+  const matchesStatus = statusFilter === "all" || check.status === statusFilter;
+  const matchesType = typeFilter === "all" || check.type === typeFilter;
+  return matchesQuery && matchesStatus && matchesType;
 }
 
 function monitorCardMarkup(check, checkMetrics) {
@@ -231,7 +369,9 @@ function renderSidebar(checks, containersData) {
           currentPath === "/configured-monitors" ||
           currentPath === "/monitors/new" ||
           currentPath.startsWith("/monitors/"));
-      link.classList.toggle("active", visible && (href === currentPath || isMonitorsLink));
+      const isHomeLink = href === "/" && currentPath === "/";
+      const isDashboardsLink = href === "/dashboards" && (currentPath === "/dashboards" || currentPath.startsWith("/dashboards/"));
+      link.classList.toggle("active", visible && (isHomeLink || isDashboardsLink || href === currentPath || isMonitorsLink));
     }
   });
 
@@ -438,7 +578,7 @@ function renderLoginPage() {
       <section class="panel">
         <div class="panel-head">
           <h3>Login</h3>
-          <p>Use your portal credentials to access the monitoring dashboard.</p>
+          <p>Use your portal credentials to access the monitoring home and dashboard workspaces.</p>
         </div>
         <form id="login-form" class="check-form">
           <label><span>Username</span><input name="username" required /></label>
@@ -752,8 +892,8 @@ function renderProfilePage(profile) {
 }
 
 function renderDashboard(overview, checks, summaryCounts, checkMetrics, nodeMetrics, cluster) {
-  setWorkspaceHeader("Dashboard", "Live endpoint availability and monitoring node health at a glance.", [
-    { label: "Dashboard" },
+  setWorkspaceHeader("Home", "Live endpoint availability and monitoring node health at a glance.", [
+    { label: "Home" },
   ]);
   const root = document.getElementById("app-root");
   const endpointChecks = checks.filter((check) => check.type !== "database");
@@ -971,6 +1111,561 @@ function renderDashboard(overview, checks, summaryCounts, checkMetrics, nodeMetr
           ${databaseCards || `<article class="guide-card"><p>No database monitors are configured yet.</p></article>`}
         </div>
       </section>
+    </div>
+  `;
+}
+
+function renderDashboardsPage(checks, checkMetrics, recentResults = []) {
+  setWorkspaceHeader("Dashboards", "Observability workspaces for monitor outcomes, history, and troubleshooting.", [
+    { label: "Dashboards" },
+  ]);
+  const root = document.getElementById("app-root");
+  const sortedChecks = [...checks].sort((left, right) => {
+    const rank = { unhealthy: 0, healthy: 1, disabled: 2, unknown: 3 };
+    return (rank[left.status] ?? 9) - (rank[right.status] ?? 9) || left.name.localeCompare(right.name);
+  });
+  const visibleChecks = sortedChecks.filter((check) => dashboardMonitorMatches(check));
+  const latestByCheck = Object.fromEntries(
+    checks.map((check) => [check.name, recentResults.find((result) => result.name === check.name) || check.latest_result || null])
+  );
+  const unhealthyCount = checks.filter((check) => check.status === "unhealthy").length;
+  const healthyCount = checks.filter((check) => check.status === "healthy").length;
+  const disabledCount = checks.filter((check) => check.status === "disabled").length;
+  root.innerHTML = `
+    <div class="stack">
+      <section class="panel dashboards-hero-panel">
+        <div class="dashboard-hero-grid">
+          <div>
+            <div class="panel-head" style="margin-bottom: 8px;">
+              <h3>Monitor Dashboards</h3>
+              <p>Compact observability workspaces for history, output trends, failures, and troubleshooting.</p>
+            </div>
+            <div class="dashboard-filter-bar">
+              <label>
+                <span>Search</span>
+                <input
+                  id="dashboards-search"
+                  type="text"
+                  placeholder="Find a monitor, target, or type"
+                  value="${escapeHtml(state.dashboardWorkspace.query)}"
+                />
+              </label>
+              <label>
+                <span>Status</span>
+                <select id="dashboards-status-filter">
+                  <option value="all" ${state.dashboardWorkspace.status === "all" ? "selected" : ""}>All statuses</option>
+                  <option value="healthy" ${state.dashboardWorkspace.status === "healthy" ? "selected" : ""}>Healthy</option>
+                  <option value="unhealthy" ${state.dashboardWorkspace.status === "unhealthy" ? "selected" : ""}>Unhealthy</option>
+                  <option value="disabled" ${state.dashboardWorkspace.status === "disabled" ? "selected" : ""}>Disabled</option>
+                </select>
+              </label>
+              <label>
+                <span>Type</span>
+                <select id="dashboards-type-filter">
+                  <option value="all" ${state.dashboardWorkspace.type === "all" ? "selected" : ""}>All types</option>
+                  <option value="http" ${state.dashboardWorkspace.type === "http" ? "selected" : ""}>HTTP</option>
+                  <option value="dns" ${state.dashboardWorkspace.type === "dns" ? "selected" : ""}>DNS</option>
+                  <option value="auth" ${state.dashboardWorkspace.type === "auth" ? "selected" : ""}>Auth</option>
+                  <option value="generic" ${state.dashboardWorkspace.type === "generic" ? "selected" : ""}>Generic</option>
+                  <option value="database" ${state.dashboardWorkspace.type === "database" ? "selected" : ""}>Database</option>
+                  <option value="browser" ${state.dashboardWorkspace.type === "browser" ? "selected" : ""}>Browser</option>
+                </select>
+              </label>
+            </div>
+          </div>
+          <div class="dashboard-kpi-strip">
+            <article class="compact-card dashboard-kpi-card">
+              <h4>Visible Dashboards</h4>
+              <p>${visibleChecks.length}</p>
+              <span>${checks.length} total configured</span>
+            </article>
+            <article class="compact-card dashboard-kpi-card">
+              <h4>Healthy</h4>
+              <p>${healthyCount}</p>
+              <span>${unhealthyCount} unhealthy</span>
+            </article>
+            <article class="compact-card dashboard-kpi-card">
+              <h4>Recent Failures</h4>
+              <p>${recentResults.filter((result) => !result.success).length}</p>
+              <span>${disabledCount} disabled</span>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel dashboards-grid-panel">
+        <div class="dashboard-card-grid">
+          ${visibleChecks.length ? visibleChecks.map((check) => {
+            const points = checkMetrics[check.name] || [];
+            const latest = latestByCheck[check.name];
+            const recentFailures = recentResults.filter((result) => result.name === check.name && !result.success).slice(0, 3);
+            const troubleshootingHint =
+              check.status === "unhealthy"
+                ? (latest?.message || "Latest run failed. Review auth, content rules, placement, and recent request timing.")
+                : check.status === "disabled"
+                  ? "This monitor is disabled, so no new sessions are being collected right now."
+                  : "This monitor is healthy. Use the history and latest outcome to spot regressions before they become outages.";
+            return `
+              <article class="guide-card dashboard-monitor-card">
+                <div class="dashboard-card-head">
+                  <div>
+                    <div class="summary-identity">
+                      <span class="dot ${statusClass(check.status)}"></span>
+                      <strong>${escapeHtml(check.name)}</strong>
+                    </div>
+                    <div class="status-meta">
+                      <span>${escapeHtml(checkCategoryLabel(check.type))}</span>
+                      <span>${escapeHtml(checkTargetLabel(check))}</span>
+                    </div>
+                  </div>
+                  ${statusPill(check.status)}
+                </div>
+                <div class="guide-card compact-chart-card">
+                  <div class="mini-panel-header">
+                    <h4>Availability</h4>
+                    <span>${escapeHtml(lastMetricLabel(points))}</span>
+                  </div>
+                  ${historyChartMarkup(points, dashboardVariant(check), 540, 116)}
+                </div>
+                <div class="guide-card compact-chart-card">
+                  <div class="mini-panel-header">
+                    <h4>Performance</h4>
+                    <span>${recentFailures.length ? `${recentFailures.length} recent failures` : "No recent failures"}</span>
+                  </div>
+                  ${outcomeBarsMarkup(points, 540, 84)}
+                </div>
+                <div class="dashboard-card-stats">
+                  <div class="compact-card"><h4>Last Fired</h4><p>${escapeHtml(lastMetricLabel(points))}</p></div>
+                  <div class="compact-card"><h4>Healthy</h4><p>${points.filter((point) => point.healthy).length}</p></div>
+                  <div class="compact-card"><h4>Failures</h4><p>${recentFailures.length}</p></div>
+                </div>
+                <div class="guide-card dashboard-card-message">
+                  <h4>Latest Outcome</h4>
+                  <p>${escapeHtml(latest?.message || troubleshootingHint)}</p>
+                </div>
+                <div class="button-row">
+                  <a class="button-link" href="/dashboards/${encodeURIComponent(check.name)}" data-link>Open Dashboard</a>
+                  <a class="button-link secondary" href="/monitors/${encodeURIComponent(check.name)}" data-link>Open Monitor</a>
+                </div>
+              </article>
+            `;
+          }).join("") : `<div class="guide-card"><p>No dashboards match the current filters.</p></div>`}
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function dashboardTabLinks(checkName, activeTab, activeRange = "24h") {
+  const encoded = encodeURIComponent(checkName);
+  const tabs = [
+    ["overview", "Overview"],
+    ["history", "History"],
+    ["failures", "Failures"],
+    ["troubleshooting", "Troubleshooting"],
+  ];
+  return `
+    <div class="dashboard-tab-bar">
+      ${tabs
+        .map(
+          ([tab, label]) => `
+            <a
+              href="/dashboards/${encoded}?tab=${tab}&range=${activeRange}"
+              data-link
+              class="dashboard-tab ${activeTab === tab ? "active" : ""}"
+            >${label}</a>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function epochToDatetimeLocalValue(epochSeconds) {
+  if (!epochSeconds) return "";
+  const date = new Date(Number(epochSeconds) * 1000);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
+}
+
+function datetimeLocalToEpoch(value) {
+  if (!value) return null;
+  const parsed = new Date(value);
+  const millis = parsed.getTime();
+  if (Number.isNaN(millis)) return null;
+  return Math.floor(millis / 1000);
+}
+
+function dashboardRangeLinks(checkName, activeTab, activeRange = "24h", customStart = null, customEnd = null) {
+  const encoded = encodeURIComponent(checkName);
+  const ranges = [
+    ["1h", "1 Hour"],
+    ["24h", "24 Hours"],
+    ["7d", "7 Days"],
+    ["custom", "Custom"],
+    ["all", "All"],
+  ];
+  return `
+    <div class="dashboard-range-stack">
+      <div class="dashboard-range-bar">
+        ${ranges
+          .map(
+            ([range, label]) => `
+              <a
+                href="/dashboards/${encoded}?tab=${activeTab}&range=${range}"
+                data-link
+                class="dashboard-range-chip ${activeRange === range ? "active" : ""}"
+              >${label}</a>
+            `
+          )
+          .join("")}
+      </div>
+      ${activeRange === "custom" ? `
+        <form id="dashboard-custom-range-form" class="dashboard-custom-range-form" data-check-name="${escapeHtml(checkName)}" data-tab="${activeTab}">
+          <label>
+            <span>Start</span>
+            <input type="datetime-local" name="start" value="${escapeHtml(epochToDatetimeLocalValue(customStart))}" />
+          </label>
+          <label>
+            <span>End</span>
+            <input type="datetime-local" name="end" value="${escapeHtml(epochToDatetimeLocalValue(customEnd))}" />
+          </label>
+          <div class="button-row">
+            <button type="submit">Apply Range</button>
+            <a class="button-link secondary" href="/dashboards/${encoded}?tab=${activeTab}&range=24h" data-link>Reset</a>
+          </div>
+        </form>
+      ` : ""}
+    </div>
+  `;
+}
+
+function filterPointsByRange(points, range = "24h", customStart = null, customEnd = null) {
+  if (range === "custom") {
+    return (Array.isArray(points) ? points : []).filter((point) => {
+      const timestamp = Number(point.timestamp || 0);
+      if (customStart != null && timestamp < customStart) return false;
+      if (customEnd != null && timestamp > customEnd) return false;
+      return true;
+    });
+  }
+  if (range === "all") return Array.isArray(points) ? points : [];
+  const now = Date.now() / 1000;
+  const windowSeconds = range === "1h" ? 3600 : range === "7d" ? 604800 : 86400;
+  return (Array.isArray(points) ? points : []).filter((point) => Number(point.timestamp || 0) >= now - windowSeconds);
+}
+
+function filterResultsByRange(results, range = "24h", customStart = null, customEnd = null) {
+  if (range === "custom") {
+    return (Array.isArray(results) ? results : []).filter((result) => {
+      const timestamp = Number(result.timestamp || 0);
+      if (customStart != null && timestamp < customStart) return false;
+      if (customEnd != null && timestamp > customEnd) return false;
+      return true;
+    });
+  }
+  if (range === "all") return Array.isArray(results) ? results : [];
+  const now = Date.now() / 1000;
+  const windowSeconds = range === "1h" ? 3600 : range === "7d" ? 604800 : 86400;
+  return (Array.isArray(results) ? results : []).filter((result) => Number(result.timestamp || 0) >= now - windowSeconds);
+}
+
+function dashboardRangeLabel(range = "24h", customStart = null, customEnd = null) {
+  if (range === "1h") return "Last 1 hour";
+  if (range === "7d") return "Last 7 days";
+  if (range === "custom") {
+    const startLabel = customStart ? fmtTime(customStart) : "the beginning";
+    const endLabel = customEnd ? fmtTime(customEnd) : "now";
+    return `${startLabel} to ${endLabel}`;
+  }
+  if (range === "all") return "All recorded data";
+  return "Last 24 hours";
+}
+
+function recentFailureCards(failures) {
+  if (!failures.length) {
+    return `<div class="guide-card"><h4>No Failures</h4><p>No recent failures were recorded for this monitor.</p></div>`;
+  }
+  return failures
+    .map(
+      (result) => `
+        <div class="guide-card">
+          <h4>${escapeHtml(result.message || "Failure recorded")}</h4>
+          <div class="status-meta">
+            <span>${fmtTime(result.timestamp)}</span>
+            <span>${formatDuration(result.duration_ms)}</span>
+            <span>${escapeHtml(result.owner || "monitor-1")}</span>
+          </div>
+        </div>
+      `
+    )
+    .join("");
+}
+
+function monitorTroubleshootingHints(check, latest, failures) {
+  const hints = [];
+  if (check.status === "disabled") {
+    hints.push("This monitor is disabled. Re-enable it before expecting new results or history.");
+  }
+  if (check.type === "auth") {
+    hints.push("If auth failures appear, verify credentials, token freshness, and expected authenticated statuses.");
+  }
+  if (check.type === "http" || check.type === "browser") {
+    hints.push("For page and endpoint failures, compare recent duration spikes, content rules, and upstream response changes.");
+  }
+  if (check.type === "dns") {
+    hints.push("For DNS failures, compare address history and check whether the host resolves from the assigned monitoring node.");
+  }
+  if (check.type === "database") {
+    hints.push("For database failures, confirm network reachability, credentials, port, and database name alignment.");
+  }
+  if (latest?.details?.status_code) {
+    hints.push(`Latest returned status ${latest.details.status_code}. Confirm that expected statuses still match the target behavior.`);
+  }
+  if (failures.length) {
+    hints.push("Open the dedicated monitor page to replay the monitor immediately and compare the new result with the latest failure snapshots.");
+  } else {
+    hints.push("This monitor has no recent failures. Use this dashboard to watch trend changes before they become incidents.");
+  }
+  return hints;
+}
+
+function renderMonitorDashboardPage(check, checkMetrics, recentResults = [], activeTab = "overview", activeRange = "24h", customStart = null, customEnd = null) {
+  const allPoints = checkMetrics[check.name] || [];
+  const allResults = recentResults.filter((result) => result.name === check.name);
+  const points = filterPointsByRange(allPoints, activeRange, customStart, customEnd);
+  const rangeResults = filterResultsByRange(allResults, activeRange, customStart, customEnd);
+  const latest = rangeResults[0] || allResults[0] || check.latest_result || null;
+  const failures = rangeResults.filter((result) => !result.success);
+  const healthyCount = points.filter((point) => point.healthy).length;
+  const failureCount = points.filter((point) => !point.healthy).length;
+  const troubleshootingHints = monitorTroubleshootingHints(check, latest, failures);
+  state.dashboardDetailContext = { check, failures, points, recentResults: rangeResults, activeRange, customStart, customEnd };
+  const diagnosticsMarkup = recentRunDiagnosticsMarkup(check, rangeResults.length ? rangeResults : allResults);
+
+  let tabContent = "";
+  if (activeTab === "history") {
+    tabContent = `
+      <section class="panel">
+        <div class="panel-head">
+          <h3>History</h3>
+          <p>Recent executions, trend points, and last-fired timing for this monitor in ${dashboardRangeLabel(activeRange, customStart, customEnd).toLowerCase()}.</p>
+        </div>
+        <div class="guide-grid">
+          <div class="guide-card compact-card">
+            <h4>Healthy Runs</h4>
+            <p>${healthyCount}</p>
+          </div>
+          <div class="guide-card compact-card">
+            <h4>Failed Runs</h4>
+            <p>${failureCount}</p>
+          </div>
+          <div class="guide-card compact-card">
+            <h4>Total Points</h4>
+            <p>${points.length}</p>
+          </div>
+          <div class="guide-card compact-card">
+            <h4>Last Fired</h4>
+            <p>${escapeHtml(lastMetricLabel(points))}</p>
+          </div>
+        </div>
+        <div class="dashboard-detail-grid" style="margin-top: 12px;">
+          <div class="guide-card dashboard-history-chart">
+            <div class="mini-panel-header">
+              <h4>Availability Trend</h4>
+              <span>Last ${points.length || 0} runs</span>
+            </div>
+            ${historyChartMarkup(points, dashboardVariant(check))}
+          </div>
+          <div class="guide-card dashboard-history-chart">
+            <div class="mini-panel-header">
+              <h4>Monitor Output</h4>
+              <span>Duration scaled by run</span>
+            </div>
+            ${outcomeBarsMarkup(points)}
+          </div>
+        </div>
+        <div class="stack" style="margin-top: 12px;">
+          ${points.length ? points.slice().reverse().map((point) => `
+            <div class="status-row compact">
+              <span class="dot ${point.healthy ? "healthy" : "unhealthy"}"></span>
+              <div>
+                <strong>${point.healthy ? "Healthy run" : "Failed run"}</strong>
+                <div class="status-meta">
+                  <span>${fmtTime(point.timestamp)}</span>
+                  <span>${formatDuration(point.duration_ms)}</span>
+                </div>
+              </div>
+              ${statusPill(point.healthy ? "healthy" : "unhealthy")}
+            </div>
+          `).join("") : `<div class="guide-card"><p>No historical points have been recorded yet.</p></div>`}
+        </div>
+      </section>
+    `;
+  } else if (activeTab === "failures") {
+    tabContent = `
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Failures</h3>
+          <p>Recent failed sessions and the latest known context for this monitor in ${dashboardRangeLabel(activeRange, customStart, customEnd).toLowerCase()}.</p>
+        </div>
+        <div class="button-row">
+          <button type="button" id="export-incident-timeline-btn" class="secondary">Export Incident Timeline</button>
+          <a class="button-link secondary" href="/dashboards/${encodeURIComponent(check.name)}?tab=history&range=${activeRange}" data-link>Compare With History</a>
+        </div>
+        <div class="dashboard-detail-grid" style="margin-top: 12px;">
+          <div class="guide-card dashboard-history-chart">
+            <div class="mini-panel-header">
+              <h4>Failure Trend</h4>
+              <span>${failures.length} failure events</span>
+            </div>
+            ${historyChartMarkup(points, check.status === "unhealthy" ? "bad" : "good")}
+          </div>
+          <div class="guide-card dashboard-history-chart">
+            <div class="mini-panel-header">
+              <h4>Failure Output</h4>
+              <span>Run severity by duration</span>
+            </div>
+            ${outcomeBarsMarkup(points)}
+          </div>
+        </div>
+        <div class="guide-card" style="margin-top: 12px;">
+          <div class="mini-panel-header">
+            <h4>Incident Timeline</h4>
+            <span>${failures.length ? "Failure sequence" : "No incidents"}</span>
+          </div>
+          ${incidentTimelineMarkup(failures)}
+        </div>
+        <div class="stack">
+          ${recentFailureCards(failures)}
+        </div>
+      </section>
+    `;
+  } else if (activeTab === "troubleshooting") {
+    tabContent = `
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Troubleshooting</h3>
+          <p>Action-oriented guidance based on the monitor type, latest outcome, and recent failures in ${dashboardRangeLabel(activeRange, customStart, customEnd).toLowerCase()}.</p>
+        </div>
+        <div class="stack">
+          ${troubleshootingHints.map((hint) => `<div class="guide-card"><p>${escapeHtml(hint)}</p></div>`).join("")}
+          <div class="guide-card">
+            <h4>Quick Actions</h4>
+            <div class="button-row">
+              <a class="button-link" href="/monitors/${encodeURIComponent(check.name)}" data-link>Open Monitor</a>
+              <a class="button-link secondary" href="/dashboards/${encodeURIComponent(check.name)}?tab=failures&range=${activeRange}" data-link>View Failures</a>
+              <a class="button-link secondary" href="/dashboards/${encodeURIComponent(check.name)}?tab=history&range=${activeRange}" data-link>View History</a>
+            </div>
+          </div>
+        </div>
+      </section>
+    `;
+  } else {
+    tabContent = `
+      <div class="split-panels">
+        <section class="panel">
+          <div class="panel-head">
+            <h3>Overview</h3>
+            <p>Current health, latest outcome, and runtime ownership for ${dashboardRangeLabel(activeRange, customStart, customEnd).toLowerCase()}.</p>
+          </div>
+          <div class="status-row">
+            <span class="dot ${statusClass(check.status)}"></span>
+            <div>
+              <strong>${escapeHtml(check.name)}</strong>
+              <div class="status-meta">
+                <span>${escapeHtml(checkCategoryLabel(check.type))}</span>
+                <span>${escapeHtml(checkTargetLabel(check))}</span>
+                <span>Owner ${escapeHtml(check.owner || "monitor-1")}</span>
+              </div>
+            </div>
+            <div>${historyChartMarkup(points, check.status === "unhealthy" ? "bad" : check.status === "disabled" ? "neutral" : "good", 320, 120)}</div>
+            ${statusPill(check.status)}
+            <span class="subtle">${escapeHtml(latest?.message || "No recent result")}</span>
+          </div>
+          <div class="guide-grid" style="margin-top: 12px;">
+            <div class="guide-card compact-card">
+              <h4>Last Run</h4>
+              <p>${formatDuration(latest?.duration_ms)}</p>
+            </div>
+            <div class="guide-card compact-card">
+              <h4>Last Fired</h4>
+              <p>${escapeHtml(lastMetricLabel(points))}</p>
+            </div>
+            <div class="guide-card compact-card">
+              <h4>Healthy Points</h4>
+              <p>${healthyCount}</p>
+            </div>
+            <div class="guide-card compact-card">
+              <h4>Failed Points</h4>
+              <p>${failureCount}</p>
+            </div>
+          </div>
+          <div class="dashboard-detail-grid" style="margin-top: 12px;">
+            <div class="guide-card dashboard-history-chart">
+              <div class="mini-panel-header">
+                <h4>Availability Trend</h4>
+                <span>${escapeHtml(lastMetricLabel(points))}</span>
+              </div>
+              ${historyChartMarkup(points, dashboardVariant(check))}
+            </div>
+            <div class="guide-card dashboard-history-chart">
+              <div class="mini-panel-header">
+                <h4>Monitor Output</h4>
+                <span>Per-run outcome and duration</span>
+              </div>
+              ${outcomeBarsMarkup(points)}
+            </div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-head">
+            <h3>Session Outcome</h3>
+            <p>The latest monitor session details and next best actions.</p>
+          </div>
+          <div class="stack">
+            <div class="guide-card">
+              <h4>Latest Message</h4>
+              <p>${escapeHtml(latest?.message || "No session outcome recorded yet.")}</p>
+            </div>
+            <div class="guide-card">
+              <h4>Recommended Next Step</h4>
+              <p>${escapeHtml(troubleshootingHints[0] || "Open the monitor and re-run it to gather fresh telemetry.")}</p>
+            </div>
+            <div class="guide-card">
+              <h4>Open Monitor</h4>
+              <div class="button-row">
+                <a class="button-link" href="/monitors/${encodeURIComponent(check.name)}" data-link>Edit Monitor</a>
+                <a class="button-link secondary" href="/dashboards/${encodeURIComponent(check.name)}?tab=troubleshooting&range=${activeRange}" data-link>Troubleshoot</a>
+                <a class="button-link secondary" href="/dashboards/${encodeURIComponent(check.name)}?tab=failures&range=${activeRange}" data-link>Open Failures</a>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    `;
+  }
+
+  setWorkspaceHeader(`${check.name} Dashboard`, "A dedicated observability workspace for monitor health, outcomes, history, and troubleshooting.", [
+    { label: "Dashboards", href: "/dashboards" },
+    { label: check.name },
+  ]);
+  document.getElementById("app-root").innerHTML = `
+    <div class="stack">
+      <section class="panel">
+        <div class="panel-head">
+          <h3>${escapeHtml(check.name)}</h3>
+          <p>Monitor-specific dashboard tabs for insights, failures, and troubleshooting workflows.</p>
+        </div>
+        ${dashboardTabLinks(check.name, activeTab, activeRange)}
+        ${dashboardRangeLinks(check.name, activeTab, activeRange, customStart, customEnd)}
+      </section>
+      ${tabContent}
+      ${diagnosticsMarkup}
     </div>
   `;
 }
@@ -1253,6 +1948,582 @@ function monitorFormMarkup(check, mode, cluster = { node_id: "monitor-1", peers:
   `;
 }
 
+function browserStepRowMarkup(step = {}, index = 0) {
+  const action = step.action || "wait_for_selector";
+  return `
+    <div class="browser-step-row" data-browser-step>
+      <label><span>Step Name</span><input name="browser_step_name" value="${escapeHtml(step.name || `Step ${index + 1}`)}" /></label>
+      <label>
+        <span>Action</span>
+        <select name="browser_step_action">
+          <option value="wait_for_selector" ${action === "wait_for_selector" ? "selected" : ""}>Wait For Selector</option>
+          <option value="click" ${action === "click" ? "selected" : ""}>Click</option>
+          <option value="fill" ${action === "fill" ? "selected" : ""}>Fill</option>
+          <option value="press" ${action === "press" ? "selected" : ""}>Press Key</option>
+          <option value="assert_text" ${action === "assert_text" ? "selected" : ""}>Assert Text</option>
+          <option value="assert_url_contains" ${action === "assert_url_contains" ? "selected" : ""}>Assert URL Contains</option>
+          <option value="wait_for_timeout" ${action === "wait_for_timeout" ? "selected" : ""}>Wait For Timeout</option>
+          <option value="navigate" ${action === "navigate" ? "selected" : ""}>Navigate</option>
+        </select>
+      </label>
+      <label class="browser-step-selector ${["wait_for_selector", "click", "fill", "assert_text"].includes(action) ? "" : "hidden"}">
+        <span>Selector</span>
+        <input name="browser_step_selector" value="${escapeHtml(step.selector || "")}" placeholder="#app .login-button" />
+      </label>
+      <label class="browser-step-value ${["fill", "press", "assert_text", "assert_url_contains", "wait_for_timeout", "navigate"].includes(action) ? "" : "hidden"}">
+        <span>Value</span>
+        <input name="browser_step_value" value="${escapeHtml(step.value || "")}" placeholder="Text, key, URL fragment, or timeout ms" />
+      </label>
+      <label>
+        <span>Timeout Seconds</span>
+        <input name="browser_step_timeout_seconds" type="number" min="1" value="${escapeHtml(step.timeout_seconds || "")}" />
+      </label>
+      <div class="button-row">
+        <button type="button" class="secondary" data-remove-browser-step="true">Remove Step</button>
+      </div>
+    </div>
+  `;
+}
+
+function networkCellValue(value) {
+  return String(value ?? "").trim();
+}
+
+function networkRowMarkup(entry) {
+  const method = networkCellValue(entry.method);
+  const status = networkCellValue(entry.status ?? (entry.ok === false ? "failed" : "pending"));
+  const type = networkCellValue(entry.resource_type);
+  const duration = networkCellValue(formatDuration(entry.duration_ms));
+  const durationRaw = entry.duration_ms == null ? "" : String(entry.duration_ms);
+  const failure = networkCellValue(entry.failure);
+  const url = networkCellValue(entry.url);
+  return `
+    <tr
+      class="${entry.failure || entry.ok === false ? "network-row-failed" : ""}"
+      data-method="${escapeHtml(method.toLowerCase())}"
+      data-status="${escapeHtml(status.toLowerCase())}"
+      data-type="${escapeHtml(type.toLowerCase())}"
+      data-duration="${escapeHtml(durationRaw)}"
+      data-failure="${escapeHtml(failure.toLowerCase())}"
+      data-url="${escapeHtml(url.toLowerCase())}"
+    >
+      <td>${escapeHtml(method)}</td>
+      <td>${escapeHtml(status)}</td>
+      <td>${escapeHtml(type)}</td>
+      <td>${escapeHtml(duration)}</td>
+      <td>${escapeHtml(failure)}</td>
+      <td class="mono network-url-cell" title="${escapeHtml(url)}">${escapeHtml(url)}</td>
+    </tr>
+  `;
+}
+
+function networkFilterOptionMarkup(value) {
+  return `<option value="${escapeHtml(String(value))}">${escapeHtml(String(value))}</option>`;
+}
+
+function networkFilterToolbarMarkup(network = []) {
+  const methods = [...new Set(network.map((entry) => networkCellValue(entry.method)).filter(Boolean))].sort();
+  const statuses = [
+    ...new Set(
+      network
+        .map((entry) => networkCellValue(entry.status ?? (entry.ok === false ? "failed" : "pending")))
+        .filter(Boolean)
+    ),
+  ].sort((left, right) => String(left).localeCompare(String(right), undefined, { numeric: true }));
+  const types = [...new Set(network.map((entry) => networkCellValue(entry.resource_type)).filter(Boolean))].sort();
+  return `
+    <div class="network-filter-grid">
+      <label>
+        <span>Method</span>
+        <select data-network-filter="method">
+          <option value="">All Methods</option>
+          ${methods.map((value) => networkFilterOptionMarkup(value)).join("")}
+        </select>
+      </label>
+      <label>
+        <span>Status</span>
+        <select data-network-filter="status">
+          <option value="">All Statuses</option>
+          ${statuses.map((value) => networkFilterOptionMarkup(value)).join("")}
+        </select>
+      </label>
+      <label>
+        <span>Type</span>
+        <select data-network-filter="type">
+          <option value="">All Types</option>
+          ${types.map((value) => networkFilterOptionMarkup(value)).join("")}
+        </select>
+      </label>
+      <label><span>Min Duration (ms)</span><input type="number" min="0" data-network-filter-min="duration" placeholder="0" /></label>
+      <label><span>Max Duration (ms)</span><input type="number" min="0" data-network-filter-max="duration" placeholder="5000" /></label>
+      <label><span>Failure</span><input type="text" data-network-filter="failure" placeholder="timeout" /></label>
+      <label><span>URL</span><input type="text" data-network-filter="url" placeholder="api or /login" /></label>
+    </div>
+    <div class="network-filter-meta">
+      <span id="network-filter-count"></span>
+      <button type="button" class="secondary" id="clear-network-filters-btn">Clear Filters</button>
+    </div>
+  `;
+}
+
+function summaryRowsMarkup(rows = []) {
+  return `
+    <div class="dashboard-summary-list">
+      ${rows.map((row) => `
+        <div class="dashboard-summary-row">
+          <span>${escapeHtml(row.label)}</span>
+          <span>${row.html ?? escapeHtml(row.value ?? "n/a")}</span>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function browserDiagnosticsMarkup(result, options = {}) {
+  const compact = Boolean(options.compact);
+  const details = result.details || {};
+  const perf = details.performance || {};
+  const steps = Array.isArray(details.steps) ? details.steps : [];
+  const network = Array.isArray(details.network) ? details.network : [];
+  const consoleMessages = Array.isArray(details.console) ? details.console : [];
+  const pageErrors = Array.isArray(details.page_errors) ? details.page_errors : [];
+  const failedNetwork = network.filter((entry) => entry.failure || entry.ok === false);
+  return `
+    <div class="stack">
+      <div class="${compact ? "stack" : "split-panels"}">
+        <section class="panel">
+          <div class="panel-head">
+            <h3>${compact ? "Browser Performance" : "Test Outcome"}</h3>
+            <p>${compact ? "Page timing, final destination, and overall browser session state." : "Latest browser run summary and page timing."}</p>
+          </div>
+          ${summaryRowsMarkup([
+            { label: "Status", html: statusPill(result.success ? "healthy" : "unhealthy") },
+            { label: "Message", value: result.message || "No message" },
+            { label: "Duration", value: formatDuration(result.duration_ms) },
+            { label: "Final URL", html: `<span class="mono">${escapeHtml(details.final_url || "n/a")}</span>` },
+            { label: "Title", value: details.title || "n/a" },
+            { label: "DOMContentLoaded", value: formatDuration(perf.domContentLoadedMs) },
+            { label: "Load Event", value: formatDuration(perf.loadMs) },
+            { label: "Resource Count", value: perf.resourceCount ?? 0 },
+          ])}
+        </section>
+        <section class="panel">
+          <div class="panel-head">
+            <h3>Step Status</h3>
+            <p>Each browser action and assertion from the monitor journey.</p>
+          </div>
+          <div class="stack">
+            ${steps.length ? steps.map((step) => `
+              <div class="status-row compact">
+                <span class="dot ${statusClass(step.success ? "healthy" : "unhealthy")}"></span>
+                <div>
+                  <strong>${escapeHtml(step.name || step.action || "Step")}</strong>
+                  <div class="status-meta">
+                    <span>${escapeHtml(step.action || "step")}</span>
+                    <span>${formatDuration(step.duration_ms)}</span>
+                  </div>
+                </div>
+                <span class="subtle">${escapeHtml(step.message || "")}</span>
+              </div>
+            `).join("") : `<div class="guide-card"><p>No scripted steps were defined. The browser test only ran navigation and built-in assertions.</p></div>`}
+          </div>
+        </section>
+      </div>
+
+      <section class="panel browser-session-panel">
+        <div class="panel-head">
+          <h3>Browser Diagnostics</h3>
+          <p>Network traffic, console output, and page errors captured during this run.</p>
+        </div>
+        <div class="browser-diagnostic-summary">
+          <div class="guide-card compact-card">
+            <h4>Requests</h4>
+            <p>${network.length}</p>
+          </div>
+          <div class="guide-card compact-card">
+            <h4>Failed Requests</h4>
+            <p>${failedNetwork.length}</p>
+          </div>
+          <div class="guide-card compact-card">
+            <h4>Console Messages</h4>
+            <p>${consoleMessages.length}</p>
+          </div>
+          <div class="guide-card compact-card">
+            <h4>Page Errors</h4>
+            <p>${pageErrors.length}</p>
+          </div>
+        </div>
+        <div class="accordion browser-diagnostics-accordion">
+          <details class="accordion-item" ${failedNetwork.length ? "open" : ""}>
+            <summary class="accordion-summary">
+              <div>
+                <strong>Network Log</strong>
+                <div class="status-meta">
+                  <span>${network.length} requests</span>
+                  <span>${failedNetwork.length} failures</span>
+                </div>
+              </div>
+            </summary>
+            <div class="accordion-body">
+              ${compact ? "" : networkFilterToolbarMarkup(network)}
+              <div class="table-scroll">
+                <table class="status-table network-table">
+                  <thead>
+                    <tr>
+                      <th>Method</th>
+                      <th>Status</th>
+                      <th>Type</th>
+                      <th>Duration</th>
+                      <th>Failure</th>
+                      <th>URL</th>
+                    </tr>
+                  </thead>
+                  <tbody ${compact ? "" : `id="network-log-body"`}>
+                    ${network.length ? network.map((entry) => networkRowMarkup(entry)).join("") : `<tr><td colspan="6">No network activity captured yet.</td></tr>`}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </details>
+
+          <details class="accordion-item">
+            <summary class="accordion-summary">
+              <div>
+                <strong>Console Messages</strong>
+                <div class="status-meta">
+                  <span>${consoleMessages.length} entries</span>
+                </div>
+              </div>
+            </summary>
+            <div class="accordion-body">
+              <div class="stack">
+                ${consoleMessages.length ? consoleMessages.map((entry) => `
+                  <div class="guide-card">
+                    <h4>${escapeHtml(entry.type || "log")}</h4>
+                    <p>${escapeHtml(entry.text || "")}</p>
+                  </div>
+                `).join("") : `<div class="guide-card"><p>No console messages were captured.</p></div>`}
+              </div>
+            </div>
+          </details>
+
+          <details class="accordion-item" ${pageErrors.length ? "open" : ""}>
+            <summary class="accordion-summary">
+              <div>
+                <strong>Script And Page Errors</strong>
+                <div class="status-meta">
+                  <span>${pageErrors.length} entries</span>
+                </div>
+              </div>
+            </summary>
+            <div class="accordion-body">
+              <div class="stack">
+                ${pageErrors.length ? pageErrors.map((entry) => `
+                  <div class="guide-card">
+                    <h4>Page Error</h4>
+                    <p>${escapeHtml(entry)}</p>
+                  </div>
+                `).join("") : `<div class="guide-card"><p>No page errors were captured.</p></div>`}
+              </div>
+            </div>
+          </details>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function monitorRunBreakdownMarkup(check, result) {
+  if (!result) {
+    return `<div class="guide-card"><p>No run details are available yet for this monitor.</p></div>`;
+  }
+  const details = result.details || {};
+  if (check.type === "browser") {
+    return browserDiagnosticsMarkup(result, { compact: true });
+  }
+  if (check.type === "http") {
+    return `
+      <div class="stack">
+        <section class="panel">
+          <div class="panel-head">
+            <h3>HTTP Performance</h3>
+            <p>Status, content validation context, and timing from this monitor run.</p>
+          </div>
+          ${summaryRowsMarkup([
+            { label: "Status", html: statusPill(result.success ? "healthy" : "unhealthy") },
+            { label: "Message", value: result.message || "No message" },
+            { label: "Duration", value: formatDuration(result.duration_ms) },
+            { label: "URL", html: `<span class="mono">${escapeHtml(checkTargetLabel(check))}</span>` },
+            { label: "HTTP Status", value: details.status_code ?? "n/a" },
+            { label: "Expected Statuses", value: csv(check.expected_statuses || []) || "n/a" },
+            { label: "Contains Rules", value: csv(check.content?.contains || []) || "None" },
+            { label: "Exclude Rules", value: csv(check.content?.not_contains || []) || "None" },
+          ])}
+        </section>
+      </div>
+    `;
+  }
+  if (check.type === "auth") {
+    return `
+      <div class="stack">
+        <section class="panel">
+          <div class="panel-head">
+            <h3>Authentication Breakdown</h3>
+            <p>Authenticated and unauthenticated status behavior for this run.</p>
+          </div>
+          ${summaryRowsMarkup([
+            { label: "Status", html: statusPill(result.success ? "healthy" : "unhealthy") },
+            { label: "Message", value: result.message || "No message" },
+            { label: "Duration", value: formatDuration(result.duration_ms) },
+            { label: "Target", html: `<span class="mono">${escapeHtml(checkTargetLabel(check))}</span>` },
+            { label: "Authenticated Status", value: details.authenticated_status ?? "n/a" },
+            { label: "Unauthenticated Status", value: details.unauthenticated_status ?? "Not probed" },
+            { label: "Expected Auth Statuses", value: csv(check.expect_authenticated_statuses || []) || "n/a" },
+          ])}
+        </section>
+      </div>
+    `;
+  }
+  if (check.type === "dns") {
+    return `
+      <div class="stack">
+        <section class="panel">
+          <div class="panel-head">
+            <h3>DNS Resolution Breakdown</h3>
+            <p>Resolved addresses and timing for this DNS lookup.</p>
+          </div>
+          ${summaryRowsMarkup([
+            { label: "Status", html: statusPill(result.success ? "healthy" : "unhealthy") },
+            { label: "Message", value: result.message || "No message" },
+            { label: "Duration", value: formatDuration(result.duration_ms) },
+            { label: "Host", value: check.host || "n/a" },
+            { label: "Resolved Addresses", value: Array.isArray(details.addresses) ? details.addresses.join(", ") : "None" },
+          ])}
+        </section>
+      </div>
+    `;
+  }
+  if (check.type === "database") {
+    return `
+      <div class="stack">
+        <section class="panel">
+          <div class="panel-head">
+            <h3>Database Breakdown</h3>
+            <p>Connection reachability, engine, and database target details from this run.</p>
+          </div>
+          ${summaryRowsMarkup([
+            { label: "Status", html: statusPill(result.success ? "healthy" : "unhealthy") },
+            { label: "Message", value: result.message || "No message" },
+            { label: "Duration", value: formatDuration(result.duration_ms) },
+            { label: "Host", value: details.host || check.host || "n/a" },
+            { label: "Port", value: details.port || check.port || "n/a" },
+            { label: "Engine", value: details.database_engine || check.database_engine || "n/a" },
+            { label: "Database", value: details.database_name || check.database_name || "n/a" },
+          ])}
+        </section>
+      </div>
+    `;
+  }
+  if (check.type === "generic") {
+    return `
+      <div class="stack">
+        <section class="panel">
+          <div class="panel-head">
+            <h3>Generic Connectivity Breakdown</h3>
+            <p>Connectivity timing and endpoint details from this run.</p>
+          </div>
+          ${summaryRowsMarkup([
+            { label: "Status", html: statusPill(result.success ? "healthy" : "unhealthy") },
+            { label: "Message", value: result.message || "No message" },
+            { label: "Duration", value: formatDuration(result.duration_ms) },
+            { label: "Host", value: details.host || check.host || "n/a" },
+            { label: "Port", value: details.port || check.port || "n/a" },
+          ])}
+        </section>
+      </div>
+    `;
+  }
+  return `
+    <div class="stack">
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Run Breakdown</h3>
+          <p>Latest monitor output and run timing.</p>
+        </div>
+        ${summaryRowsMarkup([
+          { label: "Status", html: statusPill(result.success ? "healthy" : "unhealthy") },
+          { label: "Message", value: result.message || "No message" },
+          { label: "Duration", value: formatDuration(result.duration_ms) },
+        ])}
+      </section>
+    </div>
+  `;
+}
+
+function recentRunDiagnosticsMarkup(check, results = []) {
+  if (!results.length) {
+    return `
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Run Diagnostics</h3>
+          <p>Monitor-specific output from recent runs will appear here.</p>
+        </div>
+        <div class="guide-card"><p>No run diagnostics are available in the selected time range yet.</p></div>
+      </section>
+    `;
+  }
+  return `
+    <section class="panel">
+      <div class="panel-head">
+        <h3>Run Diagnostics</h3>
+        <p>Monitor-specific output for recent runs in this dashboard window.</p>
+      </div>
+      <div class="accordion">
+        ${results.slice(0, 5).map((result, index) => `
+          <details class="accordion-item" ${index === 0 ? "open" : ""}>
+            <summary class="accordion-summary">
+              <div>
+                <strong>${escapeHtml(result.message || "Run result")}</strong>
+                <div class="status-meta">
+                  <span>${fmtTime(result.timestamp)}</span>
+                  <span>${formatDuration(result.duration_ms)}</span>
+                  <span>${escapeHtml(result.owner || check.owner || "monitor-1")}</span>
+                </div>
+              </div>
+              ${statusPill(result.success ? "healthy" : "unhealthy")}
+            </summary>
+            <div class="accordion-body">
+              ${monitorRunBreakdownMarkup(check, result)}
+            </div>
+          </details>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function browserTestResultsMarkup(result) {
+  if (!result) {
+    return `
+      <div class="guide-card">
+        <h4>No Test Results Yet</h4>
+        <p>Run a browser health test to see navigation timing, step outcomes, script issues, and a live network breakdown.</p>
+      </div>
+    `;
+  }
+  const details = result.details || {};
+  return browserDiagnosticsMarkup(result, { compact: false });
+}
+
+function browserMonitorMarkup(check, mode, cluster = { node_id: "monitor-1", peers: [], healthy_nodes: [] }) {
+  const isNew = mode === "create";
+  const canWrite = hasRole("read_write");
+  const placementMode = check.placement_mode || "auto";
+  const nodes = assignableNodeOptions(cluster);
+  const selectedNodeId = check.assigned_node_id || "";
+  const browser = check.browser || {};
+  const steps = Array.isArray(browser.steps) && browser.steps.length ? browser.steps : [];
+  return `
+    <div class="stack">
+      ${isNew ? "" : `
+        <section class="panel">
+          <div class="panel-head">
+            <h3>Monitor Status</h3>
+            <p>Latest browser monitor outcome, ownership, and page health state.</p>
+          </div>
+          <div class="status-row">
+            <span class="dot ${statusClass(check.status)}"></span>
+            <div>
+              <strong>${escapeHtml(check.name || "Browser monitor")}</strong>
+              <div class="status-meta">
+                <span>Browser</span>
+                <span>${escapeHtml(check.url || "")}</span>
+              </div>
+            </div>
+            <div>${sparklineMarkup(check.metric_points || [], check.status === "unhealthy" ? "bad" : "good")}</div>
+            ${statusPill(check.status || "unknown")}
+            <span class="subtle">${escapeHtml(check.latest_result?.message || "No result yet")}</span>
+          </div>
+        </section>
+      `}
+      <section class="panel">
+        <div class="panel-head">
+          <h3>${isNew ? "Browser Health Monitor" : `Edit ${escapeHtml(check.name)}`}</h3>
+          <p>Build a synthetic browser journey, validate every step, and inspect the request log from the same page.</p>
+        </div>
+        <form class="check-form" id="browser-monitor-form" data-original-name="${escapeHtml(check.name || "")}">
+          <div class="accordion">
+            <details class="accordion-item" ${isNew ? "" : "open"}>
+              <summary class="accordion-summary"><div><strong>Basics</strong><div class="status-meta"><span>Name, schedule, and monitor state</span></div></div></summary>
+              <div class="accordion-body">
+                <label><span>Name</span><input name="name" value="${escapeHtml(check.name || "")}" required ${canWrite ? "" : "disabled"} /></label>
+                <label><span>Enabled</span><select name="enabled" ${canWrite ? "" : "disabled"}><option value="true" ${check.enabled !== false ? "selected" : ""}>Enabled</option><option value="false" ${check.enabled === false ? "selected" : ""}>Disabled</option></select></label>
+                <label><span>Interval Seconds</span><input name="interval_seconds" type="number" min="1" value="${escapeHtml(check.interval_seconds || 300)}" ${canWrite ? "" : "disabled"} /></label>
+                <label><span>Timeout Seconds</span><input name="timeout_seconds" type="number" min="1" value="${escapeHtml(check.timeout_seconds || 30)}" ${canWrite ? "" : "disabled"} /></label>
+              </div>
+            </details>
+
+            <details class="accordion-item" ${isNew ? "" : "open"}>
+              <summary class="accordion-summary"><div><strong>Browser Target</strong><div class="status-meta"><span>Page URL and browser runtime settings</span></div></div></summary>
+              <div class="accordion-body">
+                <label><span>Page URL</span><input name="url" value="${escapeHtml(check.url || "")}" placeholder="https://example.com" required ${canWrite ? "" : "disabled"} /></label>
+                <label><span>Port</span><input name="port" type="number" min="1" max="65535" value="${escapeHtml(check.port || "")}" placeholder="Optional" ${canWrite ? "" : "disabled"} /></label>
+                <label><span>Wait Until</span><select name="browser_wait_until" ${canWrite ? "" : "disabled"}><option value="networkidle" ${browser.wait_until === "networkidle" || !browser.wait_until ? "selected" : ""}>Network Idle</option><option value="load" ${browser.wait_until === "load" ? "selected" : ""}>Load</option><option value="domcontentloaded" ${browser.wait_until === "domcontentloaded" ? "selected" : ""}>DOMContentLoaded</option></select></label>
+                <label><span>Viewport Width</span><input name="browser_viewport_width" type="number" min="320" value="${escapeHtml(browser.viewport_width || 1440)}" ${canWrite ? "" : "disabled"} /></label>
+                <label><span>Viewport Height</span><input name="browser_viewport_height" type="number" min="320" value="${escapeHtml(browser.viewport_height || 900)}" ${canWrite ? "" : "disabled"} /></label>
+              </div>
+            </details>
+
+            <details class="accordion-item" ${isNew ? "" : "open"}>
+              <summary class="accordion-summary"><div><strong>Monitor Placement</strong><div class="status-meta"><span>Choose a monitoring node or let the service place this browser journey automatically</span></div></div></summary>
+              <div class="accordion-body">
+                <label><span>Placement</span><select name="placement_mode" ${canWrite ? "" : "disabled"}><option value="auto" ${placementMode !== "specific" ? "selected" : ""}>Auto-select the healthiest least-loaded container</option><option value="specific" ${placementMode === "specific" ? "selected" : ""}>Choose a specific monitoring container</option></select></label>
+                <label class="field-assigned-node ${placementMode === "specific" ? "" : "hidden"}"><span>Monitoring Container</span><select name="assigned_node_id" ${canWrite ? "" : "disabled"}><option value="">Select a monitoring container</option>${nodes.map((node) => `<option value="${escapeHtml(node.node_id)}" ${selectedNodeId === node.node_id ? "selected" : ""}>${escapeHtml(node.label)}${node.healthy ? " | healthy" : " | unhealthy"} | ${escapeHtml(node.description || "")}</option>`).join("")}</select></label>
+              </div>
+            </details>
+
+            <details class="accordion-item" ${isNew ? "" : "open"}>
+              <summary class="accordion-summary"><div><strong>Assertions</strong><div class="status-meta"><span>Page title and required selectors that must be present</span></div></div></summary>
+              <div class="accordion-body">
+                <label><span>Expected Title Contains</span><input name="browser_expected_title_contains" value="${escapeHtml(browser.expected_title_contains || "")}" placeholder="Home | Example" ${canWrite ? "" : "disabled"} /></label>
+                <label><span>Required Selectors</span><input name="browser_required_selectors" value="${escapeHtml(csv(browser.required_selectors || []))}" placeholder="#app, nav a.login, footer" ${canWrite ? "" : "disabled"} /></label>
+              </div>
+            </details>
+
+            <details class="accordion-item" ${isNew ? "" : "open"}>
+              <summary class="accordion-summary"><div><strong>Journey Steps</strong><div class="status-meta"><span>Describe each browser interaction and assertion you want to validate</span></div></div></summary>
+              <div class="accordion-body">
+                <div class="button-row ${canWrite ? "" : "hidden"}">
+                  <button type="button" id="add-browser-step-btn">Add Step</button>
+                </div>
+                <div class="stack" id="browser-steps-list">
+                  ${(steps.length ? steps : [{ name: "Wait for main app", action: "wait_for_selector", selector: "body" }]).map((step, index) => browserStepRowMarkup(step, index)).join("")}
+                </div>
+              </div>
+            </details>
+          </div>
+
+          <div class="button-row">
+            ${canWrite ? `<button type="button" id="test-browser-monitor-btn">Test Browser Monitor</button>` : ""}
+            ${canWrite ? `<button type="submit">${isNew ? "Create Browser Monitor" : "Save Browser Monitor"}</button>` : ""}
+            ${!isNew && canWrite ? `<button type="button" class="secondary" id="toggle-browser-monitor-btn">${check.enabled === false ? "Enable Monitor" : "Disable Monitor"}</button>` : ""}
+            ${!isNew && canWrite ? `<button type="button" class="danger" id="delete-browser-monitor-btn">Delete Monitor</button>` : ""}
+          </div>
+          <p class="form-status" id="browser-monitor-form-status"></p>
+        </form>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Browser Test Session</h3>
+          <p>Run the monitor in place and inspect each step plus the live network log at the bottom.</p>
+        </div>
+        <div id="browser-test-results">${browserTestResultsMarkup(check.latest_result || null)}</div>
+      </section>
+    </div>
+  `;
+}
+
 function renderContainersPage(peers, containers, nodeMetrics, cluster = { enabled: false, node_id: "monitor-1", peers: [], local_assigned_checks: [] }) {
   setWorkspaceHeader("Configure Containers", "Configure peer monitors, add new nodes, and define how the cluster is managed.", [
     { label: "Cluster", href: "/cluster/configure" },
@@ -1529,40 +2800,40 @@ function renderContainerDetailPage(container, peer, nodeMetrics) {
 }
 
 function renderGuidePage() {
-  setWorkspaceHeader("FAQ", "Answers to common setup, operations, scaling, and access questions.", [
-    { label: "FAQ" },
+  setWorkspaceHeader("Help", "Reference topics for setup, operations, security, Docker, and offline deployment.", [
+    { label: "Help" },
   ]);
   const root = document.getElementById("app-root");
   root.innerHTML = `
     <div class="stack">
       <section class="panel">
         <div class="panel-head">
-          <h3>Frequently Asked Questions</h3>
-          <p>Use this page for the most common operator questions about monitoring, editing, scaling, storage, and access control.</p>
+          <h3>Help Topics</h3>
+          <p>Use this page as in-product documentation for the service architecture, portal areas, deployment paths, and operator workflows.</p>
         </div>
         <div class="guide-grid">
           <article class="guide-card">
-            <h4>How do I watch endpoint health?</h4>
-            <p>The dashboard shows every endpoint monitor with a health dot and a live availability trend graph.</p>
+            <h4>At A Glance</h4>
+            <p>The service combines endpoint monitoring, cluster coordination, container operations, access control, and optional MySQL telemetry retention in one admin portal.</p>
           </article>
           <article class="guide-card">
-            <h4>How do I edit a monitor?</h4>
-            <p>Select any monitor from the left sidebar to open a dedicated edit page for intervals, URLs, validation rules, and auth settings.</p>
+            <h4>Portal Areas</h4>
+            <p>Home, Dashboards, Monitors, Cluster, Administration, Profile, and Help each focus on a specific part of operating the monitoring platform.</p>
           </article>
           <article class="guide-card">
-            <h4>How do I scale the monitoring fleet?</h4>
-            <p>The containers page lets admins manage peer monitors, control monitor containers, and add new nodes while the service is running.</p>
+            <h4>Security And Secrets</h4>
+            <p>The service supports encrypted config secrets using <code>ASM_CONFIG_PASSPHRASE</code> so sensitive usernames, passwords, tokens, and headers can stay out of plaintext storage.</p>
           </article>
           <article class="guide-card">
-            <h4>How do I manage portal access?</h4>
-            <p>The Administration page lets admins create read-only, read-write, and full admin accounts today, with OCI auth scaffolding ready for future integration.</p>
+            <h4>Deployment Modes</h4>
+            <p>You can run locally, with Docker, as a clustered Docker deployment, or through an offline air-gapped workflow with prebuilt assets.</p>
           </article>
         </div>
       </section>
 
       <section class="panel">
         <div class="panel-head">
-          <h3>Service Flow Diagram</h3>
+          <h3>Architecture</h3>
           <p>This is the end-to-end flow from portal changes to monitor execution and telemetry storage.</p>
         </div>
         <div class="diagram-row">
@@ -1574,13 +2845,13 @@ function renderGuidePage() {
           <div class="diagram-arrow">→</div>
           <div class="diagram-node">Checks + Peer Pollers</div>
           <div class="diagram-arrow">→</div>
-          <div class="diagram-node">Dashboard + Telemetry</div>
+          <div class="diagram-node">Home + Dashboards</div>
         </div>
       </section>
 
       <section class="panel">
         <div class="panel-head">
-          <h3>Cluster Coordination Diagram</h3>
+          <h3>Cluster Coordination</h3>
           <p>Monitoring nodes can watch the same targets, watch one another, and recover failed peers.</p>
         </div>
         <div class="diagram-grid">
@@ -1593,7 +2864,7 @@ function renderGuidePage() {
 
       <section class="panel">
         <div class="panel-head">
-          <h3>Telemetry Storage Diagram</h3>
+          <h3>Telemetry Storage</h3>
           <p>Telemetry can stay local in memory or be retained in MySQL for two hours, locally or in OCI.</p>
         </div>
         <div class="diagram-row">
@@ -1604,6 +2875,118 @@ function renderGuidePage() {
           <div class="diagram-node">Live Graphs</div>
           <div class="diagram-arrow">+</div>
           <div class="diagram-node">MySQL Retention</div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Portal Areas</h3>
+          <p>These map the main areas of the application to the operational tasks they support.</p>
+        </div>
+        <div class="guide-grid">
+          <article class="guide-card">
+            <h4>Home</h4>
+            <p>Use Home to watch endpoint health dots, availability graphs, node health, and the latest outcomes across enabled monitors.</p>
+          </article>
+          <article class="guide-card">
+            <h4>Dashboards</h4>
+            <p>Use Dashboards to troubleshoot one or more monitors with live history, outcome details, and failure-focused observability cards.</p>
+          </article>
+          <article class="guide-card">
+            <h4>Monitors</h4>
+            <p>Use Monitors to start a new monitor flow, bulk-manage configured monitors, or open a dedicated monitor page for editing and validation.</p>
+          </article>
+          <article class="guide-card">
+            <h4>Cluster</h4>
+            <p>Use Cluster to manage peer nodes, monitor containers, published ports, Docker networks, and cluster topology details.</p>
+          </article>
+          <article class="guide-card">
+            <h4>Administration</h4>
+            <p>Use Administration for user accounts, auth settings, telemetry storage, email configuration, and service-level integration settings.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Running Locally</h3>
+          <p>These are the standard local startup steps pulled from the project README.</p>
+        </div>
+        <div class="guide-card">
+          <h4>Local Startup</h4>
+          <pre class="mono">py -3 -m venv .venv
+.venv\\Scripts\\Activate.ps1
+pip install -e .
+py -3 -m service_monitor --config config.yaml</pre>
+          <p>On a brand-new config with no users yet, the first visitor is guided through initial admin onboarding before the rest of the portal becomes available.</p>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Config Encryption</h3>
+          <p>Sensitive values can be encrypted before storing or moving a config file between machines.</p>
+        </div>
+        <div class="guide-grid">
+          <article class="guide-card">
+            <h4>Protected Fields</h4>
+            <p>Portal credentials, email credentials, telemetry credentials, and monitor auth secrets can all be encrypted in <code>config.yaml</code>.</p>
+          </article>
+          <article class="guide-card">
+            <h4>Passphrase Workflow</h4>
+            <p>Set <code>ASM_CONFIG_PASSPHRASE</code>, generate a passphrase if needed, and use the CLI encrypt command before committing or transferring the config file.</p>
+          </article>
+        </div>
+        <div class="guide-card">
+          <h4>Encryption Commands</h4>
+          <pre class="mono">py -3 -m service_monitor --generate-config-passphrase
+$env:ASM_CONFIG_PASSPHRASE = "replace-with-your-passphrase"
+py -3 -m service_monitor --encrypt-config --config config.yaml</pre>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Docker Deployment</h3>
+          <p>The built-in image supports single-node Docker runs and clustered Docker Compose runs.</p>
+        </div>
+        <div class="guide-grid">
+          <article class="guide-card">
+            <h4>Single Node Docker</h4>
+            <pre class="mono">docker build -t async-service-monitor .
+docker run --rm -p 8000:8000 -v \${PWD}/config.yaml:/app/config.yaml async-service-monitor</pre>
+          </article>
+          <article class="guide-card">
+            <h4>Clustered Compose</h4>
+            <pre class="mono">docker compose up --build</pre>
+          </article>
+        </div>
+        <div class="guide-card">
+          <h4>Docker Note</h4>
+          <p>If your config uses encrypted values or if you want the admin UI to create new peer containers, pass through the matching config secrets and host-side config binding values too.</p>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Offline Deployment</h3>
+          <p>The project supports air-gapped deployment after offline assets are prepared on a connected machine.</p>
+        </div>
+        <div class="guide-grid">
+          <article class="guide-card">
+            <h4>Prepare Assets</h4>
+            <pre class="mono">.\\scripts\\prepare-offline-assets.ps1
+.\\scripts\\verify-offline-assets.ps1</pre>
+          </article>
+          <article class="guide-card">
+            <h4>Load And Run Offline</h4>
+            <pre class="mono">.\\scripts\\load-offline-assets.ps1
+docker compose -f docker-compose.offline.yml up</pre>
+          </article>
+        </div>
+        <div class="guide-card">
+          <h4>Air-Gap Notes</h4>
+          <p>Offline support expects the Python wheels and supporting Docker images to be prepared first. Self-provisioned local MySQL and Mailpit still need their images loaded into Docker in the disconnected environment.</p>
         </div>
       </section>
     </div>
@@ -1967,6 +3350,47 @@ function monitorFormPayload(form) {
   };
 }
 
+function browserMonitorPayload(form) {
+  const formData = new FormData(form);
+  const placementMode = String(formData.get("placement_mode") || "auto");
+  const portValue = String(formData.get("port") || "").trim();
+  const steps = Array.from(form.querySelectorAll("[data-browser-step]")).map((row, index) => ({
+    name: String(row.querySelector("input[name='browser_step_name']")?.value || `Step ${index + 1}`),
+    action: String(row.querySelector("select[name='browser_step_action']")?.value || "wait_for_selector"),
+    selector: String(row.querySelector("input[name='browser_step_selector']")?.value || "").trim() || null,
+    value: String(row.querySelector("input[name='browser_step_value']")?.value || "").trim() || null,
+    timeout_seconds: row.querySelector("input[name='browser_step_timeout_seconds']")?.value
+      ? Number(row.querySelector("input[name='browser_step_timeout_seconds']")?.value)
+      : null,
+  }));
+  return {
+    name: String(formData.get("name")),
+    type: "browser",
+    enabled: String(formData.get("enabled")) === "true",
+    interval_seconds: Number(formData.get("interval_seconds")),
+    placement_mode: placementMode,
+    assigned_node_id: placementMode === "specific" ? String(formData.get("assigned_node_id") || "") || null : null,
+    timeout_seconds: formData.get("timeout_seconds") ? Number(formData.get("timeout_seconds")) : null,
+    url: String(formData.get("url") || "") || null,
+    host: null,
+    port: portValue ? Number(portValue) : null,
+    database_name: null,
+    database_engine: "mysql",
+    expected_statuses: [200],
+    expect_authenticated_statuses: [200],
+    auth: null,
+    content: { contains: [], not_contains: [], regex: null },
+    browser: {
+      expected_title_contains: String(formData.get("browser_expected_title_contains") || "").trim() || null,
+      required_selectors: parseCsv(formData.get("browser_required_selectors") || ""),
+      wait_until: String(formData.get("browser_wait_until") || "networkidle"),
+      viewport_width: Number(formData.get("browser_viewport_width") || 1440),
+      viewport_height: Number(formData.get("browser_viewport_height") || 900),
+      steps,
+    },
+  };
+}
+
 async function runMonitorTest(kind) {
   if (!hasRole("read_write")) return;
   const form = document.getElementById("monitor-form");
@@ -1982,6 +3406,97 @@ async function runMonitorTest(kind) {
     });
     const prefix = result.success ? "Success" : "Failed";
     setStatus(status, `${prefix}: ${result.message} (${Math.round(Number(result.duration_ms || 0))} ms)`, !result.success);
+  } catch (error) {
+    setStatus(status, error.message, true);
+  }
+}
+
+function updateBrowserStepVisibility(row) {
+  if (!row) return;
+  const action = row.querySelector("select[name='browser_step_action']")?.value || "wait_for_selector";
+  row.querySelectorAll(".browser-step-selector").forEach((node) => {
+    node.classList.toggle("hidden", !["wait_for_selector", "click", "fill", "assert_text"].includes(action));
+  });
+  row.querySelectorAll(".browser-step-value").forEach((node) => {
+    node.classList.toggle("hidden", !["fill", "press", "assert_text", "assert_url_contains", "wait_for_timeout", "navigate"].includes(action));
+  });
+}
+
+function appendBrowserStep(step = {}) {
+  const list = document.getElementById("browser-steps-list");
+  if (!list) return;
+  const wrapper = document.createElement("div");
+  wrapper.innerHTML = browserStepRowMarkup(step, list.querySelectorAll("[data-browser-step]").length);
+  const row = wrapper.firstElementChild;
+  list.appendChild(row);
+  updateBrowserStepVisibility(row);
+}
+
+function applyNetworkFilters() {
+  const rows = Array.from(document.querySelectorAll("#network-log-body tr[data-method]"));
+  if (!rows.length) {
+    return;
+  }
+  const filters = Object.fromEntries(
+    Array.from(document.querySelectorAll("[data-network-filter]")).map((input) => [
+      input.dataset.networkFilter,
+      String(input.value || "").trim().toLowerCase(),
+    ])
+  );
+  const durationMinRaw = document.querySelector("[data-network-filter-min='duration']")?.value || "";
+  const durationMaxRaw = document.querySelector("[data-network-filter-max='duration']")?.value || "";
+  const durationMin = durationMinRaw === "" ? null : Number(durationMinRaw);
+  const durationMax = durationMaxRaw === "" ? null : Number(durationMaxRaw);
+  let visible = 0;
+  rows.forEach((row) => {
+    const textMatches = Object.entries(filters).every(([key, value]) => {
+      if (!value) return true;
+      return String(row.dataset[key] || "").includes(value);
+    });
+    const durationValue = Number.parseFloat(String(row.dataset.duration || "").replace(/[^\d.]/g, ""));
+    const minMatches = durationMin == null || (!Number.isNaN(durationValue) && durationValue >= durationMin);
+    const maxMatches = durationMax == null || (!Number.isNaN(durationValue) && durationValue <= durationMax);
+    const matches = textMatches && minMatches && maxMatches;
+    row.classList.toggle("hidden", !matches);
+    if (matches) visible += 1;
+  });
+  const count = document.getElementById("network-filter-count");
+  if (count) {
+    count.textContent = `${visible} of ${rows.length} requests shown`;
+  }
+}
+
+function downloadJsonFile(filename, payload) {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function runBrowserMonitorTest() {
+  if (!hasRole("read_write")) return;
+  const form = document.getElementById("browser-monitor-form");
+  if (!form) return;
+  const status = document.getElementById("browser-monitor-form-status");
+  const results = document.getElementById("browser-test-results");
+  try {
+    setStatus(status, "Running browser monitor...");
+    const result = await api("/api/checks/test", {
+      method: "POST",
+      body: JSON.stringify(browserMonitorPayload(form)),
+    });
+    results.innerHTML = browserTestResultsMarkup(result);
+    applyNetworkFilters();
+    setStatus(
+      status,
+      `${result.success ? "Success" : "Failed"}: ${result.message} (${Math.round(Number(result.duration_ms || 0))} ms)`,
+      !result.success
+    );
   } catch (error) {
     setStatus(status, error.message, true);
   }
@@ -2149,6 +3664,39 @@ async function renderRoute() {
     return;
   }
 
+  if (path === "/dashboards") {
+    const [checkMetrics, recentResults] = await Promise.all([
+      api("/api/metrics/checks"),
+      api("/api/results?limit=200"),
+    ]);
+    renderDashboardsPage(checks, checkMetrics, recentResults);
+    return;
+  }
+
+  if (path.startsWith("/dashboards/")) {
+    const name = decodeURIComponent(path.split("/").pop());
+    const searchParams = new URLSearchParams(window.location.search);
+    const currentTab = searchParams.get("tab") || "overview";
+    const currentRange = searchParams.get("range") || "24h";
+    const customStart = searchParams.get("start");
+    const customEnd = searchParams.get("end");
+    const [check, checkMetrics, recentResults] = await Promise.all([
+      api(`/api/checks/${encodeURIComponent(name)}`),
+      api("/api/metrics/checks"),
+      api("/api/results?limit=200"),
+    ]);
+    renderMonitorDashboardPage(
+      check,
+      checkMetrics,
+      recentResults,
+      currentTab,
+      currentRange,
+      customStart ? Number(customStart) : null,
+      customEnd ? Number(customEnd) : null
+    );
+    return;
+  }
+
   if (path === "/monitors") {
     const checkMetrics = await api("/api/metrics/checks");
     checks.forEach((check) => {
@@ -2205,7 +3753,43 @@ async function renderRoute() {
   }
 
   if (path === "/monitors/new/advanced/browser-health-monitor") {
-    renderAdvancedMonitorSubpage("Browser Health Monitor", "Reserved for browser-based health and synthetic experience monitoring.");
+    const cluster = await api("/api/cluster");
+    setWorkspaceHeader("Browser Health Monitor", "Create a synthetic browser journey with step validation and live network visibility.", [
+      { label: "Monitors", href: "/monitors" },
+      { label: "Add Monitor", href: "/monitors/new" },
+      { label: "Advanced Monitor", href: "/monitors/new/advanced" },
+      { label: "Browser Health Monitor" },
+    ]);
+    document.getElementById("app-root").innerHTML = browserMonitorMarkup(
+      {
+        name: "",
+        type: "browser",
+        enabled: true,
+        interval_seconds: 300,
+        placement_mode: "auto",
+        assigned_node_id: null,
+        timeout_seconds: 30,
+        url: "",
+        port: null,
+        status: "unknown",
+        metric_points: [],
+        browser: {
+          expected_title_contains: "",
+          required_selectors: [],
+          wait_until: "networkidle",
+          viewport_width: 1440,
+          viewport_height: 900,
+          steps: [{ name: "Wait for main app", action: "wait_for_selector", selector: "body" }],
+        },
+      },
+      "create",
+      cluster
+    );
+    document.querySelectorAll("[data-browser-step]").forEach((row) => updateBrowserStepVisibility(row));
+    applyNetworkFilters();
+    if (!hasRole("read_write")) {
+      disableForm(document.getElementById("browser-monitor-form"), true);
+    }
     return;
   }
 
@@ -2262,6 +3846,20 @@ async function renderRoute() {
       api("/api/cluster"),
     ]);
     check.metric_points = checkMetrics[check.name] || [];
+    if (check.type === "browser") {
+      setWorkspaceHeader(check.name, "Dedicated browser monitor page for editing synthetic steps and replaying network diagnostics.", [
+        { label: "Monitors", href: "/monitors" },
+        { label: "Configured Monitors", href: "/configured-monitors" },
+        { label: check.name },
+      ]);
+      document.getElementById("app-root").innerHTML = browserMonitorMarkup(check, "edit", cluster);
+      document.querySelectorAll("[data-browser-step]").forEach((row) => updateBrowserStepVisibility(row));
+      applyNetworkFilters();
+      if (!hasRole("read_write")) {
+        disableForm(document.getElementById("browser-monitor-form"), true);
+      }
+      return;
+    }
     setWorkspaceHeader(check.name, "Dedicated monitor page for editing, auth updates, and immediate re-checks.", [
       { label: "Monitors", href: "/monitors" },
       { label: "Configured Monitors", href: "/configured-monitors" },
@@ -2323,6 +3921,59 @@ function handleToggle(event) {
 }
 
 async function handleSubmit(event) {
+  if (event.target.id === "browser-monitor-form") {
+    event.preventDefault();
+    if (!hasRole("read_write")) return;
+    const form = event.target;
+    const payload = browserMonitorPayload(form);
+    const status = document.getElementById("browser-monitor-form-status");
+    const originalName = form.dataset.originalName;
+    try {
+      setStatus(status, originalName ? "Saving browser monitor..." : "Creating browser monitor...");
+      if (originalName) {
+        await api(`/api/checks/${encodeURIComponent(originalName)}`, {
+          method: "PUT",
+          body: JSON.stringify(payload),
+        });
+        setStatus(status, "Browser monitor saved.");
+        if (payload.name !== originalName) {
+          navigate(`/monitors/${encodeURIComponent(payload.name)}`);
+          return;
+        }
+      } else {
+        await api("/api/checks", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        navigate(`/monitors/${encodeURIComponent(payload.name)}`);
+        return;
+      }
+      await renderRoute();
+    } catch (error) {
+      setStatus(status, error.message, true);
+    }
+    return;
+  }
+
+  if (event.target.id === "dashboard-custom-range-form") {
+    event.preventDefault();
+    const form = event.target;
+    const checkName = form.dataset.checkName;
+    const activeTab = form.dataset.tab || "overview";
+    const formData = new FormData(form);
+    const start = datetimeLocalToEpoch(String(formData.get("start") || ""));
+    const end = datetimeLocalToEpoch(String(formData.get("end") || ""));
+    if (start != null && end != null && start > end) {
+      alert("Custom range start must be before the end time.");
+      return;
+    }
+    const params = new URLSearchParams({ tab: activeTab, range: "custom" });
+    if (start != null) params.set("start", String(start));
+    if (end != null) params.set("end", String(end));
+    navigate(`/dashboards/${encodeURIComponent(checkName)}?${params.toString()}`);
+    return;
+  }
+
   if (event.target.id === "login-form") {
     event.preventDefault();
     const form = event.target;
@@ -2662,14 +4313,66 @@ async function handleClick(event) {
     return;
   }
 
+  if (event.target.id === "test-browser-monitor-btn") {
+    await runBrowserMonitorTest();
+    return;
+  }
+
   if (event.target.id === "test-auth-btn") {
     await runMonitorTest("auth");
+    return;
+  }
+
+  if (event.target.id === "add-browser-step-btn") {
+    appendBrowserStep();
+    return;
+  }
+
+  if (event.target.id === "clear-network-filters-btn") {
+    document.querySelectorAll("[data-network-filter], [data-network-filter-min], [data-network-filter-max]").forEach((input) => {
+      input.value = "";
+    });
+    applyNetworkFilters();
+    return;
+  }
+
+  if (event.target.id === "export-incident-timeline-btn") {
+    const context = state.dashboardDetailContext;
+    if (!context?.check) return;
+    downloadJsonFile(
+      `${context.check.name.replaceAll(" ", "-").toLowerCase()}-incident-timeline.json`,
+      {
+        monitor: context.check.name,
+        exported_at: new Date().toISOString(),
+        failures: context.failures || [],
+        history_points: context.points || [],
+      }
+    );
+    return;
+  }
+
+  const removeBrowserStep = event.target.closest("[data-remove-browser-step]");
+  if (removeBrowserStep) {
+    removeBrowserStep.closest("[data-browser-step]")?.remove();
     return;
   }
 
   if (event.target.id === "toggle-monitor-btn") {
     if (!hasRole("read_write")) return;
     const form = document.getElementById("monitor-form");
+    const originalName = form.dataset.originalName;
+    const enabled = form.querySelector("select[name='enabled']").value !== "true";
+    await api(`/api/checks/${encodeURIComponent(originalName)}/enabled`, {
+      method: "PATCH",
+      body: JSON.stringify({ enabled }),
+    });
+    await renderRoute();
+    return;
+  }
+
+  if (event.target.id === "toggle-browser-monitor-btn") {
+    if (!hasRole("read_write")) return;
+    const form = document.getElementById("browser-monitor-form");
     const originalName = form.dataset.originalName;
     const enabled = form.querySelector("select[name='enabled']").value !== "true";
     await api(`/api/checks/${encodeURIComponent(originalName)}/enabled`, {
@@ -2687,6 +4390,16 @@ async function handleClick(event) {
     if (!window.confirm(`Delete monitor "${originalName}"?`)) return;
     await api(`/api/checks/${encodeURIComponent(originalName)}`, { method: "DELETE" });
     navigate("/");
+    return;
+  }
+
+  if (event.target.id === "delete-browser-monitor-btn") {
+    if (!hasRole("read_write")) return;
+    const form = document.getElementById("browser-monitor-form");
+    const originalName = form.dataset.originalName;
+    if (!window.confirm(`Delete monitor "${originalName}"?`)) return;
+    await api(`/api/checks/${encodeURIComponent(originalName)}`, { method: "DELETE" });
+    navigate("/monitors");
     return;
   }
 
@@ -2731,6 +4444,20 @@ async function handleClick(event) {
 
 function handleChange(event) {
   if (
+    event.target.id === "dashboards-status-filter" ||
+    event.target.id === "dashboards-type-filter"
+  ) {
+    if (event.target.id === "dashboards-status-filter") {
+      state.dashboardWorkspace.status = event.target.value || "all";
+    }
+    if (event.target.id === "dashboards-type-filter") {
+      state.dashboardWorkspace.type = event.target.value || "all";
+    }
+    renderRoute().catch((error) => alert(error.message));
+    return;
+  }
+
+  if (
     event.target.id === "configured-monitors-type-filter" ||
     event.target.id === "configured-monitors-enabled-filter"
   ) {
@@ -2758,6 +4485,32 @@ function handleChange(event) {
   }
 
   if (
+    event.target.matches("#browser-monitor-form select[name='placement_mode']") ||
+    event.target.matches("select[name='browser_step_action']")
+  ) {
+    if (event.target.matches("#browser-monitor-form select[name='placement_mode']")) {
+      const form = event.target.closest("form");
+      const placementMode = event.target.value || "auto";
+      form.querySelectorAll(".field-assigned-node").forEach((node) => {
+        node.classList.toggle("hidden", placementMode !== "specific");
+      });
+    }
+    if (event.target.matches("select[name='browser_step_action']")) {
+      updateBrowserStepVisibility(event.target.closest("[data-browser-step]"));
+    }
+    return;
+  }
+
+  if (
+    event.target.matches("[data-network-filter]") ||
+    event.target.matches("[data-network-filter-min]") ||
+    event.target.matches("[data-network-filter-max]")
+  ) {
+    applyNetworkFilters();
+    return;
+  }
+
+  if (
     event.target.matches("#email-settings-form select[name='provider']") ||
     event.target.matches("#email-settings-form select[name='auto_provision_local']")
   ) {
@@ -2766,6 +4519,21 @@ function handleChange(event) {
 }
 
 function handleInput(event) {
+  if (event.target.id === "dashboards-search") {
+    state.dashboardWorkspace.query = event.target.value || "";
+    renderRoute().catch((error) => alert(error.message));
+    return;
+  }
+
+  if (
+    event.target.matches("[data-network-filter]") ||
+    event.target.matches("[data-network-filter-min]") ||
+    event.target.matches("[data-network-filter-max]")
+  ) {
+    applyNetworkFilters();
+    return;
+  }
+
   if (event.target.id === "configured-monitors-search") {
     updateConfiguredMonitorsFilters(event);
     renderRoute().catch((error) => alert(error.message));

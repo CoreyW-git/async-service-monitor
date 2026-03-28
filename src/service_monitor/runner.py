@@ -14,6 +14,7 @@ from service_monitor.cluster import ClusterCoordinator, PeerState
 from service_monitor.checks import (
     CheckResult,
     run_auth_check,
+    run_browser_check,
     run_database_check,
     run_dns_check,
     run_generic_check,
@@ -277,6 +278,8 @@ class MonitorRunner:
             return await run_generic_check(check, timeout_seconds)
         if check.type == "database":
             return await run_database_check(check, timeout_seconds)
+        if check.type == "browser":
+            return await run_browser_check(check, timeout_seconds)
 
         raise ValueError(f"Unsupported check type: {check.type}")
 
@@ -316,6 +319,25 @@ class MonitorRunner:
             "port": check.port,
             "database_name": check.database_name,
             "database_engine": check.database_engine,
+            "browser": {
+                "expected_title_contains": check.browser.expected_title_contains,
+                "required_selectors": check.browser.required_selectors,
+                "wait_until": check.browser.wait_until,
+                "viewport_width": check.browser.viewport_width,
+                "viewport_height": check.browser.viewport_height,
+                "steps": [
+                    {
+                        "name": step.name,
+                        "action": step.action,
+                        "selector": step.selector,
+                        "value": step.value,
+                        "timeout_seconds": step.timeout_seconds,
+                    }
+                    for step in check.browser.steps
+                ],
+            }
+            if check.browser
+            else None,
             "expected_statuses": check.expected_statuses,
             "expect_authenticated_statuses": check.expect_authenticated_statuses,
             "has_auth": check.auth is not None,
