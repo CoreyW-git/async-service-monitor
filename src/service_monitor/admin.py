@@ -324,6 +324,26 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
     async def monitor_create_page() -> str:
         return HTMLResponse(_frontend_html(), headers=_no_cache_headers())
 
+    @app.get("/monitors/new/basic", response_class=HTMLResponse)
+    async def monitor_create_basic_page() -> str:
+        return HTMLResponse(_frontend_html(), headers=_no_cache_headers())
+
+    @app.get("/monitors/new/advanced", response_class=HTMLResponse)
+    async def monitor_create_advanced_page() -> str:
+        return HTMLResponse(_frontend_html(), headers=_no_cache_headers())
+
+    @app.get("/monitors/new/advanced/browser-health-monitor", response_class=HTMLResponse)
+    async def monitor_create_browser_health_page() -> str:
+        return HTMLResponse(_frontend_html(), headers=_no_cache_headers())
+
+    @app.get("/monitors/new/advanced/real-user-monitoring", response_class=HTMLResponse)
+    async def monitor_create_rum_page() -> str:
+        return HTMLResponse(_frontend_html(), headers=_no_cache_headers())
+
+    @app.get("/monitors/new/advanced/monitor-recorder", response_class=HTMLResponse)
+    async def monitor_create_recorder_page() -> str:
+        return HTMLResponse(_frontend_html(), headers=_no_cache_headers())
+
     @app.get("/configured-monitors", response_class=HTMLResponse)
     async def configured_monitors_page() -> str:
         return HTMLResponse(_frontend_html(), headers=_no_cache_headers())

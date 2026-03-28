@@ -224,7 +224,14 @@ function renderSidebar(checks, containersData) {
     const visible = authenticated && (!minRole || hasRole(minRole));
     link.classList.toggle("hidden", !visible);
     if (link.tagName === "A") {
-      link.classList.toggle("active", visible && link.getAttribute("href") === currentPath);
+      const href = link.getAttribute("href");
+      const isMonitorsLink =
+        href === "/monitors" &&
+        (currentPath === "/monitors" ||
+          currentPath === "/configured-monitors" ||
+          currentPath === "/monitors/new" ||
+          currentPath.startsWith("/monitors/"));
+      link.classList.toggle("active", visible && (href === currentPath || isMonitorsLink));
     }
   });
 
@@ -259,13 +266,171 @@ function renderSidebar(checks, containersData) {
     : `<div class="monitor-group"><div class="monitor-group-title"><strong>containers</strong><span>0</span></div><div class="subtle">No live cluster containers found.</div></div>`;
 }
 
-function setWorkspaceHeader(title, subtitle) {
+function renderMonitorsHomePage(checks) {
+  setWorkspaceHeader("Monitors", "Open monitor tools, add new monitors, and browse every configured monitor from one place.", [
+    { label: "Monitors" },
+  ]);
+  document.getElementById("overview-cards").innerHTML = "";
+  const root = document.getElementById("app-root");
+
+  root.innerHTML = `
+    <div class="stack">
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Monitor Workspace</h3>
+          <p>Use this page as the hub for creating monitors, bulk-managing configured monitors, and opening each monitor on its own page.</p>
+        </div>
+        <div class="guide-grid">
+          <a class="guide-card" href="/monitors/new" data-link>
+            <h4>Add Monitor</h4>
+            <p>Choose between a basic monitor flow and an advanced monitor flow.</p>
+          </a>
+          <a class="guide-card" href="/configured-monitors" data-link>
+            <h4>Configured Monitors</h4>
+            <p>Bulk-manage the existing monitor set and apply enable, disable, or delete actions across multiple entries.</p>
+          </a>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function renderAddMonitorHomePage() {
+  setWorkspaceHeader("Add Monitor", "Choose the type of monitor workflow you want to start.", [
+    { label: "Monitors", href: "/monitors" },
+    { label: "Add Monitor" },
+  ]);
+  document.getElementById("overview-cards").innerHTML = "";
+  const root = document.getElementById("app-root");
+  root.innerHTML = `
+    <div class="stack">
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Monitor Creation Paths</h3>
+          <p>Select the monitor creation experience you want to use.</p>
+        </div>
+        <div class="guide-grid">
+          <a class="guide-card" href="/monitors/new/basic" data-link>
+            <h4>Basic Monitor</h4>
+            <p>Use the current monitor form for endpoint target, validation, placement, and authentication settings.</p>
+          </a>
+          <a class="guide-card" href="/monitors/new/advanced" data-link>
+            <h4>Advanced Monitor</h4>
+            <p>Reserved for a more advanced creation flow. This page is intentionally blank for now.</p>
+          </a>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function renderAdvancedMonitorPlaceholder() {
+  setWorkspaceHeader("Advanced Monitor", "This workflow is reserved for future advanced monitor creation.", [
+    { label: "Monitors", href: "/monitors" },
+    { label: "Add Monitor", href: "/monitors/new" },
+    { label: "Advanced Monitor" },
+  ]);
+  document.getElementById("overview-cards").innerHTML = "";
+  const root = document.getElementById("app-root");
+  root.innerHTML = `
+    <section class="panel">
+      <div class="panel-head">
+        <h3>Advanced Monitor</h3>
+        <p>This page is intentionally blank for now.</p>
+      </div>
+      <div class="guide-card">
+        <h4>Coming Soon</h4>
+        <p>The advanced monitor workflow has been reserved and can be filled in later without changing the navigation structure again.</p>
+      </div>
+    </section>
+  `;
+}
+
+function renderAdvancedMonitorHomePage() {
+  setWorkspaceHeader("Advanced Monitor", "Choose the advanced monitor workflow you want to use.", [
+    { label: "Monitors", href: "/monitors" },
+    { label: "Add Monitor", href: "/monitors/new" },
+    { label: "Advanced Monitor" },
+  ]);
+  document.getElementById("overview-cards").innerHTML = "";
+  const root = document.getElementById("app-root");
+  root.innerHTML = `
+    <div class="stack">
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Advanced Monitor Paths</h3>
+          <p>Select the advanced monitoring workflow you want to build out.</p>
+        </div>
+        <div class="guide-grid">
+          <a class="guide-card" href="/monitors/new/advanced/browser-health-monitor" data-link>
+            <h4>Browser Health Monitor</h4>
+            <p>Create a browser-focused synthetic monitoring workflow.</p>
+          </a>
+          <a class="guide-card" href="/monitors/new/advanced/real-user-monitoring" data-link>
+            <h4>Real User Monitoring</h4>
+            <p>Prepare a workflow for capturing real user monitoring data and experiences.</p>
+          </a>
+          <a class="guide-card" href="/monitors/new/advanced/monitor-recorder" data-link>
+            <h4>Monitor Recorder</h4>
+            <p>Reserve a workflow for recording monitor journeys and reusable monitor definitions.</p>
+          </a>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function renderAdvancedMonitorSubpage(title, description) {
+  setWorkspaceHeader(title, description, [
+    { label: "Monitors", href: "/monitors" },
+    { label: "Add Monitor", href: "/monitors/new" },
+    { label: "Advanced Monitor", href: "/monitors/new/advanced" },
+    { label: title },
+  ]);
+  document.getElementById("overview-cards").innerHTML = "";
+  const root = document.getElementById("app-root");
+  root.innerHTML = `
+    <section class="panel">
+      <div class="panel-head">
+        <h3>${escapeHtml(title)}</h3>
+        <p>${escapeHtml(description)}</p>
+      </div>
+      <div class="guide-card">
+        <h4>Coming Soon</h4>
+        <p>This advanced monitor page has been created and reserved. We can build out the actual workflow here next.</p>
+      </div>
+    </section>
+  `;
+}
+
+function renderBreadcrumbs(items = []) {
+  const container = document.getElementById("workspace-breadcrumbs");
+  if (!container) return;
+  if (!items.length) {
+    container.innerHTML = "";
+    return;
+  }
+  container.innerHTML = items
+    .map((item, index) => {
+      const node = item.href
+        ? `<a href="${escapeHtml(item.href)}" data-link>${escapeHtml(item.label)}</a>`
+        : `<span class="breadcrumb-current">${escapeHtml(item.label)}</span>`;
+      const separator = index < items.length - 1 ? `<span class="breadcrumb-separator">/</span>` : "";
+      return `${node}${separator}`;
+    })
+    .join("");
+}
+
+function setWorkspaceHeader(title, subtitle, breadcrumbs = []) {
   document.getElementById("workspace-title").textContent = title;
   document.getElementById("workspace-subtitle").textContent = subtitle;
+  renderBreadcrumbs(breadcrumbs);
 }
 
 function renderLoginPage() {
-  setWorkspaceHeader("Sign In", "Sign in to the portal, create a new account, or reset your password.");
+  setWorkspaceHeader("Sign In", "Sign in to the portal, create a new account, or reset your password.", [
+    { label: "Sign In" },
+  ]);
   document.getElementById("overview-cards").innerHTML = "";
   const root = document.getElementById("app-root");
   root.innerHTML = `
@@ -313,7 +478,9 @@ function renderLoginPage() {
 }
 
 function renderBootstrapPage() {
-  setWorkspaceHeader("Initial Admin Setup", "Create the first administrator account before anyone can use the application.");
+  setWorkspaceHeader("Initial Admin Setup", "Create the first administrator account before anyone can use the application.", [
+    { label: "Initial Admin Setup" },
+  ]);
   document.getElementById("overview-cards").innerHTML = "";
   const root = document.getElementById("app-root");
   root.innerHTML = `
@@ -376,7 +543,10 @@ function applyConfiguredMonitorFilters(checks) {
 }
 
 function renderConfiguredMonitorsPage(checks) {
-  setWorkspaceHeader("Configured Monitors", "Select one or more monitors and apply bulk enable, disable, or delete actions.");
+  setWorkspaceHeader("Configured Monitors", "Select one or more monitors and apply bulk enable, disable, or delete actions.", [
+    { label: "Monitors", href: "/monitors" },
+    { label: "Configured Monitors" },
+  ]);
   document.getElementById("overview-cards").innerHTML = "";
   const root = document.getElementById("app-root");
   const sortedChecks = [...checks].sort((a, b) => a.name.localeCompare(b.name));
@@ -525,7 +695,9 @@ async function runBulkMonitorAction(action) {
 }
 
 function renderProfilePage(profile) {
-  setWorkspaceHeader("Profile", "Review and update your personal account details.");
+  setWorkspaceHeader("Profile", "Review and update your personal account details.", [
+    { label: "Profile" },
+  ]);
   const root = document.getElementById("app-root");
   root.innerHTML = `
     <div class="detail-grid">
@@ -580,7 +752,9 @@ function renderProfilePage(profile) {
 }
 
 function renderDashboard(overview, checks, summaryCounts, checkMetrics, nodeMetrics, cluster) {
-  setWorkspaceHeader("Dashboard", "Live endpoint availability and monitoring node health at a glance.");
+  setWorkspaceHeader("Dashboard", "Live endpoint availability and monitoring node health at a glance.", [
+    { label: "Dashboard" },
+  ]);
   const root = document.getElementById("app-root");
   const endpointChecks = checks.filter((check) => check.type !== "database");
   const databaseChecks = checks.filter((check) => check.type === "database");
@@ -857,182 +1031,8 @@ function monitorFormMarkup(check, mode, cluster = { node_id: "monitor-1", peers:
   const nodes = assignableNodeOptions(cluster);
   const selectedNodeId = check.assigned_node_id || "";
   return `
-    <div class="detail-grid">
-      <section class="panel">
-        <div class="panel-head">
-          <h3>${isNew ? "Add Monitor" : `Edit ${escapeHtml(check.name)}`}</h3>
-          <p>${isNew ? "Create a new endpoint monitor." : managed ? "This monitor is generated from service configuration and is read-only here." : "Save changes and the monitor will re-run immediately."}</p>
-        </div>
-        <form class="check-form" id="monitor-form" data-original-name="${escapeHtml(check.name || "")}">
-          <div class="accordion">
-            <details class="accordion-item" open>
-              <summary class="accordion-summary">
-                <div>
-                  <strong>Basics</strong>
-                  <div class="status-meta">
-                    <span>Name, type, and enabled state</span>
-                  </div>
-                </div>
-              </summary>
-              <div class="accordion-body">
-                <label><span>Name</span><input name="name" value="${escapeHtml(check.name || "")}" required ${readonlyAttr} /></label>
-                <label>
-                  <span>Type</span>
-                  <select name="type" ${readonlyAttr}>
-                    <option value="http" ${check.type === "http" ? "selected" : ""}>HTTP</option>
-                    <option value="dns" ${check.type === "dns" ? "selected" : ""}>DNS</option>
-                    <option value="auth" ${check.type === "auth" ? "selected" : ""}>Auth</option>
-                    <option value="database" ${check.type === "database" ? "selected" : ""}>Database</option>
-                    <option value="generic" ${check.type === "generic" ? "selected" : ""}>Generic</option>
-                  </select>
-                </label>
-                <label>
-                  <span>Enabled</span>
-                  <select name="enabled" ${readonlyAttr}>
-                    <option value="true" ${check.enabled !== false ? "selected" : ""}>Enabled</option>
-                    <option value="false" ${check.enabled === false ? "selected" : ""}>Disabled</option>
-                  </select>
-                </label>
-              </div>
-            </details>
-
-            <details class="accordion-item" open>
-              <summary class="accordion-summary">
-                <div>
-                  <strong>Target And Schedule</strong>
-                  <div class="status-meta">
-                    <span>What to monitor and how often to run it</span>
-                  </div>
-                </div>
-              </summary>
-              <div class="accordion-body">
-                <label><span>Interval Seconds</span><input name="interval_seconds" type="number" min="1" value="${escapeHtml(check.interval_seconds || 300)}" required ${readonlyAttr} /></label>
-                <label><span>Timeout Seconds</span><input name="timeout_seconds" type="number" min="1" value="${escapeHtml(check.timeout_seconds || 10)}" ${readonlyAttr} /></label>
-                <label class="field-url ${["http", "auth"].includes(check.type) ? "" : "hidden"}"><span>URL</span><input name="url" value="${escapeHtml(check.url || "")}" ${readonlyAttr} /></label>
-                <label class="field-host ${["dns", "database", "generic"].includes(check.type) ? "" : "hidden"}"><span>Host</span><input name="host" value="${escapeHtml(check.host || "")}" ${readonlyAttr} /></label>
-                <label class="field-port ${["http", "auth", "database", "generic"].includes(check.type) ? "" : "hidden"}"><span>Port</span><input name="port" type="number" min="1" max="65535" value="${escapeHtml(check.port || "")}" ${readonlyAttr} /></label>
-              </div>
-            </details>
-
-            <details class="accordion-item" open>
-              <summary class="accordion-summary">
-                <div>
-                  <strong>Monitor Placement</strong>
-                  <div class="status-meta">
-                    <span>Choose a specific monitoring container or let the service auto-place it</span>
-                  </div>
-                </div>
-              </summary>
-              <div class="accordion-body">
-                <label>
-                  <span>Placement</span>
-                  <select name="placement_mode" ${readonlyAttr}>
-                    <option value="auto" ${placementMode !== "specific" ? "selected" : ""}>Auto-select the healthiest least-loaded container</option>
-                    <option value="specific" ${placementMode === "specific" ? "selected" : ""}>Choose a specific monitoring container</option>
-                  </select>
-                </label>
-                <label class="field-assigned-node ${placementMode === "specific" ? "" : "hidden"}">
-                  <span>Monitoring Container</span>
-                  <select name="assigned_node_id" ${readonlyAttr}>
-                    <option value="">Select a monitoring container</option>
-                    ${nodes
-                      .map(
-                        (node) => `<option value="${escapeHtml(node.node_id)}" ${selectedNodeId === node.node_id ? "selected" : ""}>${escapeHtml(node.label)}${node.healthy ? " | healthy" : " | unhealthy"} | ${escapeHtml(node.description || "")}</option>`
-                      )
-                      .join("")}
-                  </select>
-                </label>
-                <div class="guide-card">
-                  <h4>Placement Notes</h4>
-                  <p>${nodes.length ? "Auto placement keeps new endpoint checks on healthy full-monitoring nodes and balances them across the cluster." : "No full-monitoring peer nodes are currently available, so this monitor will stay on the local node."}</p>
-                </div>
-              </div>
-            </details>
-
-            <details class="accordion-item ${["http", "auth"].includes(check.type) ? "validation-open" : ""}" ${["http", "auth"].includes(check.type) ? "open" : ""}>
-              <summary class="accordion-summary field-statuses ${["http", "auth"].includes(check.type) ? "" : "hidden"}">
-                <div>
-                  <strong>Validation Rules</strong>
-                  <div class="status-meta">
-                    <span>Status codes and content assertions</span>
-                  </div>
-                </div>
-              </summary>
-              <div class="accordion-body field-statuses ${["http", "auth"].includes(check.type) ? "" : "hidden"}">
-                <label class="field-statuses ${["http", "auth"].includes(check.type) ? "" : "hidden"}"><span>Expected Statuses</span><input name="expected_statuses" value="${escapeHtml(csv(check.expected_statuses || [200]))}" ${readonlyAttr} /></label>
-                <label class="field-content ${["http", "auth"].includes(check.type) ? "" : "hidden"}"><span>Contains Text</span><input name="contains" value="${escapeHtml(csv(check.content_rules?.contains || []))}" ${readonlyAttr} /></label>
-                <label class="field-content ${["http", "auth"].includes(check.type) ? "" : "hidden"}"><span>Exclude Text</span><input name="not_contains" value="${escapeHtml(csv(check.content_rules?.not_contains || []))}" ${readonlyAttr} /></label>
-                <label class="field-content ${["http", "auth"].includes(check.type) ? "" : "hidden"}"><span>Regex</span><input name="regex" value="${escapeHtml(check.content_rules?.regex || "")}" ${readonlyAttr} /></label>
-              </div>
-            </details>
-
-            <details class="accordion-item auth-only ${!["http", "auth"].includes(check.type) ? "hidden" : ""}" ${["http", "auth"].includes(check.type) ? "open" : ""}>
-              <summary class="accordion-summary auth-only ${!["http", "auth"].includes(check.type) ? "hidden" : ""}">
-                <div>
-                  <strong>Authentication</strong>
-                  <div class="status-meta">
-                    <span>Credentials and auth headers for protected HTTP endpoints</span>
-                  </div>
-                </div>
-              </summary>
-              <div class="accordion-body auth-only ${!["http", "auth"].includes(check.type) ? "hidden" : ""}">
-                <label class="auth-only ${!["http", "auth"].includes(check.type) ? "hidden" : ""}" data-auth-field="type">
-                  <span>Auth Type</span>
-                  <select name="auth_type" ${readonlyAttr}>
-                    <option value="none" ${authType === "none" ? "selected" : ""}>None</option>
-                    <option value="bearer" ${authType === "bearer" ? "selected" : ""}>Bearer</option>
-                    <option value="basic" ${authType === "basic" ? "selected" : ""}>Basic</option>
-                    <option value="header" ${authType === "header" ? "selected" : ""}>Header</option>
-                  </select>
-                </label>
-                <label class="auth-only ${!["http", "auth"].includes(check.type) || authType !== "bearer" ? "hidden" : ""}" data-auth-field="token"><span>Bearer Token</span><input name="token" value="${escapeHtml(auth.token || "")}" ${readonlyAttr} /></label>
-                <label class="auth-only ${!["http", "auth"].includes(check.type) || authType !== "basic" ? "hidden" : ""}" data-auth-field="username"><span>Username</span><input name="username" value="${escapeHtml(auth.username || "")}" ${readonlyAttr} /></label>
-                <label class="auth-only ${!["http", "auth"].includes(check.type) || authType !== "basic" ? "hidden" : ""}" data-auth-field="password"><span>Password</span><input name="password" type="password" value="${escapeHtml(auth.password || "")}" ${readonlyAttr} /></label>
-                <label class="auth-only ${!["http", "auth"].includes(check.type) || authType !== "header" ? "hidden" : ""}" data-auth-field="header_name"><span>Header Name</span><input name="header_name" value="${escapeHtml(auth.header_name || "")}" ${readonlyAttr} /></label>
-                <label class="auth-only ${!["http", "auth"].includes(check.type) || authType !== "header" ? "hidden" : ""}" data-auth-field="header_value"><span>Header Value</span><input name="header_value" value="${escapeHtml(auth.header_value || "")}" ${readonlyAttr} /></label>
-                <div class="button-row ${editable ? "" : "hidden"}">
-                  <button type="button" class="secondary" id="test-auth-btn">Test Auth</button>
-                </div>
-                <p class="form-status" id="test-auth-status"></p>
-              </div>
-            </details>
-
-            <details class="accordion-item database-only ${check.type !== "database" ? "hidden" : ""}" ${check.type === "database" ? "open" : ""}>
-              <summary class="accordion-summary database-only ${check.type !== "database" ? "hidden" : ""}">
-                <div>
-                  <strong>Database Settings</strong>
-                  <div class="status-meta">
-                    <span>Connection details for database monitoring</span>
-                  </div>
-                </div>
-              </summary>
-              <div class="accordion-body database-only ${check.type !== "database" ? "hidden" : ""}">
-                <label class="database-only ${check.type !== "database" ? "hidden" : ""}"><span>Database Name</span><input name="database_name" value="${escapeHtml(check.database_name || "")}" ${readonlyAttr} /></label>
-                <label class="database-only ${check.type !== "database" ? "hidden" : ""}">
-                  <span>Database Engine</span>
-                  <select name="database_engine" ${readonlyAttr}>
-                    <option value="mysql" ${(check.database_engine || "mysql") === "mysql" ? "selected" : ""}>MySQL</option>
-                  </select>
-                </label>
-                <label class="database-only ${check.type !== "database" ? "hidden" : ""}"><span>Database Username</span><input name="database_username" value="${escapeHtml(auth.username || "")}" ${readonlyAttr} /></label>
-                <label class="database-only ${check.type !== "database" ? "hidden" : ""}"><span>Database Password</span><input name="database_password" type="password" value="${escapeHtml(auth.password || "")}" ${readonlyAttr} /></label>
-              </div>
-            </details>
-          </div>
-          <div class="button-row ${editable ? "" : "hidden"}">
-            <button type="button" class="secondary" id="test-monitor-btn">Test Monitor</button>
-            <button type="submit">${isNew ? "Create Monitor" : "Save Changes"}</button>
-            ${
-              isNew
-                ? ""
-                : `<button type="button" class="secondary" id="toggle-monitor-btn">${check.enabled ? "Disable" : "Enable"}</button>
-                   <button type="button" class="danger" id="delete-monitor-btn">Delete</button>`
-            }
-          </div>
-          <p class="form-status" id="monitor-form-status">${managed ? "This monitor is managed by service configuration." : canWrite ? "" : "Read-only access: editing is disabled for this account."}</p>
-        </form>
-      </section>
-
+    <div class="stack">
+      ${isNew ? "" : `
       <section class="panel">
         <div class="panel-head">
           <h3>Monitor Status</h3>
@@ -1073,13 +1073,191 @@ function monitorFormMarkup(check, mode, cluster = { node_id: "monitor-1", peers:
             <p>${formatDuration(check.latest_result?.duration_ms)}</p>
           </div>
         </div>
+      </section>`}
+
+      <section class="panel">
+        <div class="panel-head">
+          <h3>${isNew ? "Add Monitor" : `Edit ${escapeHtml(check.name)}`}</h3>
+          <p>${isNew ? "Create a new endpoint monitor." : managed ? "This monitor is generated from service configuration and is read-only here." : "Save changes and the monitor will re-run immediately."}</p>
+        </div>
+        <form class="check-form" id="monitor-form" data-original-name="${escapeHtml(check.name || "")}">
+          <div class="accordion">
+            <details class="accordion-item" ${isNew ? "" : "open"}>
+              <summary class="accordion-summary">
+                <div>
+                  <strong>Basics</strong>
+                  <div class="status-meta">
+                    <span>Name, type, and enabled state</span>
+                  </div>
+                </div>
+              </summary>
+              <div class="accordion-body">
+                <label><span>Name</span><input name="name" value="${escapeHtml(check.name || "")}" required ${readonlyAttr} /></label>
+                <label>
+                  <span>Type</span>
+                  <select name="type" ${readonlyAttr}>
+                    <option value="http" ${check.type === "http" ? "selected" : ""}>HTTP</option>
+                    <option value="dns" ${check.type === "dns" ? "selected" : ""}>DNS</option>
+                    <option value="auth" ${check.type === "auth" ? "selected" : ""}>Auth</option>
+                    <option value="database" ${check.type === "database" ? "selected" : ""}>Database</option>
+                    <option value="generic" ${check.type === "generic" ? "selected" : ""}>Generic</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Enabled</span>
+                  <select name="enabled" ${readonlyAttr}>
+                    <option value="true" ${check.enabled !== false ? "selected" : ""}>Enabled</option>
+                    <option value="false" ${check.enabled === false ? "selected" : ""}>Disabled</option>
+                  </select>
+                </label>
+              </div>
+            </details>
+
+            <details class="accordion-item" ${isNew ? "" : "open"}>
+              <summary class="accordion-summary">
+                <div>
+                  <strong>Target And Schedule</strong>
+                  <div class="status-meta">
+                    <span>What to monitor and how often to run it</span>
+                  </div>
+                </div>
+              </summary>
+              <div class="accordion-body">
+                <label><span>Interval Seconds</span><input name="interval_seconds" type="number" min="1" value="${escapeHtml(check.interval_seconds || 300)}" required ${readonlyAttr} /></label>
+                <label><span>Timeout Seconds</span><input name="timeout_seconds" type="number" min="1" value="${escapeHtml(check.timeout_seconds || 10)}" ${readonlyAttr} /></label>
+                <label class="field-url ${["http", "auth"].includes(check.type) ? "" : "hidden"}"><span>URL</span><input name="url" value="${escapeHtml(check.url || "")}" ${readonlyAttr} /></label>
+                <label class="field-host ${["dns", "database", "generic"].includes(check.type) ? "" : "hidden"}"><span>Host</span><input name="host" value="${escapeHtml(check.host || "")}" ${readonlyAttr} /></label>
+                <label class="field-port ${["http", "auth", "database", "generic"].includes(check.type) ? "" : "hidden"}"><span>Port</span><input name="port" type="number" min="1" max="65535" value="${escapeHtml(check.port || "")}" ${readonlyAttr} /></label>
+              </div>
+            </details>
+
+            <details class="accordion-item" ${isNew ? "" : "open"}>
+              <summary class="accordion-summary">
+                <div>
+                  <strong>Monitor Placement</strong>
+                  <div class="status-meta">
+                    <span>Choose a specific monitoring container or let the service auto-place it</span>
+                  </div>
+                </div>
+              </summary>
+              <div class="accordion-body">
+                <label>
+                  <span>Placement</span>
+                  <select name="placement_mode" ${readonlyAttr}>
+                    <option value="auto" ${placementMode !== "specific" ? "selected" : ""}>Auto-select the healthiest least-loaded container</option>
+                    <option value="specific" ${placementMode === "specific" ? "selected" : ""}>Choose a specific monitoring container</option>
+                  </select>
+                </label>
+                <label class="field-assigned-node ${placementMode === "specific" ? "" : "hidden"}">
+                  <span>Monitoring Container</span>
+                  <select name="assigned_node_id" ${readonlyAttr}>
+                    <option value="">Select a monitoring container</option>
+                    ${nodes
+                      .map(
+                        (node) => `<option value="${escapeHtml(node.node_id)}" ${selectedNodeId === node.node_id ? "selected" : ""}>${escapeHtml(node.label)}${node.healthy ? " | healthy" : " | unhealthy"} | ${escapeHtml(node.description || "")}</option>`
+                      )
+                      .join("")}
+                  </select>
+                </label>
+                <div class="guide-card">
+                  <h4>Placement Notes</h4>
+                  <p>${nodes.length ? "Auto placement keeps new endpoint checks on healthy full-monitoring nodes and balances them across the cluster." : "No full-monitoring peer nodes are currently available, so this monitor will stay on the local node."}</p>
+                </div>
+              </div>
+            </details>
+
+            <details class="accordion-item ${["http", "auth"].includes(check.type) ? "validation-open" : ""}" ${!isNew && ["http", "auth"].includes(check.type) ? "open" : ""}>
+              <summary class="accordion-summary field-statuses ${["http", "auth"].includes(check.type) ? "" : "hidden"}">
+                <div>
+                  <strong>Validation Rules</strong>
+                  <div class="status-meta">
+                    <span>Status codes and content assertions</span>
+                  </div>
+                </div>
+              </summary>
+              <div class="accordion-body field-statuses ${["http", "auth"].includes(check.type) ? "" : "hidden"}">
+                <label class="field-statuses ${["http", "auth"].includes(check.type) ? "" : "hidden"}"><span>Expected Statuses</span><input name="expected_statuses" value="${escapeHtml(csv(check.expected_statuses || [200]))}" ${readonlyAttr} /></label>
+                <label class="field-content ${["http", "auth"].includes(check.type) ? "" : "hidden"}"><span>Contains Text</span><input name="contains" value="${escapeHtml(csv(check.content_rules?.contains || []))}" ${readonlyAttr} /></label>
+                <label class="field-content ${["http", "auth"].includes(check.type) ? "" : "hidden"}"><span>Exclude Text</span><input name="not_contains" value="${escapeHtml(csv(check.content_rules?.not_contains || []))}" ${readonlyAttr} /></label>
+                <label class="field-content ${["http", "auth"].includes(check.type) ? "" : "hidden"}"><span>Regex</span><input name="regex" value="${escapeHtml(check.content_rules?.regex || "")}" ${readonlyAttr} /></label>
+              </div>
+            </details>
+
+            <details class="accordion-item auth-only ${!["http", "auth"].includes(check.type) ? "hidden" : ""}" ${!isNew && ["http", "auth"].includes(check.type) ? "open" : ""}>
+              <summary class="accordion-summary auth-only ${!["http", "auth"].includes(check.type) ? "hidden" : ""}">
+                <div>
+                  <strong>Authentication</strong>
+                  <div class="status-meta">
+                    <span>Credentials and auth headers for protected HTTP endpoints</span>
+                  </div>
+                </div>
+              </summary>
+              <div class="accordion-body auth-only ${!["http", "auth"].includes(check.type) ? "hidden" : ""}">
+                <label class="auth-only ${!["http", "auth"].includes(check.type) ? "hidden" : ""}" data-auth-field="type">
+                  <span>Auth Type</span>
+                  <select name="auth_type" ${readonlyAttr}>
+                    <option value="none" ${authType === "none" ? "selected" : ""}>None</option>
+                    <option value="bearer" ${authType === "bearer" ? "selected" : ""}>Bearer</option>
+                    <option value="basic" ${authType === "basic" ? "selected" : ""}>Basic</option>
+                    <option value="header" ${authType === "header" ? "selected" : ""}>Header</option>
+                  </select>
+                </label>
+                <label class="auth-only ${!["http", "auth"].includes(check.type) || authType !== "bearer" ? "hidden" : ""}" data-auth-field="token"><span>Bearer Token</span><input name="token" value="${escapeHtml(auth.token || "")}" ${readonlyAttr} /></label>
+                <label class="auth-only ${!["http", "auth"].includes(check.type) || authType !== "basic" ? "hidden" : ""}" data-auth-field="username"><span>Username</span><input name="username" value="${escapeHtml(auth.username || "")}" ${readonlyAttr} /></label>
+                <label class="auth-only ${!["http", "auth"].includes(check.type) || authType !== "basic" ? "hidden" : ""}" data-auth-field="password"><span>Password</span><input name="password" type="password" value="${escapeHtml(auth.password || "")}" ${readonlyAttr} /></label>
+                <label class="auth-only ${!["http", "auth"].includes(check.type) || authType !== "header" ? "hidden" : ""}" data-auth-field="header_name"><span>Header Name</span><input name="header_name" value="${escapeHtml(auth.header_name || "")}" ${readonlyAttr} /></label>
+                <label class="auth-only ${!["http", "auth"].includes(check.type) || authType !== "header" ? "hidden" : ""}" data-auth-field="header_value"><span>Header Value</span><input name="header_value" value="${escapeHtml(auth.header_value || "")}" ${readonlyAttr} /></label>
+                <div class="button-row ${editable ? "" : "hidden"}">
+                  <button type="button" class="secondary" id="test-auth-btn">Test Auth</button>
+                </div>
+                <p class="form-status" id="test-auth-status"></p>
+              </div>
+            </details>
+
+            <details class="accordion-item database-only ${check.type !== "database" ? "hidden" : ""}" ${!isNew && check.type === "database" ? "open" : ""}>
+              <summary class="accordion-summary database-only ${check.type !== "database" ? "hidden" : ""}">
+                <div>
+                  <strong>Database Settings</strong>
+                  <div class="status-meta">
+                    <span>Connection details for database monitoring</span>
+                  </div>
+                </div>
+              </summary>
+              <div class="accordion-body database-only ${check.type !== "database" ? "hidden" : ""}">
+                <label class="database-only ${check.type !== "database" ? "hidden" : ""}"><span>Database Name</span><input name="database_name" value="${escapeHtml(check.database_name || "")}" ${readonlyAttr} /></label>
+                <label class="database-only ${check.type !== "database" ? "hidden" : ""}">
+                  <span>Database Engine</span>
+                  <select name="database_engine" ${readonlyAttr}>
+                    <option value="mysql" ${(check.database_engine || "mysql") === "mysql" ? "selected" : ""}>MySQL</option>
+                  </select>
+                </label>
+                <label class="database-only ${check.type !== "database" ? "hidden" : ""}"><span>Database Username</span><input name="database_username" value="${escapeHtml(auth.username || "")}" ${readonlyAttr} /></label>
+                <label class="database-only ${check.type !== "database" ? "hidden" : ""}"><span>Database Password</span><input name="database_password" type="password" value="${escapeHtml(auth.password || "")}" ${readonlyAttr} /></label>
+              </div>
+            </details>
+          </div>
+          <div class="button-row ${editable ? "" : "hidden"}">
+            <button type="button" class="secondary" id="test-monitor-btn">Test Monitor</button>
+            <button type="submit">${isNew ? "Create Monitor" : "Save Changes"}</button>
+            ${
+              isNew
+                ? ""
+                : `<button type="button" class="secondary" id="toggle-monitor-btn">${check.enabled ? "Disable" : "Enable"}</button>
+                   <button type="button" class="danger" id="delete-monitor-btn">Delete</button>`
+            }
+          </div>
+          <p class="form-status" id="monitor-form-status">${managed ? "This monitor is managed by service configuration." : canWrite ? "" : "Read-only access: editing is disabled for this account."}</p>
+        </form>
       </section>
     </div>
   `;
 }
 
 function renderContainersPage(peers, containers, nodeMetrics, cluster = { enabled: false, node_id: "monitor-1", peers: [], local_assigned_checks: [] }) {
-  setWorkspaceHeader("Configure Containers", "Configure peer monitors, add new nodes, and define how the cluster is managed.");
+  setWorkspaceHeader("Configure Containers", "Configure peer monitors, add new nodes, and define how the cluster is managed.", [
+    { label: "Cluster", href: "/cluster/configure" },
+    { label: "Configure Containers" },
+  ]);
   const root = document.getElementById("app-root");
   const canAdmin = hasRole("admin");
   const clusterContainers = containers.available ? containers.containers : [];
@@ -1267,7 +1445,11 @@ function renderContainersPage(peers, containers, nodeMetrics, cluster = { enable
 }
 
 function renderContainerDetailPage(container, peer, nodeMetrics) {
-  setWorkspaceHeader(container.name, "Manage the current live container and review its cluster health.");
+  setWorkspaceHeader(container.name, "Manage the current live container and review its cluster health.", [
+    { label: "Cluster", href: "/cluster/configure" },
+    { label: "Configure Containers", href: "/cluster/configure" },
+    { label: container.name },
+  ]);
   const root = document.getElementById("app-root");
   const canAdmin = hasRole("admin");
   const status = container.status === "running" ? "healthy" : "disabled";
@@ -1347,7 +1529,9 @@ function renderContainerDetailPage(container, peer, nodeMetrics) {
 }
 
 function renderGuidePage() {
-  setWorkspaceHeader("FAQ", "Answers to common setup, operations, scaling, and access questions.");
+  setWorkspaceHeader("FAQ", "Answers to common setup, operations, scaling, and access questions.", [
+    { label: "FAQ" },
+  ]);
   const root = document.getElementById("app-root");
   root.innerHTML = `
     <div class="stack">
@@ -1427,7 +1611,9 @@ function renderGuidePage() {
 }
 
 function renderAdminPage(users, telemetry, portalSettings, emailSettings) {
-  setWorkspaceHeader("Administration", "Create accounts and control who can view, edit, or fully administer the platform.");
+  setWorkspaceHeader("Administration", "Create accounts and control who can view, edit, or fully administer the platform.", [
+    { label: "Administration" },
+  ]);
   const root = document.getElementById("app-root");
   const enabledUsers = users.filter((user) => user.enabled).length;
   root.innerHTML = `
@@ -1910,8 +2096,14 @@ function setStatus(element, text, isError = false) {
 
 function isInteractiveRoute(path = window.location.pathname) {
   return (
+    path === "/monitors" ||
     path === "/configured-monitors" ||
     path === "/monitors/new" ||
+    path === "/monitors/new/basic" ||
+    path === "/monitors/new/advanced" ||
+    path === "/monitors/new/advanced/browser-health-monitor" ||
+    path === "/monitors/new/advanced/real-user-monitoring" ||
+    path === "/monitors/new/advanced/monitor-recorder" ||
     path.startsWith("/monitors/") ||
     path === "/profile" ||
     path === "/admin" ||
@@ -1947,13 +2139,22 @@ async function renderRoute() {
     : { available: false, containers: [] };
   renderSidebar(checks, containersData);
 
-  if (path === "/" || path === "/monitors") {
+  if (path === "/") {
     const [checkMetrics, nodeMetrics, cluster] = await Promise.all([
       api("/api/metrics/checks"),
       api("/api/metrics/nodes"),
       api("/api/cluster"),
     ]);
     renderDashboard(overview, checks, summaryCounts, checkMetrics, nodeMetrics, cluster);
+    return;
+  }
+
+  if (path === "/monitors") {
+    const checkMetrics = await api("/api/metrics/checks");
+    checks.forEach((check) => {
+      check.metric_points = checkMetrics[check.name] || [];
+    });
+    renderMonitorsHomePage(checks);
     return;
   }
 
@@ -1994,8 +2195,37 @@ async function renderRoute() {
   }
 
   if (path === "/monitors/new") {
+    renderAddMonitorHomePage();
+    return;
+  }
+
+  if (path === "/monitors/new/advanced") {
+    renderAdvancedMonitorHomePage();
+    return;
+  }
+
+  if (path === "/monitors/new/advanced/browser-health-monitor") {
+    renderAdvancedMonitorSubpage("Browser Health Monitor", "Reserved for browser-based health and synthetic experience monitoring.");
+    return;
+  }
+
+  if (path === "/monitors/new/advanced/real-user-monitoring") {
+    renderAdvancedMonitorSubpage("Real User Monitoring", "Reserved for real user monitoring workflows and telemetry capture.");
+    return;
+  }
+
+  if (path === "/monitors/new/advanced/monitor-recorder") {
+    renderAdvancedMonitorSubpage("Monitor Recorder", "Reserved for recording monitor journeys and reusable monitor definitions.");
+    return;
+  }
+
+  if (path === "/monitors/new/basic") {
     const cluster = await api("/api/cluster");
-    setWorkspaceHeader("Add Monitor", "Create a new endpoint monitor with its own health rules and authentication.");
+    setWorkspaceHeader("Basic Monitor", "Create a new endpoint monitor with its own health rules and authentication.", [
+      { label: "Monitors", href: "/monitors" },
+      { label: "Add Monitor", href: "/monitors/new" },
+      { label: "Basic Monitor" },
+    ]);
     document.getElementById("app-root").innerHTML = monitorFormMarkup(
       {
         name: "",
@@ -2032,7 +2262,11 @@ async function renderRoute() {
       api("/api/cluster"),
     ]);
     check.metric_points = checkMetrics[check.name] || [];
-    setWorkspaceHeader(check.name, "Dedicated monitor page for editing, auth updates, and immediate re-checks.");
+    setWorkspaceHeader(check.name, "Dedicated monitor page for editing, auth updates, and immediate re-checks.", [
+      { label: "Monitors", href: "/monitors" },
+      { label: "Configured Monitors", href: "/configured-monitors" },
+      { label: check.name },
+    ]);
     document.getElementById("app-root").innerHTML = monitorFormMarkup(check, "edit", cluster);
     const form = document.getElementById("monitor-form");
     hydrateFormVisibility(form);
@@ -2262,7 +2496,7 @@ async function handleSubmit(event) {
     if (!hasRole("read_write")) return;
     const form = event.target;
     const status = document.getElementById("monitor-form-status");
-    const isNew = window.location.pathname === "/monitors/new";
+    const isNew = window.location.pathname === "/monitors/new/basic";
     try {
       setStatus(status, isNew ? "Creating monitor..." : "Saving monitor and re-running...");
       const payload = monitorFormPayload(form);
