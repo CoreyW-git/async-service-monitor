@@ -15,6 +15,10 @@ function createRecorderState() {
     playwrightPollHandle: null,
     playwrightLaunchInFlight: false,
     lastTestResult: null,
+    waitUntil: "load",
+    viewportWidth: 1440,
+    viewportHeight: 900,
+    javascriptEnabled: true,
   };
 }
 
@@ -3205,9 +3209,9 @@ function basicMonitorBuilderMarkup(
             </div>
             <div class="stack">
               <div class="guide-card">
-                <h4>1. Select Request Type</h4>
+                <h4 title="Choose the kind of monitor you want to build so the builder can show the right request, assertion, and scheduling options.">1. Select Request Type</h4>
                 <label>
-                  <span>Monitor Type</span>
+                  <span title="HTTP and API are request-based monitors, Auth focuses on protected endpoints, DNS checks name resolution, Database checks connectivity, and Generic handles simple host or port verification.">Monitor Type</span>
                   <select name="type">
                     <option value="http" ${check.type === "http" ? "selected" : ""}>HTTP</option>
                     <option value="api" ${check.type === "api" ? "selected" : ""}>API</option>
@@ -3220,19 +3224,19 @@ function basicMonitorBuilderMarkup(
               </div>
 
               <div class="guide-card builder-section-request">
-                <h4>2. Define Request</h4>
+                <h4 title="Describe the endpoint, host, method, payload, and authentication details the monitor should use when it runs.">2. Define Request</h4>
                 <div class="guide-grid">
-                  <label class="field-url ${requestLike ? "" : "hidden"}"><span>URL</span><input name="url" value="${escapeHtml(check.url || "")}" placeholder="https://api.example.com/v1/orders" /></label>
-                  <label class="field-host ${requestLike ? "hidden" : ""} ${["dns", "database", "generic"].includes(check.type) ? "" : "hidden"}"><span>Host</span><input name="host" value="${escapeHtml(check.host || "")}" placeholder="service.internal" /></label>
-                  <label class="field-port ${check.type !== "dns" ? "" : "hidden"}"><span>Port</span><input name="port" type="number" min="1" max="65535" value="${escapeHtml(check.port || "")}" placeholder="443" /></label>
+                  <label class="field-url ${requestLike ? "" : "hidden"}"><span title="The full request URL the monitor should call when this is a request-based monitor.">URL</span><input name="url" value="${escapeHtml(check.url || "")}" placeholder="https://api.example.com/v1/orders" /></label>
+                  <label class="field-host ${requestLike ? "hidden" : ""} ${["dns", "database", "generic"].includes(check.type) ? "" : "hidden"}"><span title="The hostname or service name this monitor should resolve or connect to.">Host</span><input name="host" value="${escapeHtml(check.host || "")}" placeholder="service.internal" /></label>
+                  <label class="field-port ${check.type !== "dns" ? "" : "hidden"}"><span title="Optional port to target when the service does not run on its default port.">Port</span><input name="port" type="number" min="1" max="65535" value="${escapeHtml(check.port || "")}" placeholder="443" /></label>
                   <label class="builder-request-method ${requestLike ? "" : "hidden"}">
-                    <span>Method</span>
+                    <span title="The HTTP method to send when testing the endpoint or API.">Method</span>
                     <select name="request_method">
                       ${["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"].map((method) => `<option value="${method}" ${check.request_method === method ? "selected" : ""}>${method}</option>`).join("")}
                     </select>
                   </label>
                   <label class="builder-request-body-mode ${requestLike ? "" : "hidden"}">
-                    <span>Body Mode</span>
+                    <span title="Choose whether the request sends no body, a JSON payload, or plain text content.">Body Mode</span>
                     <select name="request_body_mode">
                       <option value="none" ${requestBodyMode === "none" ? "selected" : ""}>No Body</option>
                       <option value="json" ${requestBodyMode === "json" ? "selected" : ""}>JSON</option>
@@ -3241,11 +3245,11 @@ function basicMonitorBuilderMarkup(
                   </label>
                 </div>
                 <label class="builder-request-headers ${requestLike ? "" : "hidden"}">
-                  <span>Request Headers</span>
+                  <span title="Optional request headers sent with the monitor call, one per line as Header: Value.">Request Headers</span>
                   <textarea name="request_headers_text" rows="5" placeholder="Accept: application/json&#10;X-Correlation-Id: monitor-build">${escapeHtml(formatHeaderLines(check.request_headers || []))}</textarea>
                 </label>
                 <label class="builder-request-body ${requestLike && requestBodyMode !== "none" ? "" : "hidden"}">
-                  <span>Request Body</span>
+                  <span title="The request payload the monitor sends when body mode is JSON or text.">Request Body</span>
                   <textarea name="request_body" rows="8" placeholder='{"customerId":"12345"}'>${escapeHtml(check.request_body || "")}</textarea>
                 </label>
                 <details class="accordion-item auth-only ${requestLike ? "" : "hidden"}">
@@ -3259,7 +3263,7 @@ function basicMonitorBuilderMarkup(
                   </summary>
                   <div class="accordion-body">
                     <label data-auth-field="type">
-                      <span>Auth Type</span>
+                      <span title="Choose how the monitor should authenticate when the endpoint requires credentials.">Auth Type</span>
                       <select name="auth_type">
                         <option value="none" ${authType === "none" ? "selected" : ""}>None</option>
                         <option value="bearer" ${authType === "bearer" ? "selected" : ""}>Bearer</option>
@@ -3281,38 +3285,38 @@ function basicMonitorBuilderMarkup(
               </div>
 
               <div class="guide-card builder-section-assertions ${builderHasTest ? "" : "builder-locked"}">
-                <h4>3. Define Assertions</h4>
+                <h4 title="Set the expected outcomes the test must satisfy, such as status code, response time, headers, and body content.">3. Define Assertions</h4>
                 <p class="subtle">${builderHasTest ? "Tune the assertions using the live test output on the right." : "Run a request test first. This section becomes much easier to configure once the builder has a real response to work from."}</p>
                 <div class="guide-grid">
-                  <label class="${requestLike ? "" : "hidden"}"><span>Expected Status Codes</span><input name="expected_statuses" value="${escapeHtml(csv(check.expected_statuses || [200]))}" placeholder="200,201" /></label>
-                  <label class="${requestLike ? "" : "hidden"}"><span>Max Response Time (ms)</span><input name="max_response_time_ms" type="number" min="1" value="${escapeHtml(check.max_response_time_ms || "")}" placeholder="1500" /></label>
+                  <label class="${requestLike ? "" : "hidden"}"><span title="Comma-separated status codes that count as a successful response.">Expected Status Codes</span><input name="expected_statuses" value="${escapeHtml(csv(check.expected_statuses || [200]))}" placeholder="200,201" /></label>
+                  <label class="${requestLike ? "" : "hidden"}"><span title="Maximum acceptable response time before the monitor treats the request as too slow.">Max Response Time (ms)</span><input name="max_response_time_ms" type="number" min="1" value="${escapeHtml(check.max_response_time_ms || "")}" placeholder="1500" /></label>
                 </div>
                 <label class="${requestLike ? "" : "hidden"}">
-                  <span>Expected Response Headers</span>
+                  <span title="Headers that must appear in the response, one per line as Header: ExpectedValue.">Expected Response Headers</span>
                   <textarea name="expected_headers_text" rows="4" placeholder="content-type: application/json&#10;cache-control: no-store">${escapeHtml(formatHeaderLines(check.expected_headers || [], true))}</textarea>
                 </label>
-                <label class="${requestLike ? "" : "hidden"}"><span>Body Must Contain</span><input name="contains" value="${escapeHtml(csv(check.content_rules?.contains || []))}" placeholder="success,orderId" /></label>
-                <label class="${requestLike ? "" : "hidden"}"><span>Body Must Not Contain</span><input name="not_contains" value="${escapeHtml(csv(check.content_rules?.not_contains || []))}" placeholder="error,failure" /></label>
-                <label class="${requestLike ? "" : "hidden"}"><span>Regex Match</span><input name="regex" value="${escapeHtml(check.content_rules?.regex || "")}" placeholder="\"status\"\\s*:\\s*\"ok\"" /></label>
+                <label class="${requestLike ? "" : "hidden"}"><span title="Strings that must appear somewhere in the response body.">Body Must Contain</span><input name="contains" value="${escapeHtml(csv(check.content_rules?.contains || []))}" placeholder="success,orderId" /></label>
+                <label class="${requestLike ? "" : "hidden"}"><span title="Strings that must not appear in the response body.">Body Must Not Contain</span><input name="not_contains" value="${escapeHtml(csv(check.content_rules?.not_contains || []))}" placeholder="error,failure" /></label>
+                <label class="${requestLike ? "" : "hidden"}"><span title="Optional regular expression the response body must match.">Regex Match</span><input name="regex" value="${escapeHtml(check.content_rules?.regex || "")}" placeholder="\"status\"\\s*:\\s*\"ok\"" /></label>
               </div>
 
               <div class="guide-card">
-                <h4>4. Define Retry Conditions</h4>
+                <h4 title="Control how the monitor should retry when a request fails, times out, or returns retryable status codes.">4. Define Retry Conditions</h4>
                 <div class="guide-grid">
-                  <label><span>Attempts</span><input name="retry_attempts" type="number" min="1" value="${escapeHtml(retry.attempts || 1)}" /></label>
-                  <label><span>Delay Seconds</span><input name="retry_delay_seconds" type="number" min="0" step="0.1" value="${escapeHtml(retry.delay_seconds || 0)}" /></label>
+                  <label><span title="How many times the monitor should try the request before giving up.">Attempts</span><input name="retry_attempts" type="number" min="1" value="${escapeHtml(retry.attempts || 1)}" /></label>
+                  <label><span title="How long to wait between retry attempts.">Delay Seconds</span><input name="retry_delay_seconds" type="number" min="0" step="0.1" value="${escapeHtml(retry.delay_seconds || 0)}" /></label>
                 </div>
-                <label class="${requestLike ? "" : "hidden"}"><span>Retry On Status Codes</span><input name="retry_on_statuses" value="${escapeHtml(csv(retry.retry_on_statuses || []))}" placeholder="429,500,502,503,504" /></label>
+                <label class="${requestLike ? "" : "hidden"}"><span title="Status codes that should cause the monitor to retry instead of failing immediately.">Retry On Status Codes</span><input name="retry_on_statuses" value="${escapeHtml(csv(retry.retry_on_statuses || []))}" placeholder="429,500,502,503,504" /></label>
                 <div class="guide-grid">
                   <label>
-                    <span>Retry On Timeout</span>
+                    <span title="Whether a request timeout should trigger another attempt.">Retry On Timeout</span>
                     <select name="retry_on_timeout">
                       <option value="true" ${retry.retry_on_timeout !== false ? "selected" : ""}>Yes</option>
                       <option value="false" ${retry.retry_on_timeout === false ? "selected" : ""}>No</option>
                     </select>
                   </label>
                   <label>
-                    <span>Retry On Connection Error</span>
+                    <span title="Whether network connection failures should trigger another attempt.">Retry On Connection Error</span>
                     <select name="retry_on_connection_error">
                       <option value="true" ${retry.retry_on_connection_error !== false ? "selected" : ""}>Yes</option>
                       <option value="false" ${retry.retry_on_connection_error === false ? "selected" : ""}>No</option>
@@ -3322,21 +3326,21 @@ function basicMonitorBuilderMarkup(
               </div>
 
               <div class="guide-card">
-                <h4>5. Define Scheduling And Alert Conditions</h4>
+                <h4 title="Set how often the monitor runs, where it runs, and what warning or critical thresholds should be applied.">5. Define Scheduling And Alert Conditions</h4>
                 <div class="guide-grid">
-                  <label><span>Interval Seconds</span><input name="interval_seconds" type="number" min="1" value="${escapeHtml(check.interval_seconds || 300)}" /></label>
-                  <label><span>Timeout Seconds</span><input name="timeout_seconds" type="number" min="1" value="${escapeHtml(check.timeout_seconds || 10)}" /></label>
+                  <label><span title="How often this monitor should execute on its schedule.">Interval Seconds</span><input name="interval_seconds" type="number" min="1" value="${escapeHtml(check.interval_seconds || 300)}" /></label>
+                  <label><span title="How long the monitor is allowed to run before it times out.">Timeout Seconds</span><input name="timeout_seconds" type="number" min="1" value="${escapeHtml(check.timeout_seconds || 10)}" /></label>
                 </div>
                 <div class="guide-grid">
                   <label>
-                    <span>Placement</span>
+                    <span title="Let the platform choose a monitoring node automatically or pin the monitor to a specific node.">Placement</span>
                     <select name="placement_mode">
                       <option value="auto" ${placementMode !== "specific" ? "selected" : ""}>Auto-select the healthiest least-loaded container</option>
                       <option value="specific" ${placementMode === "specific" ? "selected" : ""}>Choose a specific monitoring container</option>
                     </select>
                   </label>
                   <label class="field-assigned-node ${placementMode === "specific" ? "" : "hidden"}">
-                    <span>Monitoring Container</span>
+                    <span title="The exact monitoring container that should run this monitor when placement is set to specific.">Monitoring Container</span>
                     <select name="assigned_node_id">
                       <option value="">Select a monitoring container</option>
                       ${nodes
@@ -3351,11 +3355,11 @@ function basicMonitorBuilderMarkup(
               </div>
 
               <div class="guide-card">
-                <h4>6. Configure The Monitor</h4>
+                <h4 title="Finalize the monitor’s name and whether it should start running immediately after you create it.">6. Configure The Monitor</h4>
                 <div class="guide-grid">
-                  <label><span>Monitor Name</span><input name="name" value="${escapeHtml(check.name || "")}" placeholder="Orders API" required /></label>
+                  <label><span title="The display name shown in lists, dashboards, and status views for this monitor.">Monitor Name</span><input name="name" value="${escapeHtml(check.name || "")}" placeholder="Orders API" required /></label>
                   <label>
-                    <span>Enabled State</span>
+                    <span title="Whether the monitor should begin running as soon as it is created.">Enabled State</span>
                     <select name="enabled">
                       <option value="true" ${check.enabled !== false ? "selected" : ""}>Enabled</option>
                       <option value="false" ${check.enabled === false ? "selected" : ""}>Disabled</option>
@@ -3438,19 +3442,20 @@ function browserMonitorBuilderMarkup(check, mode, cluster = { node_id: "monitor-
             </div>
             <div class="stack">
               <div class="guide-card">
-                <h4>1. Define The Browser Target</h4>
+                <h4 title="Set the page URL, browser loading strategy, viewport, and runtime behavior used for this synthetic browser monitor.">1. Define The Browser Target</h4>
                 <div class="guide-grid">
-                  <label><span>Page URL</span><input name="url" value="${escapeHtml(check.url || "")}" placeholder="https://example.com" required ${canWrite ? "" : "disabled"} /></label>
-                  <label><span>Port</span><input name="port" type="number" min="1" max="65535" value="${escapeHtml(check.port || "")}" placeholder="Optional" ${canWrite ? "" : "disabled"} /></label>
-                  <label><span>Wait Until</span><select name="browser_wait_until" ${canWrite ? "" : "disabled"}><option value="networkidle" ${browser.wait_until === "networkidle" || !browser.wait_until ? "selected" : ""}>Network Idle</option><option value="load" ${browser.wait_until === "load" ? "selected" : ""}>Load</option><option value="domcontentloaded" ${browser.wait_until === "domcontentloaded" ? "selected" : ""}>DOMContentLoaded</option></select></label>
-                  <label><span>Timeout Seconds</span><input name="timeout_seconds" type="number" min="1" value="${escapeHtml(check.timeout_seconds || 30)}" ${canWrite ? "" : "disabled"} /></label>
-                  <label><span>Viewport Width</span><input name="browser_viewport_width" type="number" min="320" value="${escapeHtml(browser.viewport_width || 1440)}" ${canWrite ? "" : "disabled"} /></label>
-                  <label><span>Viewport Height</span><input name="browser_viewport_height" type="number" min="320" value="${escapeHtml(browser.viewport_height || 900)}" ${canWrite ? "" : "disabled"} /></label>
+                  <label><span title="The browser page this synthetic monitor should load first.">Page URL</span><input name="url" value="${escapeHtml(check.url || "")}" placeholder="https://example.com" required ${canWrite ? "" : "disabled"} /></label>
+                  <label><span title="Optional port to use when the target service is not on its default port.">Port</span><input name="port" type="number" min="1" max="65535" value="${escapeHtml(check.port || "")}" placeholder="Optional" ${canWrite ? "" : "disabled"} /></label>
+                  <label><span title="How long Playwright should wait for the page to be considered loaded before continuing.">Wait Until</span><select name="browser_wait_until" ${canWrite ? "" : "disabled"}><option value="load" ${browser.wait_until === "load" || !browser.wait_until ? "selected" : ""}>Load</option><option value="domcontentloaded" ${browser.wait_until === "domcontentloaded" ? "selected" : ""}>DOMContentLoaded</option><option value="networkidle" ${browser.wait_until === "networkidle" ? "selected" : ""}>Network Idle</option></select></label>
+                  <label><span title="The full browser journey timeout, including navigation, waits, and assertions.">Timeout Seconds</span><input name="timeout_seconds" type="number" min="1" value="${escapeHtml(check.timeout_seconds || 30)}" ${canWrite ? "" : "disabled"} /></label>
+                  <label><span title="The browser window width used during the synthetic run.">Viewport Width</span><input name="browser_viewport_width" type="number" min="320" value="${escapeHtml(browser.viewport_width || 1440)}" ${canWrite ? "" : "disabled"} /></label>
+                  <label><span title="The browser window height used during the synthetic run.">Viewport Height</span><input name="browser_viewport_height" type="number" min="320" value="${escapeHtml(browser.viewport_height || 900)}" ${canWrite ? "" : "disabled"} /></label>
+                  <label class="checkbox-field"><input name="browser_javascript_enabled" type="checkbox" ${browser.javascript_enabled !== false ? "checked" : ""} ${canWrite ? "" : "disabled"} /><span title="Turn this off when you want to reduce dynamic script behavior during troubleshooting. Leave it on for normal user-like journeys.">Enable page scripts during browser load and replay</span></label>
                 </div>
               </div>
 
               <div class="guide-card">
-                <h4>2. Test The Browser Target</h4>
+                <h4 title="Run the configured page and browser settings immediately so you can inspect the resulting diagnostics before saving.">2. Test The Browser Target</h4>
                 <p class="subtle">Run the page in place so the right-side console can show timing, step results, console noise, page errors, and the captured network log.</p>
                 <div class="button-row">
                   ${canWrite ? `<button type="button" id="test-browser-monitor-btn">Test Browser Monitor</button>` : ""}
@@ -3459,16 +3464,19 @@ function browserMonitorBuilderMarkup(check, mode, cluster = { node_id: "monitor-
               </div>
 
               <div class="guide-card ${activeResult ? "" : "builder-locked"}">
-                <h4>3. Define Assertions</h4>
+                <h4 title="Describe what the page must contain, which errors should fail the run, and whether a captured authenticated session should be reused.">3. Define Assertions</h4>
                 <p class="subtle">${activeResult ? "Tune the browser assertions using the test diagnostics on the right." : "Run a browser test first so you can validate the journey against a real page result instead of guessing."}</p>
-                <label><span>Expected Title Contains</span><input name="browser_expected_title_contains" value="${escapeHtml(browser.expected_title_contains || "")}" placeholder="Home | Example" ${canWrite ? "" : "disabled"} /></label>
-                <label><span>Required Selectors</span><input name="browser_required_selectors" value="${escapeHtml(csv(browser.required_selectors || []))}" placeholder="#app, nav a.login, footer" ${canWrite ? "" : "disabled"} /></label>
-                <label class="checkbox-field"><input name="browser_persist_auth_session" type="checkbox" ${browser.persist_auth_session ? "checked" : ""} ${canWrite ? "" : "disabled"} /><span>Reuse a captured authenticated browser session during scheduled runs</span></label>
+                <label><span title="The page title must contain this text after the journey completes.">Expected Title Contains</span><input name="browser_expected_title_contains" value="${escapeHtml(browser.expected_title_contains || "")}" placeholder="Home | Example" ${canWrite ? "" : "disabled"} /></label>
+                <label><span title="Selectors listed here must appear on the final page after the journey runs.">Required Selectors</span><input name="browser_required_selectors" value="${escapeHtml(csv(browser.required_selectors || []))}" placeholder="#app, nav a.login, footer" ${canWrite ? "" : "disabled"} /></label>
+                <label class="checkbox-field"><input name="browser_fail_on_script_errors" type="checkbox" ${browser.fail_on_script_errors ? "checked" : ""} ${canWrite ? "" : "disabled"} /><span title="When enabled, failed JavaScript file requests cause the browser monitor to fail.">Fail the monitor when script requests fail</span></label>
+                <label class="checkbox-field"><input name="browser_fail_on_page_errors" type="checkbox" ${browser.fail_on_page_errors ? "checked" : ""} ${canWrite ? "" : "disabled"} /><span title="When enabled, runtime page errors captured by the browser cause the monitor to fail.">Fail the monitor when the page reports runtime errors</span></label>
+                <label class="checkbox-field"><input name="browser_persist_auth_session" type="checkbox" ${browser.persist_auth_session ? "checked" : ""} ${canWrite ? "" : "disabled"} /><span title="Reuse a captured authenticated browser session when this monitor runs on its schedule.">Reuse a captured authenticated browser session during scheduled runs</span></label>
                 <div class="guide-card compact-card session-state-card">
                   <h4>Stored Browser Session</h4>
                   <p>${browser.has_storage_state ? "A recorded browser session is stored for this monitor." : "No recorded browser session is stored yet."}</p>
                   <div class="status-meta">
                     <span>${browser.persist_auth_session ? "Session replay enabled" : "Session replay disabled"}</span>
+                    <span>${browser.javascript_enabled === false ? "Scripts disabled" : "Scripts enabled"}</span>
                     <span>${browser.storage_state_captured_at ? `Captured ${fmtTime(browser.storage_state_captured_at)}` : "No capture timestamp"}</span>
                   </div>
                 </div>
@@ -3484,7 +3492,7 @@ function browserMonitorBuilderMarkup(check, mode, cluster = { node_id: "monitor-
               </div>
 
               <div class="guide-card">
-                <h4>4. Define The Browser Journey</h4>
+                <h4 title="Add, remove, and order the browser actions and assertions the monitor should replay every time it runs.">4. Define The Browser Journey</h4>
                 <p class="subtle">Add the browser steps you want to validate. The recorded and manual steps are replayed in this order every time the monitor runs.</p>
                 <div class="button-row ${canWrite ? "" : "hidden"}">
                   <button type="button" id="add-browser-step-btn">Add Step</button>
@@ -3495,26 +3503,26 @@ function browserMonitorBuilderMarkup(check, mode, cluster = { node_id: "monitor-
               </div>
 
               <div class="guide-card">
-                <h4>5. Define Scheduling And Alert Conditions</h4>
+                <h4 title="Set the run cadence, choose the execution node, and configure the alert thresholds used by dashboards and health state.">5. Define Scheduling And Alert Conditions</h4>
                 <div class="guide-grid">
-                  <label><span>Interval Seconds</span><input name="interval_seconds" type="number" min="1" value="${escapeHtml(check.interval_seconds || 300)}" ${canWrite ? "" : "disabled"} /></label>
+                  <label><span title="How often this browser monitor should run.">Interval Seconds</span><input name="interval_seconds" type="number" min="1" value="${escapeHtml(check.interval_seconds || 300)}" ${canWrite ? "" : "disabled"} /></label>
                   <label>
-                    <span>Placement</span>
+                    <span title="Let the platform choose where to run the browser monitor or assign it to a specific monitoring node.">Placement</span>
                     <select name="placement_mode" ${canWrite ? "" : "disabled"}>
                       <option value="auto" ${placementMode !== "specific" ? "selected" : ""}>Auto-select the healthiest least-loaded container</option>
                       <option value="specific" ${placementMode === "specific" ? "selected" : ""}>Choose a specific monitoring container</option>
                     </select>
                   </label>
-                  <label class="field-assigned-node ${placementMode === "specific" ? "" : "hidden"}"><span>Monitoring Container</span><select name="assigned_node_id" ${canWrite ? "" : "disabled"}><option value="">Select a monitoring container</option>${nodes.map((node) => `<option value="${escapeHtml(node.node_id)}" ${selectedNodeId === node.node_id ? "selected" : ""}>${escapeHtml(node.label)}${node.healthy ? " | healthy" : " | unhealthy"} | ${escapeHtml(node.description || "")}</option>`).join("")}</select></label>
+                  <label class="field-assigned-node ${placementMode === "specific" ? "" : "hidden"}"><span title="The monitoring container that should own and run this browser monitor when placement is specific.">Monitoring Container</span><select name="assigned_node_id" ${canWrite ? "" : "disabled"}><option value="">Select a monitoring container</option>${nodes.map((node) => `<option value="${escapeHtml(node.node_id)}" ${selectedNodeId === node.node_id ? "selected" : ""}>${escapeHtml(node.label)}${node.healthy ? " | healthy" : " | unhealthy"} | ${escapeHtml(node.description || "")}</option>`).join("")}</select></label>
                 </div>
                 ${alertThresholdFieldsMarkup(check, canWrite)}
               </div>
 
               <div class="guide-card">
-                <h4>6. Configure The Monitor</h4>
+                <h4 title="Give the monitor its final name and decide whether it should be enabled after saving.">6. Configure The Monitor</h4>
                 <div class="guide-grid">
-                  <label><span>Name</span><input name="name" value="${escapeHtml(check.name || "")}" required ${canWrite ? "" : "disabled"} /></label>
-                  <label><span>Enabled</span><select name="enabled" ${canWrite ? "" : "disabled"}><option value="true" ${check.enabled !== false ? "selected" : ""}>Enabled</option><option value="false" ${check.enabled === false ? "selected" : ""}>Disabled</option></select></label>
+                  <label><span title="The display name shown in monitor lists, dashboards, and run history.">Name</span><input name="name" value="${escapeHtml(check.name || "")}" required ${canWrite ? "" : "disabled"} /></label>
+                  <label><span title="Whether the browser monitor should begin running on its schedule after you save it.">Enabled</span><select name="enabled" ${canWrite ? "" : "disabled"}><option value="true" ${check.enabled !== false ? "selected" : ""}>Enabled</option><option value="false" ${check.enabled === false ? "selected" : ""}>Disabled</option></select></label>
                 </div>
               </div>
             </div>
@@ -3544,23 +3552,23 @@ function realUserMonitoringBuilderMarkup() {
           </div>
           <div class="stack">
             <div class="guide-card">
-              <h4>1. Define The Experience Scope</h4>
+              <h4 title="Describe the applications, pages, and journeys that future real user monitoring should observe.">1. Define The Experience Scope</h4>
               <p class="subtle">Choose the application, routes, and user journeys you want to observe. This section will become the place where you define page groups, flows, and business-critical entry points.</p>
             </div>
             <div class="guide-card">
-              <h4>2. Define The Data Collection Model</h4>
+              <h4 title="Plan which client-side performance and behavior signals should be collected from real user sessions.">2. Define The Data Collection Model</h4>
               <p class="subtle">This workflow is reserved for browser beacons, page timing, resource timing, and user-session context that represent how the application behaves for real users.</p>
             </div>
             <div class="guide-card">
-              <h4>3. Define Assertions And Experience Goals</h4>
+              <h4 title="Set future goals and thresholds for real user responsiveness, stability, and experience quality.">3. Define Assertions And Experience Goals</h4>
               <p class="subtle">Use this space for future thresholds like acceptable page responsiveness, error counts, and user-impacting regressions.</p>
             </div>
             <div class="guide-card">
-              <h4>4. Define Scheduling And Alert Conditions</h4>
+              <h4 title="Shape how future real user telemetry maps into alerts, retention, and operational thresholds.">4. Define Scheduling And Alert Conditions</h4>
               <p class="subtle">Real user monitoring will eventually tie into alerting, retention, and SLO-style dashboarding the same way the other monitor types do.</p>
             </div>
             <div class="guide-card">
-              <h4>5. Configure The Monitor</h4>
+              <h4 title="Reserve the final monitor identity and lifecycle settings for the future real user monitoring workflow.">5. Configure The Monitor</h4>
               <p class="subtle">This page is now framed like the other builders so the eventual feature can slot in without changing the user story again.</p>
             </div>
           </div>
@@ -3599,6 +3607,7 @@ function recorderBuilderPreviewMarkup() {
           <div class="status-meta">
             <span>${escapeHtml(state.recorder.mode === "playwright" ? "Chromium Recorder" : "Embedded Recorder")}</span>
             <span>${state.recorder.steps.length} recorded step${state.recorder.steps.length === 1 ? "" : "s"}</span>
+            <span>${state.recorder.javascriptEnabled ? "Scripts enabled" : "Scripts disabled"}</span>
           </div>
         </div>
         <div class="guide-card compact-card">
@@ -4422,15 +4431,17 @@ function browserMonitorMarkup(check, mode, cluster = { node_id: "monitor-1", pee
               <div class="accordion-body">
                 <label><span>Page URL</span><input name="url" value="${escapeHtml(check.url || "")}" placeholder="https://example.com" required ${canWrite ? "" : "disabled"} /></label>
                 <label><span>Port</span><input name="port" type="number" min="1" max="65535" value="${escapeHtml(check.port || "")}" placeholder="Optional" ${canWrite ? "" : "disabled"} /></label>
-                <label><span>Wait Until</span><select name="browser_wait_until" ${canWrite ? "" : "disabled"}><option value="networkidle" ${browser.wait_until === "networkidle" || !browser.wait_until ? "selected" : ""}>Network Idle</option><option value="load" ${browser.wait_until === "load" ? "selected" : ""}>Load</option><option value="domcontentloaded" ${browser.wait_until === "domcontentloaded" ? "selected" : ""}>DOMContentLoaded</option></select></label>
+                <label><span>Wait Until</span><select name="browser_wait_until" ${canWrite ? "" : "disabled"}><option value="load" ${browser.wait_until === "load" || !browser.wait_until ? "selected" : ""}>Load</option><option value="domcontentloaded" ${browser.wait_until === "domcontentloaded" ? "selected" : ""}>DOMContentLoaded</option><option value="networkidle" ${browser.wait_until === "networkidle" ? "selected" : ""}>Network Idle</option></select></label>
                 <label><span>Viewport Width</span><input name="browser_viewport_width" type="number" min="320" value="${escapeHtml(browser.viewport_width || 1440)}" ${canWrite ? "" : "disabled"} /></label>
                 <label><span>Viewport Height</span><input name="browser_viewport_height" type="number" min="320" value="${escapeHtml(browser.viewport_height || 900)}" ${canWrite ? "" : "disabled"} /></label>
+                <label class="checkbox-field"><input name="browser_javascript_enabled" type="checkbox" ${browser.javascript_enabled !== false ? "checked" : ""} ${canWrite ? "" : "disabled"} /><span>Enable page scripts during browser load and replay</span></label>
                 <label class="checkbox-field"><input name="browser_persist_auth_session" type="checkbox" ${browser.persist_auth_session ? "checked" : ""} ${canWrite ? "" : "disabled"} /><span>Reuse a captured authenticated browser session during scheduled runs</span></label>
                 <div class="guide-card compact-card session-state-card">
                   <h4>Stored Browser Session</h4>
                   <p>${browser.has_storage_state ? "A recorded browser session is stored for this monitor." : "No recorded browser session is stored yet."}</p>
                   <div class="status-meta">
                     <span>${browser.persist_auth_session ? "Session replay enabled" : "Session replay disabled"}</span>
+                    <span>${browser.javascript_enabled === false ? "Scripts disabled" : "Scripts enabled"}</span>
                     <span>${browser.storage_state_captured_at ? `Captured ${fmtTime(browser.storage_state_captured_at)}` : "No capture timestamp"}</span>
                   </div>
                 </div>
@@ -4459,6 +4470,8 @@ function browserMonitorMarkup(check, mode, cluster = { node_id: "monitor-1", pee
               <div class="accordion-body">
                 <label><span>Expected Title Contains</span><input name="browser_expected_title_contains" value="${escapeHtml(browser.expected_title_contains || "")}" placeholder="Home | Example" ${canWrite ? "" : "disabled"} /></label>
                 <label><span>Required Selectors</span><input name="browser_required_selectors" value="${escapeHtml(csv(browser.required_selectors || []))}" placeholder="#app, nav a.login, footer" ${canWrite ? "" : "disabled"} /></label>
+                <label class="checkbox-field"><input name="browser_fail_on_script_errors" type="checkbox" ${browser.fail_on_script_errors ? "checked" : ""} ${canWrite ? "" : "disabled"} /><span>Fail the monitor when script requests fail</span></label>
+                <label class="checkbox-field"><input name="browser_fail_on_page_errors" type="checkbox" ${browser.fail_on_page_errors ? "checked" : ""} ${canWrite ? "" : "disabled"} /><span>Fail the monitor when the page reports runtime errors</span></label>
               </div>
             </details>
 
@@ -4499,7 +4512,7 @@ function browserMonitorMarkup(check, mode, cluster = { node_id: "monitor-1", pee
 }
 
 function recorderStepToBrowserStep(step, index) {
-  if (step.event === "navigate" || step.event === "page_ready") {
+  if (step.event === "navigate") {
     return {
       name: step.title ? `Navigate to ${step.title}` : `Navigate ${index + 1}`,
       action: "navigate",
@@ -4559,9 +4572,12 @@ function recorderMonitorPayload(form) {
     browser: {
       expected_title_contains: String(formData.get("expected_title_contains") || "").trim() || null,
       required_selectors: parseCsv(formData.get("required_selectors") || ""),
-      wait_until: String(formData.get("wait_until") || "networkidle"),
+      wait_until: String(formData.get("wait_until") || "load"),
       viewport_width: Number(formData.get("viewport_width") || 1440),
       viewport_height: Number(formData.get("viewport_height") || 900),
+      javascript_enabled: String(formData.get("javascript_enabled")) === "true" || formData.get("javascript_enabled") === "on",
+      fail_on_script_errors: String(formData.get("fail_on_script_errors")) === "true" || formData.get("fail_on_script_errors") === "on",
+      fail_on_page_errors: String(formData.get("fail_on_page_errors")) === "true" || formData.get("fail_on_page_errors") === "on",
       persist_auth_session: String(formData.get("persist_auth_session")) === "true" || formData.get("persist_auth_session") === "on",
       storage_state: null,
       storage_state_captured_at: null,
@@ -4798,10 +4814,21 @@ function startPlaywrightRecorderPolling() {
   }, 1500);
 }
 
+function syncRecorderBuilderSettings() {
+  const form = document.getElementById("monitor-recorder-form");
+  if (!form) return;
+  const formData = new FormData(form);
+  state.recorder.waitUntil = String(formData.get("wait_until") || "load");
+  state.recorder.viewportWidth = Math.max(320, Number(formData.get("viewport_width") || 1440));
+  state.recorder.viewportHeight = Math.max(320, Number(formData.get("viewport_height") || 900));
+  state.recorder.javascriptEnabled = String(formData.get("javascript_enabled")) === "true" || formData.get("javascript_enabled") === "on";
+}
+
 async function launchPlaywrightRecorder(url) {
   if (state.recorder.playwrightLaunchInFlight) {
     return;
   }
+  syncRecorderBuilderSettings();
   state.recorder.playwrightLaunchInFlight = true;
   const status = document.getElementById("monitor-recorder-status");
   setStatus(status, "Launching Chromium recorder...");
@@ -4809,7 +4836,14 @@ async function launchPlaywrightRecorder(url) {
     if (state.recorder.playwrightSessionId) {
       await teardownPlaywrightRecorder(true);
     }
-    const session = await api(`/api/recorder/playwright-session?url=${encodeURIComponent(url)}`, { method: "POST" });
+    const params = new URLSearchParams({
+      url,
+      wait_until: state.recorder.waitUntil || "load",
+      viewport_width: String(state.recorder.viewportWidth || 1440),
+      viewport_height: String(state.recorder.viewportHeight || 900),
+      javascript_enabled: state.recorder.javascriptEnabled ? "true" : "false",
+    });
+    const session = await api(`/api/recorder/playwright-session?${params.toString()}`, { method: "POST" });
     state.recorder.mode = "playwright";
     state.recorder.playwrightSessionId = session.session_id;
     state.recorder.playwrightStatus = session.message || session.status || "Chromium recorder launch requested.";
@@ -4900,17 +4934,21 @@ function renderMonitorRecorderPage(cluster = { node_id: "monitor-1", peers: [], 
 
             <div class="stack">
               <div class="guide-card">
-                <h4>1. Define The Recorder Target</h4>
+                <h4 title="Choose the page, browser load strategy, rendering settings, and failure behavior the recorder should use before you start capturing a journey.">1. Define The Recorder Target</h4>
                 <div class="guide-grid">
-                  <label><span>Target URL</span><input name="url" id="monitor-recorder-url" value="${escapeHtml(state.recorder.targetUrl || "")}" placeholder="https://example.com/login" required /></label>
-                  <label><span>Wait Until</span><select name="wait_until"><option value="networkidle" selected>Network Idle</option><option value="load">Load</option><option value="domcontentloaded">DOMContentLoaded</option></select></label>
-                  <label><span>Viewport Width</span><input name="viewport_width" type="number" min="320" value="1440" /></label>
-                  <label><span>Viewport Height</span><input name="viewport_height" type="number" min="320" value="900" /></label>
+                  <label><span title="The page the recorder should open first when you begin capturing the journey.">Target URL</span><input name="url" id="monitor-recorder-url" value="${escapeHtml(state.recorder.targetUrl || "")}" placeholder="https://example.com/login" required /></label>
+                  <label><span title="How long Playwright should wait during navigation before treating the page as loaded enough to continue. Load is usually best for highly dynamic sites.">Wait Until</span><select name="wait_until"><option value="load" ${state.recorder.waitUntil === "load" ? "selected" : ""}>Load</option><option value="domcontentloaded" ${state.recorder.waitUntil === "domcontentloaded" ? "selected" : ""}>DOMContentLoaded</option><option value="networkidle" ${state.recorder.waitUntil === "networkidle" ? "selected" : ""}>Network Idle</option></select></label>
+                  <label><span title="The width of the browser window used for recording and replaying the browser journey.">Viewport Width</span><input name="viewport_width" type="number" min="320" value="${escapeHtml(state.recorder.viewportWidth || 1440)}" /></label>
+                  <label><span title="The height of the browser window used for recording and replaying the browser journey.">Viewport Height</span><input name="viewport_height" type="number" min="320" value="${escapeHtml(state.recorder.viewportHeight || 900)}" /></label>
+                  <label class="checkbox-field"><input name="javascript_enabled" type="checkbox" ${state.recorder.javascriptEnabled ? "checked" : ""} /><span title="Turn this off if you want to load a quieter version of the page for troubleshooting. Leave it on for normal browser journeys that depend on page scripts.">Enable page scripts while loading the recorder and replaying the saved journey</span></label>
+                  <label class="checkbox-field"><input name="fail_on_script_errors" type="checkbox" /><span title="When enabled, the saved browser monitor fails if any script request in the captured journey returns an error or fails to load.">Fail the saved browser monitor if script requests fail</span></label>
+                  <label class="checkbox-field"><input name="fail_on_page_errors" type="checkbox" /><span title="When enabled, the saved browser monitor fails if the browser reports runtime page errors during the replayed journey.">Fail the saved browser monitor if the page reports runtime errors</span></label>
                 </div>
+                <p class="form-note">Use <strong>Load</strong> for dynamic sites like Yahoo Finance. Disable scripts if you want a quieter document load while troubleshooting recorder behavior.</p>
               </div>
 
               <div class="guide-card">
-                <h4>2. Capture The Browser Journey</h4>
+                <h4 title="Start the embedded or Chromium recorder, then interact with the target page to capture the actions that should become synthetic browser steps.">2. Capture The Browser Journey</h4>
                 <div class="button-row">
                   <button type="button" id="start-monitor-recorder-btn">Start Embedded Recorder</button>
                   <button type="button" class="secondary" id="use-playwright-recorder-btn">Use Chromium Recorder</button>
@@ -4954,30 +4992,30 @@ function renderMonitorRecorderPage(cluster = { node_id: "monitor-1", peers: [], 
               </div>
 
               <div class="guide-card ${state.recorder.steps.length ? "" : "builder-locked"}">
-                <h4>3. Define Assertions And Session Reuse</h4>
+                <h4 title="Set the assertions that must hold true after the journey runs and decide whether the authenticated browser session should be reused later.">3. Define Assertions And Session Reuse</h4>
                 <p class="subtle">${state.recorder.steps.length ? "Use the recorded journey to decide what the synthetic should validate every time it runs." : "Capture at least one recorded interaction first so this section is driven by a real journey."}</p>
-                <label><span>Expected Title Contains</span><input name="expected_title_contains" placeholder="Optional title assertion" /></label>
-                <label><span>Required Selectors</span><input name="required_selectors" placeholder="#app, nav a.login" /></label>
-                <label class="checkbox-field"><input name="persist_auth_session" type="checkbox" /><span>Keep the authenticated browser session and reuse it when this monitor runs continuously</span></label>
+                <label><span title="The page title must contain this text after the browser journey finishes.">Expected Title Contains</span><input name="expected_title_contains" placeholder="Optional title assertion" /></label>
+                <label><span title="Selectors listed here must exist on the page after the journey runs. Separate multiple selectors with commas.">Required Selectors</span><input name="required_selectors" placeholder="#app, nav a.login" /></label>
+                <label class="checkbox-field"><input name="persist_auth_session" type="checkbox" /><span title="Store the authenticated browser session captured during recording so the monitor can keep running with that session later.">Keep the authenticated browser session and reuse it when this monitor runs continuously</span></label>
                 <p class="form-note">If you want this to become a continuously authenticated browser monitor, sign in during the recorder session and enable session reuse before saving.</p>
               </div>
 
               <div class="guide-card">
-                <h4>4. Define Scheduling And Alert Conditions</h4>
+                <h4 title="Choose how often the saved monitor runs, how long it can take, and where it should execute in the monitoring cluster.">4. Define Scheduling And Alert Conditions</h4>
                 <div class="guide-grid">
-                  <label><span>Interval Seconds</span><input name="interval_seconds" type="number" min="1" value="300" /></label>
-                  <label><span>Timeout Seconds</span><input name="timeout_seconds" type="number" min="1" value="30" /></label>
-                  <label><span>Placement</span><select name="placement_mode"><option value="auto" selected>Auto-select the healthiest least-loaded container</option><option value="specific">Choose a specific monitoring container</option></select></label>
-                  <label class="field-assigned-node hidden"><span>Monitoring Container</span><select name="assigned_node_id"><option value="">Select a monitoring container</option>${nodes.map((node) => `<option value="${escapeHtml(node.node_id)}" ${selectedNodeId === node.node_id ? "selected" : ""}>${escapeHtml(node.label)}${node.healthy ? " | healthy" : " | unhealthy"} | ${escapeHtml(node.description || "")}</option>`).join("")}</select></label>
+                  <label><span title="How often this saved monitor should run after you create it.">Interval Seconds</span><input name="interval_seconds" type="number" min="1" value="300" /></label>
+                  <label><span title="The maximum time the full browser monitor is allowed to run before the test is treated as timed out.">Timeout Seconds</span><input name="timeout_seconds" type="number" min="1" value="30" /></label>
+                  <label><span title="Let the platform place the monitor automatically, or pin it to a specific monitoring node.">Placement</span><select name="placement_mode"><option value="auto" selected>Auto-select the healthiest least-loaded container</option><option value="specific">Choose a specific monitoring container</option></select></label>
+                  <label class="field-assigned-node hidden"><span title="The monitoring node that should run this browser monitor when placement is set to a specific container.">Monitoring Container</span><select name="assigned_node_id"><option value="">Select a monitoring container</option>${nodes.map((node) => `<option value="${escapeHtml(node.node_id)}" ${selectedNodeId === node.node_id ? "selected" : ""}>${escapeHtml(node.label)}${node.healthy ? " | healthy" : " | unhealthy"} | ${escapeHtml(node.description || "")}</option>`).join("")}</select></label>
                 </div>
                 ${alertThresholdFieldsMarkup({ alert_thresholds: defaultAlertThresholds() }, true)}
               </div>
 
               <div class="guide-card">
-                <h4>5. Configure The Monitor</h4>
+                <h4 title="Finalize the saved monitor’s identity and whether it should start running immediately after creation.">5. Configure The Monitor</h4>
                 <div class="guide-grid">
-                  <label><span>Name</span><input name="name" value="Recorded Browser Monitor" required /></label>
-                  <label><span>Enabled</span><select name="enabled"><option value="true" selected>Enabled</option><option value="false">Disabled</option></select></label>
+                  <label><span title="The name shown everywhere else in the portal for this saved browser monitor.">Name</span><input name="name" value="Recorded Browser Monitor" required /></label>
+                  <label><span title="Whether this new monitor should begin running on its schedule as soon as it is saved.">Enabled</span><select name="enabled"><option value="true" selected>Enabled</option><option value="false">Disabled</option></select></label>
                 </div>
               </div>
 
@@ -6474,9 +6512,12 @@ function browserMonitorPayload(form) {
     browser: {
       expected_title_contains: String(formData.get("browser_expected_title_contains") || "").trim() || null,
       required_selectors: parseCsv(formData.get("browser_required_selectors") || ""),
-      wait_until: String(formData.get("browser_wait_until") || "networkidle"),
+      wait_until: String(formData.get("browser_wait_until") || "load"),
       viewport_width: Number(formData.get("browser_viewport_width") || 1440),
       viewport_height: Number(formData.get("browser_viewport_height") || 900),
+      javascript_enabled: String(formData.get("browser_javascript_enabled")) === "true" || formData.get("browser_javascript_enabled") === "on",
+      fail_on_script_errors: String(formData.get("browser_fail_on_script_errors")) === "true" || formData.get("browser_fail_on_script_errors") === "on",
+      fail_on_page_errors: String(formData.get("browser_fail_on_page_errors")) === "true" || formData.get("browser_fail_on_page_errors") === "on",
       persist_auth_session: String(formData.get("browser_persist_auth_session")) === "true" || formData.get("browser_persist_auth_session") === "on",
       storage_state: null,
       storage_state_captured_at: null,
@@ -7102,7 +7143,7 @@ async function renderRoute() {
         browser: {
           expected_title_contains: "",
           required_selectors: [],
-          wait_until: "networkidle",
+          wait_until: "load",
           viewport_width: 1440,
           viewport_height: 900,
           steps: [{ name: "Wait for main app", action: "wait_for_selector", selector: "body" }],
@@ -7757,6 +7798,7 @@ async function handleClick(event) {
 
   if (event.target.id === "start-monitor-recorder-btn") {
     if (!hasRole("read_write")) return;
+    syncRecorderBuilderSettings();
     const url = document.getElementById("monitor-recorder-url")?.value?.trim() || "";
     if (!url) {
       setStatus(document.getElementById("monitor-recorder-status"), "Enter a URL to start recording.", true);
@@ -7779,6 +7821,7 @@ async function handleClick(event) {
 
   if (event.target.id === "use-playwright-recorder-btn") {
     if (!hasRole("read_write")) return;
+    syncRecorderBuilderSettings();
     const url = document.getElementById("monitor-recorder-url")?.value?.trim() || state.recorder.targetUrl || "";
     if (!url) {
       setStatus(document.getElementById("monitor-recorder-status"), "Enter a URL before launching Chromium recorder.", true);
@@ -8118,6 +8161,30 @@ function handleInput(event) {
 
   if (event.target.id === "monitor-recorder-url") {
     state.recorder.targetUrl = event.target.value || "";
+    return;
+  }
+
+  if (event.target.matches("#monitor-recorder-form select[name='wait_until']")) {
+    state.recorder.waitUntil = String(event.target.value || "load");
+    refreshRecorderUi();
+    return;
+  }
+
+  if (event.target.matches("#monitor-recorder-form input[name='viewport_width']")) {
+    state.recorder.viewportWidth = Math.max(320, Number(event.target.value || 1440));
+    refreshRecorderUi();
+    return;
+  }
+
+  if (event.target.matches("#monitor-recorder-form input[name='viewport_height']")) {
+    state.recorder.viewportHeight = Math.max(320, Number(event.target.value || 900));
+    refreshRecorderUi();
+    return;
+  }
+
+  if (event.target.matches("#monitor-recorder-form input[name='javascript_enabled']")) {
+    state.recorder.javascriptEnabled = Boolean(event.target.checked);
+    refreshRecorderUi();
   }
 }
 
@@ -8125,7 +8192,21 @@ function handleWindowMessage(event) {
   const payload = event.data;
   if (!payload || payload.source !== "asm-recorder") return;
 
-  if (payload.event === "navigate" || payload.event === "page_ready") {
+  if (payload.event === "page_ready") {
+    state.recorder.lastPageUrl = payload.url || state.recorder.lastPageUrl;
+    const pageLabel = document.getElementById("monitor-recorder-page-label");
+    if (pageLabel) {
+      pageLabel.textContent = state.recorder.lastPageUrl || "No page loaded";
+    }
+    const blockedReason = recorderBlockedReason(payload);
+    if (blockedReason) {
+      suggestPlaywrightFallback(blockedReason);
+      setStatus(document.getElementById("monitor-recorder-status"), blockedReason, true);
+    }
+    return;
+  }
+
+  if (payload.event === "navigate") {
     state.recorder.lastPageUrl = payload.url || state.recorder.lastPageUrl;
     const pageLabel = document.getElementById("monitor-recorder-page-label");
     if (pageLabel) {

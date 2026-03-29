@@ -754,9 +754,22 @@ body[data-theme="dark"] .dashboard-summary-row {
   gap: 5px;
 }
 
+.check-form label.checkbox-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .check-form span {
   font-size: 0.9rem;
   font-weight: 700;
+}
+
+.check-form span[title],
+.guide-card h4[title] {
+  cursor: help;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
 }
 
 input,
@@ -1425,12 +1438,19 @@ button.danger {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: nowrap;
 }
 
 .checkbox-field input[type="checkbox"] {
+  flex: 0 0 auto;
   width: 16px;
   height: 16px;
   margin: 0;
+}
+
+.checkbox-field span {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .session-state-card p {

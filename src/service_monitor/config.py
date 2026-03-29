@@ -118,9 +118,12 @@ class BrowserStepConfig:
 class BrowserConfig:
     expected_title_contains: str | None = None
     required_selectors: list[str] = field(default_factory=list)
-    wait_until: Literal["load", "domcontentloaded", "networkidle"] = "networkidle"
+    wait_until: Literal["load", "domcontentloaded", "networkidle"] = "load"
     viewport_width: int = 1440
     viewport_height: int = 900
+    javascript_enabled: bool = True
+    fail_on_script_errors: bool = False
+    fail_on_page_errors: bool = False
     persist_auth_session: bool = False
     storage_state: str | None = None
     storage_state_captured_at: float | None = None
@@ -403,9 +406,12 @@ def _parse_browser(raw: dict[str, Any] | None) -> BrowserConfig | None:
     return BrowserConfig(
         expected_title_contains=raw.get("expected_title_contains"),
         required_selectors=list(raw.get("required_selectors", [])),
-        wait_until=raw.get("wait_until", "networkidle"),
+        wait_until=raw.get("wait_until", "load"),
         viewport_width=int(raw.get("viewport_width") or 1440),
         viewport_height=int(raw.get("viewport_height") or 900),
+        javascript_enabled=_as_bool(raw.get("javascript_enabled", True), default=True),
+        fail_on_script_errors=_as_bool(raw.get("fail_on_script_errors", False)),
+        fail_on_page_errors=_as_bool(raw.get("fail_on_page_errors", False)),
         persist_auth_session=_as_bool(raw.get("persist_auth_session", False)),
         storage_state=raw.get("storage_state"),
         storage_state_captured_at=raw.get("storage_state_captured_at"),

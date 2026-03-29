@@ -587,6 +587,35 @@ async def run_browser_check(check: CheckConfig, timeout_seconds: float) -> Check
     def _step_locator(page, selector: str):
         return page.locator(selector).first
 
+    async def _goto_with_fallback(page, target_url: str, wait_until: str, timeout_ms: int) -> None:
+        strategies = [wait_until]
+        if wait_until == "networkidle":
+            strategies.extend(["load", "domcontentloaded"])
+        elif wait_until == "load":
+            strategies.append("domcontentloaded")
+
+        last_error: Exception | None = None
+        for index, strategy in enumerate(strategies):
+            try:
+                await page.goto(target_url, wait_until=strategy, timeout=timeout_ms)
+                return
+            except PlaywrightTimeoutError as exc:
+                last_error = exc
+                if index == len(strategies) - 1:
+                    raise
+            except Exception:
+                raise
+        if last_error is not None:
+            raise last_error
+
+    def _is_benign_page_error(message: str) -> bool:
+        normalized = (message or "").lower()
+        return (
+            "interest-cohort" in normalized
+            or "browsingtopics" in normalized
+            or "permissions policy denied" in normalized
+        )
+
     try:
         async with async_playwright() as playwright:
             browser = await playwright.chromium.launch(headless=True)
@@ -594,7 +623,8 @@ async def run_browser_check(check: CheckConfig, timeout_seconds: float) -> Check
                 "viewport": {
                     "width": browser_config.viewport_width,
                     "height": browser_config.viewport_height,
-                }
+                },
+                "java_script_enabled": browser_config.javascript_enabled,
             }
             if browser_config.persist_auth_session and browser_config.storage_state:
                 context_kwargs["storage_state"] = json.loads(browser_config.storage_state)
@@ -688,10 +718,11 @@ async def run_browser_check(check: CheckConfig, timeout_seconds: float) -> Check
             await record_step(
                 "Navigate",
                 "navigate",
-                page.goto(
+                _goto_with_fallback(
+                    page,
                     _resolved_url(check),
-                    wait_until=browser_config.wait_until,
-                    timeout=int(timeout_seconds * 1000),
+                    browser_config.wait_until,
+                    int(timeout_seconds * 1000),
                 ),
             )
 
@@ -715,10 +746,11 @@ async def run_browser_check(check: CheckConfig, timeout_seconds: float) -> Check
                     await record_step(
                         step.name,
                         step.action,
-                        page.goto(
+                        _goto_with_fallback(
+                            page,
                             step.value or _resolved_url(check),
-                            wait_until=browser_config.wait_until,
-                            timeout=step_timeout_ms,
+                            browser_config.wait_until,
+                            step_timeout_ms,
                         ),
                     )
                 elif step.action == "wait_for_selector":
@@ -785,17 +817,24 @@ async def run_browser_check(check: CheckConfig, timeout_seconds: float) -> Check
             await browser.close()
 
         successful_steps = sum(1 for step in step_results if step.get("success"))
+        significant_page_errors = [error for error in page_errors if not _is_benign_page_error(error)]
         failed_scripts = [
             entry
             for entry in network_log
             if entry.get("resource_type") == "script" and (entry.get("failure") or entry.get("ok") is False)
         ]
         duration_ms = (time.perf_counter() - started) * 1000
-        success = not page_errors and not failed_scripts and all(step.get("success") for step in step_results)
+        page_error_failure = browser_config.fail_on_page_errors and bool(significant_page_errors)
+        script_error_failure = browser_config.fail_on_script_errors and bool(failed_scripts)
+        success = (
+            all(step.get("success") for step in step_results)
+            and not page_error_failure
+            and not script_error_failure
+        )
         message = (
             f"browser journey passed with {successful_steps} successful steps"
             if success
-            else "browser journey found one or more step, script, or page failures"
+            else "browser journey found one or more required step, script, or page failures"
         )
         return CheckResult(
             name=check.name,
@@ -813,8 +852,11 @@ async def run_browser_check(check: CheckConfig, timeout_seconds: float) -> Check
                     key=lambda item: (item.get("duration_ms") is None, -(item.get("duration_ms") or 0)),
                 ),
                 "console": console_messages[-50:],
-                "page_errors": page_errors[-20:],
+                "page_errors": significant_page_errors[-20:],
+                "benign_page_errors": [error for error in page_errors if _is_benign_page_error(error)][-20:],
                 "script_failures": failed_scripts,
+                "fail_on_script_errors": browser_config.fail_on_script_errors,
+                "fail_on_page_errors": browser_config.fail_on_page_errors,
             },
         )
     except PlaywrightTimeoutError as exc:

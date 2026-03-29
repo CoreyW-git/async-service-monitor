@@ -105,9 +105,12 @@ class BrowserStepPayload(BaseModel):
 class BrowserPayload(BaseModel):
     expected_title_contains: str | None = None
     required_selectors: list[str] = Field(default_factory=list)
-    wait_until: Literal["load", "domcontentloaded", "networkidle"] = "networkidle"
+    wait_until: Literal["load", "domcontentloaded", "networkidle"] = "load"
     viewport_width: int = 1440
     viewport_height: int = 900
+    javascript_enabled: bool = True
+    fail_on_script_errors: bool = False
+    fail_on_page_errors: bool = False
     persist_auth_session: bool = False
     storage_state: str | None = None
     storage_state_captured_at: float | None = None
@@ -321,6 +324,9 @@ def _browser_from_payload(payload: BrowserPayload | None) -> BrowserConfig | Non
         wait_until=payload.wait_until,
         viewport_width=payload.viewport_width,
         viewport_height=payload.viewport_height,
+        javascript_enabled=payload.javascript_enabled,
+        fail_on_script_errors=payload.fail_on_script_errors,
+        fail_on_page_errors=payload.fail_on_page_errors,
         persist_auth_session=payload.persist_auth_session,
         storage_state=payload.storage_state,
         storage_state_captured_at=payload.storage_state_captured_at,
@@ -693,11 +699,25 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
             return
         payload = dict(payload)
         payload.setdefault("timestamp", time.time())
+        if payload.get("event") == "page_ready":
+            return
         steps = entry.setdefault("steps", [])
         if steps:
             previous = steps[-1]
             dedupe_keys = ("event", "selector", "value", "url", "title")
             if all(previous.get(key) == payload.get(key) for key in dedupe_keys):
+                return
+            if (
+                payload.get("event") == "navigate"
+                and previous.get("event") == "navigate"
+                and previous.get("url") == payload.get("url")
+            ):
+                return
+            if (
+                payload.get("event") == "navigate"
+                and previous.get("event") not in {"click", "submit"}
+                and float(payload.get("timestamp") or 0.0) - float(previous.get("timestamp") or 0.0) < 2.5
+            ):
                 return
         steps.append(payload)
 
@@ -766,7 +786,15 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
     def _recorder_helper_python_executable() -> str:
         return str(Path(sys.executable))
 
-    def _spawn_desktop_recorder_helper(session_id: str, target_url: str, token: str) -> int | None:
+    def _spawn_desktop_recorder_helper(
+        session_id: str,
+        target_url: str,
+        token: str,
+        wait_until: str,
+        viewport_width: int,
+        viewport_height: int,
+        javascript_enabled: bool,
+    ) -> int | None:
         python_exec = _recorder_helper_python_executable()
         config_dir = Path(runtime["config_path"]).parent
         helper_script = Path(__file__).with_name("recorder_helper.py")
@@ -782,6 +810,10 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
             f"--target-url={target_url}",
             "--api-base=http://127.0.0.1:8000",
             f"--token={token}",
+            f"--wait-until={wait_until}",
+            f"--viewport-width={max(320, int(viewport_width))}",
+            f"--viewport-height={max(320, int(viewport_height))}",
+            f"--javascript-enabled={'true' if javascript_enabled else 'false'}",
         ]
         with stdout_log.open("a", encoding="utf-8") as stdout_handle, stderr_log.open(
             "a", encoding="utf-8"
@@ -2018,6 +2050,10 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
     @app.post("/api/recorder/playwright-session")
     async def launch_playwright_recorder(
         url: str = Query(...),
+        wait_until: Literal["load", "domcontentloaded", "networkidle"] = Query("load"),
+        viewport_width: int = Query(1440),
+        viewport_height: int = Query(900),
+        javascript_enabled: bool = Query(True),
         current_user: dict[str, str] = Depends(require_read_write),
     ) -> dict[str, object]:
         _retire_existing_playwright_recorders()
@@ -2026,6 +2062,10 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
         entry = {
             "session_id": session_id,
             "url": url,
+            "wait_until": wait_until,
+            "viewport_width": max(320, int(viewport_width)),
+            "viewport_height": max(320, int(viewport_height)),
+            "javascript_enabled": bool(javascript_enabled),
             "status": "launching",
             "error": None,
             "message": "Launching desktop recorder helper...",
@@ -2040,7 +2080,15 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
         }
         runtime["playwright_recorders"][session_id] = entry
         try:
-            entry["pid"] = _spawn_desktop_recorder_helper(session_id, url, token)
+            entry["pid"] = _spawn_desktop_recorder_helper(
+                session_id,
+                url,
+                token,
+                wait_until,
+                viewport_width,
+                viewport_height,
+                javascript_enabled,
+            )
         except Exception as exc:
             entry["status"] = "error"
             entry["error"] = f"Failed to launch desktop recorder helper: {exc}"
