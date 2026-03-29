@@ -1,0 +1,22 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: async-service-monitor
+resources:
+  - namespace.yaml
+  - deployment.yaml
+  - service.yaml
+  - pdb.yaml
+configMapGenerator:
+  - name: async-service-monitor-config
+    files:
+      - config.kubernetes.yaml=../../config.kubernetes.yaml
+generatorOptions:
+  disableNameSuffixHash: true
+commonLabels:
+  app.kubernetes.io/name: async-service-monitor
+  app.kubernetes.io/part-of: service-health-portal
+  app.kubernetes.io/component: control-plane
+images:
+  - name: async-service-monitor
+    newName: async-service-monitor
+    newTag: latest

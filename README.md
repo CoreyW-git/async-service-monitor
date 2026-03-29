@@ -13,6 +13,7 @@
 | Container Ops | Start, stop, restart, and create monitor containers live |
 | Access Control | Read-only, read-write, and admin portal accounts |
 | Telemetry Storage | Optional retention of time-series data in PostgreSQL plus diagnostics/config snapshots in MinIO or OCI Object Storage |
+| Deployment Targets | Local Python, Docker, Docker Desktop, OKE, EKS, and AKS |
 
 ## Architecture
 
@@ -222,6 +223,321 @@ WSL / bash:
 ```bash
 docker run --rm -p 8000:8000 -e ASM_CONFIG_BIND_SOURCE="$(pwd)/config.yaml" -e ASM_CONFIG_PASSPHRASE="$ASM_CONFIG_PASSPHRASE" -v "$(pwd)/config.yaml:/app/config.yaml" async-service-monitor
 ```
+
+## Running With Kubernetes
+
+This project can be deployed to Kubernetes in two supported ways:
+
+1. `kubectl apply -k ...` using the Kustomize overlays in `kubernetes/`
+2. `helm upgrade --install ...` using the Helm chart in `helm/async-service-monitor`
+
+The Kubernetes deployment targets currently included are:
+
+- Oracle Kubernetes Engine (`kubernetes/overlays/oke`)
+- Amazon EKS (`kubernetes/overlays/eks`)
+- Azure Kubernetes Service (`kubernetes/overlays/aks`)
+
+The shared base manifest lives in `kubernetes/base` and includes:
+
+- a single control-plane `Deployment`
+- a `Service`
+- a `PodDisruptionBudget`
+- explicit Kubernetes probes using `/livez`, `/readyz`, and `/healthz`
+- a generated `ConfigMap` from `config.kubernetes.yaml`
+
+### Before You Start
+
+Make sure you have:
+
+1. A working Kubernetes cluster in OKE, EKS, or AKS
+2. `kubectl` configured to reach that cluster
+3. Either `kustomize` or `helm` installed locally
+4. A container registry the cluster can pull from
+5. A built image for this application
+
+Build the image locally:
+
+```powershell
+docker build -t async-service-monitor:latest .
+```
+
+Push it to your registry:
+
+```powershell
+docker tag async-service-monitor:latest <registry>/async-service-monitor:<tag>
+docker push <registry>/async-service-monitor:<tag>
+```
+
+Examples:
+
+- Oracle Cloud Registry or OCIR for OKE
+- Amazon ECR for EKS
+- Azure Container Registry for AKS
+
+### Step 1: Prepare The Config
+
+Start from [config.kubernetes.yaml](C:\Users\pipsq\OneDrive\Documents\async-service-monitor\config.kubernetes.yaml) and adjust it for your cluster environment.
+
+At minimum, review:
+
+- `portal` for login and auth behavior
+- `telemetry` for PostgreSQL and object storage targets
+- `checks` if you want monitors present at first boot
+- `cluster.enabled`
+
+Recommended first deployment settings:
+
+- keep `cluster.enabled: false`
+- keep telemetry disabled until the UI and login path are working
+- start with a minimal monitor set or an empty `checks: []`
+
+Why:
+
+- the in-app cluster and container controls are still Docker-oriented
+- a simpler first deployment is easier to validate in Kubernetes
+- once the app is stable in-cluster, you can point telemetry to managed PostgreSQL and object storage
+
+If the config contains encrypted values, create a Kubernetes secret for the passphrase:
+
+```powershell
+kubectl create secret generic async-service-monitor-secrets `
+  --from-literal=ASM_CONFIG_PASSPHRASE=<your-passphrase> `
+  --namespace async-service-monitor
+```
+
+If your cluster needs image pull credentials, create the registry secret too and reference it from Helm values or your Kubernetes setup.
+
+### Step 2: Choose Your Deployment Method
+
+Use Kustomize if:
+
+- you want plain Kubernetes YAML in the repo
+- you prefer `kubectl apply -k`
+- you want small provider-specific overlay patches
+
+Use Helm if:
+
+- you want a more parameterized install flow
+- you want easy value overrides for ingress, TLS, or autoscaling
+- you plan to promote the same chart across multiple environments
+
+### Step 3A: Deploy With Kustomize
+
+#### Set The Image
+
+From the overlay directory you plan to deploy, point Kustomize at the registry image your cluster can pull:
+
+PowerShell:
+
+```powershell
+cd kubernetes\overlays\eks
+kustomize edit set image async-service-monitor=<registry>/async-service-monitor:<tag>
+```
+
+WSL / bash:
+
+```bash
+cd kubernetes/overlays/eks
+kustomize edit set image async-service-monitor=<registry>/async-service-monitor:<tag>
+```
+
+Replace `eks` with `oke` or `aks` as needed.
+
+#### Deploy To OKE
+
+```powershell
+kubectl apply -k kubernetes\overlays\oke
+```
+
+What this overlay does:
+
+- creates a public OCI load balancer service
+- uses a flexible load balancer shape
+- keeps the app health probe path aligned with `/healthz`
+
+What you may still need to customize:
+
+- subnet annotations for your OCI networking model
+- internal vs public load balancer behavior
+- image reference for your registry
+
+Verify:
+
+```powershell
+kubectl get pods -n async-service-monitor
+kubectl get svc -n async-service-monitor
+kubectl describe svc async-service-monitor -n async-service-monitor
+```
+
+#### Deploy To EKS
+
+```powershell
+kubectl apply -k kubernetes\overlays\eks
+```
+
+What this overlay does:
+
+- creates a public AWS Network Load Balancer
+- sets `loadBalancerClass: eks.amazonaws.com/nlb`
+- uses HTTP health checks against `/healthz`
+
+What you may still need to customize:
+
+- internet-facing vs internal NLB behavior
+- security groups and allowed source ranges
+- image location in ECR or another reachable registry
+
+Verify:
+
+```powershell
+kubectl get pods -n async-service-monitor
+kubectl get svc -n async-service-monitor
+kubectl describe svc async-service-monitor -n async-service-monitor
+```
+
+#### Deploy To AKS
+
+```powershell
+kubectl apply -k kubernetes\overlays\aks
+```
+
+What this overlay does:
+
+- creates a public Azure load balancer service
+- sets the Azure load balancer health probe request path to `/healthz`
+
+What you may still need to customize:
+
+- internal vs public exposure
+- static public IP behavior
+- resource group or network integration details
+
+Verify:
+
+```powershell
+kubectl get pods -n async-service-monitor
+kubectl get svc -n async-service-monitor
+kubectl describe svc async-service-monitor -n async-service-monitor
+```
+
+### Step 3B: Deploy With Helm
+
+If you prefer Helm over Kustomize, use the chart in [helm/async-service-monitor](C:\Users\pipsq\OneDrive\Documents\async-service-monitor\helm\async-service-monitor).
+
+#### Basic Helm Install
+
+```powershell
+helm upgrade --install async-service-monitor .\helm\async-service-monitor `
+  --namespace async-service-monitor `
+  --create-namespace `
+  --set image.repository=<registry>/async-service-monitor `
+  --set image.tag=<tag>
+```
+
+#### Helm Provider Presets
+
+- OKE: `-f .\helm\async-service-monitor\values-oke.yaml`
+- EKS: `-f .\helm\async-service-monitor\values-eks.yaml`
+- AKS: `-f .\helm\async-service-monitor\values-aks.yaml`
+
+Example for EKS:
+
+```powershell
+helm upgrade --install async-service-monitor .\helm\async-service-monitor `
+  --namespace async-service-monitor `
+  --create-namespace `
+  -f .\helm\async-service-monitor\values-eks.yaml `
+  --set image.repository=<registry>/async-service-monitor `
+  --set image.tag=<tag>
+```
+
+#### Helm Ingress And TLS
+
+If you want the service behind an ingress controller instead of a direct load balancer:
+
+```powershell
+helm upgrade --install async-service-monitor .\helm\async-service-monitor `
+  --namespace async-service-monitor `
+  --create-namespace `
+  --set image.repository=<registry>/async-service-monitor `
+  --set image.tag=<tag> `
+  --set service.type=ClusterIP `
+  --set ingress.enabled=true `
+  --set ingress.className=nginx `
+  --set ingress.hosts[0].host=monitor.example.com `
+  --set ingress.tls[0].secretName=async-service-monitor-tls `
+  --set ingress.tls[0].hosts[0]=monitor.example.com
+```
+
+#### Helm Autoscaling
+
+If you want HPA-based scaling:
+
+```powershell
+helm upgrade --install async-service-monitor .\helm\async-service-monitor `
+  --namespace async-service-monitor `
+  --create-namespace `
+  --set image.repository=<registry>/async-service-monitor `
+  --set image.tag=<tag> `
+  --set autoscaling.enabled=true `
+  --set autoscaling.minReplicas=2 `
+  --set autoscaling.maxReplicas=5
+```
+
+### Step 4: Validate The Deployment
+
+Once deployed, validate in this order:
+
+1. Pods are running:
+
+```powershell
+kubectl get pods -n async-service-monitor
+```
+
+2. Service is created:
+
+```powershell
+kubectl get svc -n async-service-monitor
+```
+
+3. App probes are passing:
+
+```powershell
+kubectl describe pod -n async-service-monitor <pod-name>
+```
+
+4. Application is reachable:
+
+- by external load balancer address, or
+- through your ingress hostname, or
+- by local port-forward during validation:
+
+```powershell
+kubectl port-forward -n async-service-monitor svc/async-service-monitor 8000:80
+```
+
+Then open [http://127.0.0.1:8000](http://127.0.0.1:8000).
+
+### Step 5: Move To Managed Storage
+
+After the UI is reachable and the login path works:
+
+1. open `Administration`
+2. configure telemetry for PostgreSQL and object storage
+3. prefer managed cloud services in OKE, EKS, or AKS environments
+4. verify dashboards begin storing and reading telemetry
+
+Recommended cloud posture:
+
+- OKE: managed PostgreSQL-compatible database plus OCI Object Storage
+- EKS: managed PostgreSQL-compatible database plus S3-compatible or equivalent object storage path if you later extend storage adapters
+- AKS: managed PostgreSQL-compatible database plus compatible object storage path
+
+### Kubernetes Operational Notes
+
+- The shipped Kubernetes manifests default to a single control-plane replica. That avoids duplicate embedded monitor runners.
+- The in-app Docker container and peer-container workflows are still Docker-centric. In Kubernetes, operational scaling should happen with native Kubernetes resources rather than the in-app Docker controls.
+- If you want read-heavy dashboard replicas in Kubernetes later, the existing `SERVICE_MONITOR_APP_MODE=dashboard` path provides a foundation for a separate read-only dashboard deployment.
 
 ## Offline-Friendly Deployment
 

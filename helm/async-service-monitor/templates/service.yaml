@@ -1,0 +1,28 @@
+{{- $providerConfig := (include "async-service-monitor.providerConfig" . | fromYaml) | default dict -}}
+{{- $providerService := get $providerConfig "service" | default dict -}}
+{{- $providerAnnotations := get $providerService "annotations" | default dict -}}
+{{- $serviceAnnotations := merge (dict) $providerAnnotations (.Values.service.annotations | default dict) -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "async-service-monitor.fullname" . }}
+  labels:
+    {{- include "async-service-monitor.labels" . | nindent 4 }}
+  {{- if $serviceAnnotations }}
+  annotations:
+    {{- toYaml $serviceAnnotations | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ default .Values.service.type (get $providerService "type") }}
+  {{- $lbClass := default .Values.service.loadBalancerClass (get $providerService "loadBalancerClass") }}
+  {{- if $lbClass }}
+  loadBalancerClass: {{ $lbClass }}
+  {{- end }}
+  selector:
+    {{- include "async-service-monitor.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http
+      protocol: TCP
+      appProtocol: {{ .Values.service.appProtocol }}

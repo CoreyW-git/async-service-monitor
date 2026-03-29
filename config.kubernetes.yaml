@@ -1,0 +1,46 @@
+defaults:
+  timeout_seconds: 10
+  user_agent: async-service-monitor/0.1.0
+  peer_timeout_seconds: 3
+  peer_poll_interval_seconds: 15
+  recovery_cooldown_seconds: 300
+  bind_host: 0.0.0.0
+  bind_port: 8080
+
+cluster:
+  enabled: false
+  node_id: monitor-k8s-1
+
+notifications:
+  email:
+    enabled: false
+    provider: custom
+    port: 587
+    subject_prefix: "[async-service-monitor]"
+    use_tls: true
+    use_ssl: false
+
+telemetry:
+  enabled: false
+  timeseries_provider: local_postgresql
+  timeseries_port: 5432
+  timeseries_local_container_name: async-service-monitor-postgres
+  object_provider: local_minio
+  object_bucket: async-service-monitor
+  object_console_port: 9001
+  object_local_container_name: async-service-monitor-minio
+  retention_hours: 2
+  timeseries_use_ssl: false
+  object_use_ssl: false
+  auto_provision_timeseries_local: false
+  auto_provision_object_local: false
+
+portal:
+  enabled: true
+  provider: basic
+  realm: Service Health Portal
+  users: []
+  oci:
+    enabled: false
+
+checks: []

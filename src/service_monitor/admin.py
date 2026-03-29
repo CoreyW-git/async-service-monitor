@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import html
 import json
+import mimetypes
 import os
 import secrets
 import threading
@@ -379,7 +380,9 @@ def _frontend_html() -> str:
     html = (web_dir / "index.html").read_text(encoding="utf-8")
     css_version = int((web_dir / "app.css").stat().st_mtime)
     js_version = int((web_dir / "app.js").stat().st_mtime)
+    plotly_version = int((web_dir / "vendor" / "plotly.min.js").stat().st_mtime)
     html = html.replace('href="/app.css"', f'href="/app.css?v={css_version}"')
+    html = html.replace('src="/vendor/plotly.min.js"', f'src="/vendor/plotly.min.js?v={plotly_version}"')
     html = html.replace('src="/app.js"', f'src="/app.js?v={js_version}"')
     return html
 
@@ -1155,6 +1158,22 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
     async def admin_page() -> str:
         return HTMLResponse(_frontend_html(), headers=_no_cache_headers())
 
+    @app.get("/admin/users", response_class=HTMLResponse)
+    async def admin_users_page() -> str:
+        return HTMLResponse(_frontend_html(), headers=_no_cache_headers())
+
+    @app.get("/admin/config", response_class=HTMLResponse)
+    async def admin_config_page() -> str:
+        return HTMLResponse(_frontend_html(), headers=_no_cache_headers())
+
+    @app.get("/admin/cluster", response_class=HTMLResponse)
+    async def admin_cluster_page() -> str:
+        return HTMLResponse(_frontend_html(), headers=_no_cache_headers())
+
+    @app.get("/admin/cluster/{container_name:path}", response_class=HTMLResponse)
+    async def admin_cluster_container_page(container_name: str) -> str:
+        return HTMLResponse(_frontend_html(), headers=_no_cache_headers())
+
     @app.get("/profile", response_class=HTMLResponse)
     async def profile_page() -> str:
         return HTMLResponse(_frontend_html(), headers=_no_cache_headers())
@@ -1175,9 +1194,100 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
             headers=_no_cache_headers(),
         )
 
+    @app.get("/vendor/plotly.min.js")
+    async def vendor_plotly_js() -> Response:
+        return Response(
+            (Path(__file__).parent / "web" / "vendor" / "plotly.min.js").read_text(encoding="utf-8"),
+            media_type="application/javascript",
+            headers=_no_cache_headers(),
+        )
+
+    @app.get("/help-assets/{asset_name}")
+    async def help_asset(asset_name: str) -> Response:
+        asset_path = (Path(__file__).parent / "web" / "help_assets" / asset_name).resolve()
+        base_dir = (Path(__file__).parent / "web" / "help_assets").resolve()
+        if base_dir not in asset_path.parents or not asset_path.exists() or not asset_path.is_file():
+            raise HTTPException(status_code=404, detail="Help asset not found")
+        media_type = mimetypes.guess_type(asset_path.name)[0] or "application/octet-stream"
+        return Response(
+            asset_path.read_text(encoding="utf-8") if media_type.startswith("text/") or media_type == "image/svg+xml" else asset_path.read_bytes(),
+            media_type=media_type,
+            headers=_no_cache_headers(),
+        )
+
     @app.get("/api/session")
     async def session(session_id: str | None = Cookie(default=None, alias="service_monitor_session")) -> dict[str, object]:
         return auth_manager.authenticate_optional(session_id)
+
+    @app.get("/livez")
+    async def livez() -> dict[str, object]:
+        return {
+            "status": "alive",
+            "app_mode": app_mode,
+            "dashboard_mode": dashboard_mode,
+        }
+
+    async def _readiness_payload() -> dict[str, object]:
+        config = store.load()
+        payload: dict[str, object] = {
+            "status": "ready",
+            "app_mode": app_mode,
+            "dashboard_mode": dashboard_mode,
+            "telemetry": "disabled",
+            "runner": "dashboard-only" if dashboard_mode else "starting",
+        }
+        if config.telemetry.enabled:
+            try:
+                await telemetry.ensure_ready()
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "status": "not-ready",
+                        "reason": "telemetry",
+                        "message": str(exc),
+                    },
+                ) from exc
+            payload["telemetry"] = "ready"
+
+        if not dashboard_mode:
+            runner_task = runtime.get("runner_task")
+            if runner_task is None:
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "status": "not-ready",
+                        "reason": "runner",
+                        "message": "Monitor runner has not started yet.",
+                    },
+                )
+            if runner_task.done():
+                message = "Monitor runner stopped unexpectedly."
+                try:
+                    exception = runner_task.exception()
+                except asyncio.CancelledError:
+                    exception = None
+                if exception is not None:
+                    message = str(exception)
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "status": "not-ready",
+                        "reason": "runner",
+                        "message": message,
+                    },
+                )
+            payload["runner"] = "ready"
+
+        return payload
+
+    @app.get("/readyz")
+    async def readyz() -> dict[str, object]:
+        return await _readiness_payload()
+
+    @app.get("/healthz")
+    async def healthz() -> dict[str, object]:
+        return await _readiness_payload()
 
     @app.post("/api/auth/login")
     async def login(payload: LoginPayload, response: Response) -> dict[str, object]:

@@ -19,16 +19,6 @@
           <a href="/" data-link>Home</a>
           <a href="/dashboards" data-link data-role-min="read_only">Dashboards</a>
           <a href="/monitors" data-link data-role-min="read_only">Monitors</a>
-          <button type="button" id="cluster-toggle" class="sidebar-toggle hidden" data-role-min="admin">
-            <span>Cluster</span>
-            <span id="cluster-chevron">+</span>
-          </button>
-          <section class="sidebar-section hidden" id="cluster-section">
-            <div class="sidebar-monitors">
-              <a href="/cluster/configure" id="configure-containers-link" class="sidebar-link" data-link>Configure Containers</a>
-              <div id="sidebar-cluster-containers" class="sidebar-monitors"></div>
-            </div>
-          </section>
           <a href="/admin" data-link data-role-min="admin">Administration</a>
           <a href="/guide" data-link>Help</a>
         </nav>
@@ -50,6 +40,7 @@
         <div id="app-root"></div>
       </main>
     </div>
+    <script src="/vendor/plotly.min.js"></script>
     <script src="/app.js"></script>
   </body>
 </html>

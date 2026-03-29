@@ -36,6 +36,9 @@ const state = {
     status: "all",
     type: "all",
   },
+  helpWorkspace: {
+    query: "",
+  },
   dashboardDetailContext: null,
   recorder: createRecorderState(),
 };
@@ -53,6 +56,625 @@ const EMAIL_PROVIDER_DEFAULTS = {
   outlook: { host: "smtp-mail.outlook.com", port: 587, use_tls: true, use_ssl: false },
   custom: { host: "", port: 587, use_tls: true, use_ssl: false },
 };
+
+const HELP_SECTIONS = [
+  {
+    id: "getting-started",
+    title: "Getting Started",
+    summary: "First-time setup, login, navigation, and the operator workflow.",
+  },
+  {
+    id: "architecture",
+    title: "Architecture",
+    summary: "Platform architecture, monitor lifecycle, cluster behavior, and telemetry design.",
+  },
+  {
+    id: "monitors",
+    title: "Monitors",
+    summary: "How to build endpoint, browser, and recorded synthetic monitors.",
+  },
+  {
+    id: "operations",
+    title: "Operations",
+    summary: "Dashboards, troubleshooting, cluster placement, and live container health.",
+  },
+  {
+    id: "administration",
+    title: "Administration",
+    summary: "Users, roles, telemetry, email, scaling, and security settings.",
+  },
+  {
+    id: "deployment",
+    title: "Deployment",
+    summary: "Local, Docker, Kubernetes, Helm, cloud-provider, and offline deployment guidance.",
+  },
+  {
+    id: "libraries",
+    title: "Third-Party Libraries",
+    summary: "Runtime, frontend, and optional documentation libraries used by the platform.",
+  },
+];
+
+const THIRD_PARTY_LIBRARIES = [
+  { name: "FastAPI", area: "Web API and SPA host", declared: ">=0.116.0,<1.0.0", version: "0.135.1", license: "Project metadata does not expose a simple SPDX string in this environment", url: "https://github.com/fastapi/fastapi" },
+  { name: "Uvicorn", area: "ASGI server", declared: ">=0.35.0,<1.0.0", version: "0.42.0", license: "Project metadata does not expose a simple SPDX string in this environment", url: "https://uvicorn.dev/release-notes" },
+  { name: "HTTPX", area: "Async HTTP client for checks and recorder proxying", declared: ">=0.27.0,<1.0.0", version: "0.28.1", license: "BSD-3-Clause", url: "https://github.com/encode/httpx/blob/master/CHANGELOG.md" },
+  { name: "cryptography", area: "Secret handling and config encryption", declared: ">=44.0.0,<46.0.0", version: "45.0.7", license: "Apache-2.0 OR BSD-3-Clause", url: "https://github.com/pyca/cryptography" },
+  { name: "docker", area: "Docker Engine integration for container and recovery operations", declared: ">=7.1.0,<8.0.0", version: "7.1.0", license: "Apache Software License", url: "https://docker-py.readthedocs.io/en/stable/change-log.html" },
+  { name: "PyYAML", area: "Config file parsing", declared: ">=6.0.1,<7.0.0", version: "6.0.3", license: "MIT", url: "https://pyyaml.org/" },
+  { name: "Playwright", area: "Browser health monitors and Chromium recorder", declared: ">=1.53.0,<2.0.0", version: "1.58.0", license: "Project metadata does not expose a simple SPDX string in this environment", url: "https://github.com/Microsoft/playwright-python" },
+  { name: "PyMySQL", area: "Legacy MySQL compatibility path still present in the codebase", declared: ">=1.1.1,<2.0.0", version: "1.1.2", license: "Project metadata does not expose a simple SPDX string in this environment", url: "https://github.com/PyMySQL/PyMySQL" },
+  { name: "psycopg", area: "PostgreSQL telemetry storage", declared: ">=3.2.1,<4.0.0", version: "Not installed in this desktop environment", license: "See runtime package metadata when installed", url: "https://www.psycopg.org/" },
+  { name: "MinIO Python SDK", area: "Object storage diagnostics retention", declared: ">=7.2.8,<8.0.0", version: "Not installed in this desktop environment", license: "See runtime package metadata when installed", url: "https://min.io/" },
+  { name: "Plotly Python", area: "Interactive charting support and local asset source", declared: "local dependency for offline Plotly enablement", version: "6.6.0", license: "MIT", url: "https://plotly.com/python/" },
+  { name: "plotly.js", area: "Vendored local interactive graph bundle", declared: "vendored asset", version: "3.4.0", license: "MIT", url: "https://plotly.com/javascript/" },
+  { name: "Diagrams", area: "Optional help and architecture diagram generation", declared: "optional docs dependency >=0.24.4,<1.0.0", version: "Not installed in this desktop environment", license: "See runtime package metadata when installed", url: "https://diagrams.mingrammer.com/" },
+];
+
+const HELP_TOPICS = [
+  {
+    id: "getting-started",
+    section: "getting-started",
+    title: "Start Here",
+    summary: "A first-time operator path from login to a useful first monitor.",
+    keywords: ["first login", "onboarding", "new user", "start", "quick start"],
+    content: () => `
+      <h3>Who This Topic Is For</h3>
+      <p>Use this page if you have never used the portal before or if you want the shortest path to getting a monitor working and visible on the dashboards.</p>
+      <h3>Recommended First Workflow</h3>
+      <ol class="help-numbered-list">
+        <li>Sign in and land on <strong>Home</strong> to confirm the service is up.</li>
+        <li>Open <strong>Monitors</strong> and choose <strong>Add Monitor</strong>, then start with a Basic HTTP, DNS, or Generic monitor.</li>
+        <li>Save the monitor and immediately open its dedicated page to test it.</li>
+        <li>Open <strong>Dashboards</strong> to review availability, latency, and error signals for the new monitor.</li>
+        <li>Use <strong>Administration</strong> only after the first monitor works so storage, email, and scaling changes are easier to validate.</li>
+      </ol>
+      <div class="help-callout">
+        <strong>Best first monitor:</strong>
+        <p>An HTTP monitor against an internal app health page or a DNS monitor against a stable hostname is the easiest way to validate the platform end to end.</p>
+      </div>
+      <h3>Where To Go Next</h3>
+      <div class="help-link-grid">
+        <a class="button-link" href="${guideTopicHref("monitors", "basic-monitors")}" data-link>Build Basic Monitors</a>
+        <a class="button-link secondary" href="${guideTopicHref("operations", "dashboards-and-troubleshooting")}" data-link>Read Dashboards</a>
+        <a class="button-link secondary" href="${guideTopicHref("administration", "administration-workspace")}" data-link>Admin Guide</a>
+      </div>
+    `,
+  },
+  {
+    id: "architecture-overview",
+    section: "architecture",
+    title: "Architecture Overview",
+    summary: "A deeper walkthrough of the platform design, diagram by diagram.",
+    keywords: ["architecture", "design", "diagram", "telemetry", "cluster", "lifecycle"],
+    content: () => `
+      <h3>How To Read This Section</h3>
+      <p>This architecture section explains how the platform is assembled, why the major layers are separated, and how the diagrams map to real operator workflows inside the portal.</p>
+      <h3>1. Platform Architecture</h3>
+      ${helpDiagramCardMarkup("/help-assets/architecture-overview.svg", "Architecture overview diagram", "Platform Architecture", "Click to expand this diagram and inspect the full control plane, runner, target, and telemetry flow.")}
+      <p>The core platform has five main layers:</p>
+      <ul class="help-bullet-list">
+        <li><strong>Admin Portal</strong> is the operator-facing UI for Home, Dashboards, Monitors, Administration, and Help.</li>
+        <li><strong>Config Store</strong> persists monitor definitions, users, portal settings, service configuration, and encrypted secrets.</li>
+        <li><strong>Monitor Runner</strong> owns async execution, scheduling, placement, cluster participation, recovery logic, and notifications.</li>
+        <li><strong>Targets</strong> are the services being monitored, including HTTP endpoints, DNS targets, databases, and browser journeys.</li>
+        <li><strong>Live plus retained telemetry</strong> feeds Home, dashboards, troubleshooting, and historical investigation.</li>
+      </ul>
+      <h3>2. Monitor Lifecycle</h3>
+      ${helpDiagramCardMarkup("/help-assets/monitor-lifecycle.svg", "Monitor lifecycle diagram", "Monitor Lifecycle", "Click to expand the operator workflow from creating a monitor through tuning it over time.")}
+      <p>Monitors are designed to be iterative. They are not just created once and forgotten.</p>
+      <ol class="help-numbered-list">
+        <li><strong>Create</strong> a monitor from a basic form, browser monitor, or recorded journey.</li>
+        <li><strong>Place</strong> it automatically or pin it to a specific monitoring node when locality matters.</li>
+        <li><strong>Execute</strong> it on schedule with auth, validation, and browser steps when needed.</li>
+        <li><strong>Observe</strong> it through dashboards, diagnostics, and run history.</li>
+        <li><strong>Tune</strong> thresholds, session handling, validation rules, or placement as the target evolves.</li>
+      </ol>
+      <h3>3. Telemetry Data Layer</h3>
+      ${helpDiagramCardMarkup("/help-assets/telemetry-data-layer.svg", "Telemetry data layer diagram", "Telemetry Data Layer", "Click to expand the data-layer split between time-series metrics and richer diagnostics.")}
+      <p>The data layer is intentionally split:</p>
+      <ul class="help-bullet-list">
+        <li><strong>PostgreSQL</strong> retains hot operational time-series such as latency, availability, error counts, and run metadata.</li>
+        <li><strong>MinIO / OCI Object Storage</strong> retains heavier troubleshooting artifacts such as diagnostics, snapshots, and larger run payloads.</li>
+        <li><strong>In-memory state</strong> keeps the portal responsive for current status and recent activity even before retained telemetry is queried.</li>
+      </ul>
+      <div class="help-callout">
+        <strong>Why the split matters:</strong>
+        <p>This design keeps dashboards fast, makes the troubleshooting path richer, and makes it easier to move fully into OCI later without redesigning the entire observability model.</p>
+      </div>
+      <h3>How The Architecture Maps To The UI</h3>
+      <ul class="help-bullet-list">
+        <li><strong>Home</strong> reads current fleet state for high-level health.</li>
+        <li><strong>Dashboards</strong> read richer monitor history and diagnostics for APM-style investigation.</li>
+        <li><strong>Monitors</strong> modify the configuration and execution plan.</li>
+        <li><strong>Administration</strong> controls the platform-level services the architecture depends on.</li>
+      </ul>
+    `,
+  },
+  {
+    id: "portal-navigation",
+    section: "getting-started",
+    title: "Portal Navigation",
+    summary: "How Home, Dashboards, Monitors, Administration, and Profile fit together.",
+    keywords: ["navigation", "home", "dashboards", "monitors", "cluster", "profile", "sidebar", "administration"],
+    content: () => `
+      <h3>Portal Map</h3>
+      <div class="help-example-grid">
+        <article class="help-example-card">
+          <h4>Home</h4>
+          <p>High-level service health with enabled monitors, disabled monitors, and monitoring-node health.</p>
+        </article>
+        <article class="help-example-card">
+          <h4>Dashboards</h4>
+          <p>APM-style observability for each monitor with latency, availability, error trends, SLOs, and diagnostics.</p>
+        </article>
+        <article class="help-example-card">
+          <h4>Monitors</h4>
+          <p>Create or edit monitors, recorder-based browser journeys, auth, validation rules, and placement.</p>
+        </article>
+        <article class="help-example-card">
+          <h4>Administration</h4>
+          <p>Manage users, service configuration, telemetry storage, email notifications, auth, UI scaling, and cluster/container operations.</p>
+        </article>
+        <article class="help-example-card">
+          <h4>Personal Settings</h4>
+          <p>Update your profile, password, and user theme preferences.</p>
+        </article>
+      </div>
+      <h3>Operator Pattern</h3>
+      <p>Most operators spend the majority of their time in this loop: <strong>Monitors</strong> to create, <strong>Dashboards</strong> to validate and troubleshoot, and <strong>Home</strong> to watch fleet status.</p>
+    `,
+  },
+  {
+    id: "basic-monitors",
+    section: "monitors",
+    title: "Build Basic Monitors",
+    summary: "How to create HTTP, DNS, Auth, Database, and Generic monitors with examples.",
+    keywords: ["basic monitor", "http", "dns", "auth", "database", "generic", "examples", "port"],
+    content: () => `
+      <h3>Available Basic Monitor Types</h3>
+      <div class="help-example-grid">
+        <article class="help-example-card">
+          <h4>HTTP</h4>
+          <p>Checks URL availability, response codes, content rules, and custom ports.</p>
+          <pre class="mono">Name: Public Home
+Type: HTTP
+URL: https://example.com
+Port: 443
+Expected Statuses: 200
+Contains Text: Welcome</pre>
+        </article>
+        <article class="help-example-card">
+          <h4>DNS</h4>
+          <p>Validates that a hostname resolves and that DNS remains available.</p>
+          <pre class="mono">Name: Corporate DNS
+Type: DNS
+Host: intranet.example.internal
+Interval: 300</pre>
+        </article>
+        <article class="help-example-card">
+          <h4>Auth</h4>
+          <p>Runs an HTTP-style monitor with bearer, basic, or custom header authentication.</p>
+          <pre class="mono">Name: Auth API
+Type: Auth
+URL: https://api.example.com/v1/profile
+Auth: Bearer token</pre>
+        </article>
+        <article class="help-example-card">
+          <h4>Database</h4>
+          <p>Validates connectivity to a database endpoint and tracks it as a database signal on the dashboards.</p>
+          <pre class="mono">Name: Orders DB
+Type: Database
+Host: db.internal
+Port: 5432
+Database Name: orders</pre>
+        </article>
+        <article class="help-example-card">
+          <h4>Generic</h4>
+          <p>Checks a host and port when you need simple reachability without HTTP-specific assumptions.</p>
+          <pre class="mono">Name: Cache TCP Port
+Type: Generic
+Host: cache.internal
+Port: 6379</pre>
+        </article>
+      </div>
+      <h3>Important Configuration Choices</h3>
+      <ul class="help-bullet-list">
+        <li><strong>Port</strong> is available anywhere a service might not use a default port.</li>
+        <li><strong>Placement</strong> controls whether a monitor is auto-balanced or pinned to a specific monitoring node.</li>
+        <li><strong>Alert Thresholds</strong> can be learned automatically or set manually per monitor.</li>
+        <li><strong>Validation Rules</strong> should be strict enough to catch regressions but not so strict that harmless copy changes create noise.</li>
+      </ul>
+    `,
+  },
+  {
+    id: "browser-monitoring",
+    section: "monitors",
+    title: "Browser Health Monitoring",
+    summary: "Synthetic browser journeys, page validation, network capture, and session-aware runs.",
+    keywords: ["browser health", "synthetic", "journey", "playwright", "chromium", "network", "har"],
+    content: () => `
+      <h3>What Browser Health Monitors Do</h3>
+      <p>Browser monitors go beyond availability. They open a page, wait for content, execute journey steps, record timing, and capture browser-specific diagnostics such as failed requests and console errors.</p>
+      <h3>What To Configure</h3>
+      <ul class="help-bullet-list">
+        <li>Target page URL and optional custom port</li>
+        <li>Viewport size for the synthetic browser session</li>
+        <li>Expected page title fragments</li>
+        <li>Required selectors that must render for success</li>
+        <li>Journey steps such as navigate, click, fill, press, and assertions</li>
+        <li>Optional authenticated session reuse for continuous runs</li>
+      </ul>
+      <div class="help-callout">
+        <strong>Use Browser Health when:</strong>
+        <p>You need to know whether the page experience is truly working, not just whether the endpoint returned a 200.</p>
+      </div>
+      <h3>What Appears On The Dashboard</h3>
+      <p>Browser dashboards surface latency trends, error trends, step-level outcomes, session diagnostics, network diagnostics, and downloadable HAR-style files for deeper investigation.</p>
+    `,
+  },
+  {
+    id: "monitor-recorder",
+    section: "monitors",
+    title: "Monitor Recorder",
+    summary: "Record clicks, form fills, and navigation as a synthetic browser monitor.",
+    keywords: ["recorder", "record", "browser recorder", "embedded", "chromium recorder", "auth session"],
+    content: () => `
+      <h3>Recorder Modes</h3>
+      <div class="help-example-grid">
+        <article class="help-example-card">
+          <h4>Embedded Recorder</h4>
+          <p>Fastest option for internal pages and simpler sites that work well inside the app.</p>
+        </article>
+        <article class="help-example-card">
+          <h4>Chromium Recorder</h4>
+          <p>Best choice when the target site uses bot protection, popup behavior, or more advanced browser flows.</p>
+        </article>
+      </div>
+      <h3>Recommended Workflow</h3>
+      <ol class="help-numbered-list">
+        <li>Open <strong>Monitors → Add Monitor → Advanced Monitor → Monitor Recorder</strong>.</li>
+        <li>Enter the target URL and start with the embedded recorder.</li>
+        <li>If the page is blocked or rate limited, switch to <strong>Use Chromium Recorder</strong>.</li>
+        <li>Click through the journey, including login if needed.</li>
+        <li>Choose whether to persist the authenticated browser session for future scheduled runs.</li>
+        <li>Test the journey, then save it as a browser monitor.</li>
+      </ol>
+      <h3>Authentication Notes</h3>
+      <p>The recorder can capture browser session state and reuse it later. You can also update the stored browser session manually on the saved monitor page without recreating the entire monitor.</p>
+    `,
+  },
+  {
+    id: "dashboards-and-troubleshooting",
+    section: "operations",
+    title: "Dashboards and Troubleshooting",
+    summary: "How to read the APM-style dashboards and use them to investigate failures.",
+    keywords: ["dashboard", "latency", "p50", "p95", "p99", "errors", "slo", "har", "troubleshooting"],
+    content: () => `
+      <h3>What The Dashboards Track</h3>
+      <ul class="help-bullet-list">
+        <li><strong>Availability</strong> shows whether the monitor is succeeding over time.</li>
+        <li><strong>Latency</strong> shows P50, average, P95, and P99 performance characteristics.</li>
+        <li><strong>Error Trend</strong> counts failures and smaller browser/runtime errors separately from full outages.</li>
+        <li><strong>Traffic</strong> shows how many monitor runs are contributing to the current window.</li>
+      </ul>
+      <h3>How To Troubleshoot</h3>
+      <ol class="help-numbered-list">
+        <li>Open the monitor dashboard and pick a relevant time range.</li>
+        <li>Review the <strong>Alert Thresholds</strong> and <strong>Session Diagnostics</strong> panels near the top.</li>
+        <li>Use the <strong>Failures</strong> tab for incident-focused sequences and failure cards.</li>
+        <li>Open <strong>Run Diagnostics</strong> only for the sessions you want to inspect closely.</li>
+        <li>For browser monitors, download the HAR-style export and review request-level behavior.</li>
+      </ol>
+      <div class="help-callout">
+        <strong>Tip:</strong>
+        <p>If a browser page loads but still feels broken, look at the error trend and the session diagnostics rather than only the high-level availability line.</p>
+      </div>
+    `,
+  },
+  {
+    id: "cluster-and-containers",
+    section: "operations",
+    title: "Cluster and Container Operations",
+    summary: "How monitoring nodes share work, expose status, and recover peers.",
+    keywords: ["cluster", "containers", "configure containers", "nodes", "peers", "docker network", "ports"],
+    content: () => `
+      <h3>What The Cluster Page Is For</h3>
+      <p>The <strong>Administration → Cluster And Containers</strong> area is where you inspect live monitoring containers, peer definitions, Docker networks, published host ports, and node health.</p>
+      <h3>Container Scopes</h3>
+      <ul class="help-bullet-list">
+        <li><strong>Peer only</strong> means the node watches cluster peers but does not own endpoint monitors.</li>
+        <li><strong>Full monitoring</strong> means the node can run endpoint and browser monitors as well as cluster checks.</li>
+      </ul>
+      <h3>Placement Guidance</h3>
+      <p>When creating a monitor, use auto placement by default. Pin a monitor to a specific node only when you have a strong reason, such as network locality or a dedicated troubleshooting path.</p>
+    `,
+  },
+  {
+    id: "administration-workspace",
+    section: "administration",
+    title: "Administration Workspace",
+    summary: "Users, roles, profile settings, email, telemetry, scaling, and service configuration.",
+    keywords: ["administration", "users", "roles", "read only", "read write", "admin", "service configuration"],
+    content: () => `
+      <h3>User Roles</h3>
+      <div class="help-example-grid">
+        <article class="help-example-card">
+          <h4>Read Only</h4>
+          <p>Can inspect health, dashboards, and monitor results, but cannot change monitor definitions or containers.</p>
+        </article>
+        <article class="help-example-card">
+          <h4>Read Write</h4>
+          <p>Can create and update monitors, but cannot perform full container or service-configuration administration.</p>
+        </article>
+        <article class="help-example-card">
+          <h4>Administrator</h4>
+          <p>Full access to users, telemetry, email, auth, scaling, container management, and other platform settings.</p>
+        </article>
+      </div>
+      <h3>Service Configuration Areas</h3>
+      <ul class="help-bullet-list">
+        <li>Telemetry storage for PostgreSQL and MinIO or OCI object storage</li>
+        <li>Email notification provider settings and optional local email service provisioning</li>
+        <li>Portal authentication settings and OCI auth scaffolding</li>
+        <li>UI scaling controls for Docker-based dashboard replicas and sticky/session-aware access</li>
+      </ul>
+    `,
+  },
+  {
+    id: "telemetry-storage",
+    section: "administration",
+    title: "Telemetry Storage and Retention",
+    summary: "How PostgreSQL, MinIO, OCI, retention, and self-provisioning fit together.",
+    keywords: ["telemetry", "postgresql", "minio", "oci object storage", "retention", "provision local"],
+    content: () => `
+      <h3>Storage Design</h3>
+      <p>Time-series monitor data is retained in PostgreSQL. Rich diagnostics, snapshots, and larger investigation payloads are retained in MinIO today and can move cleanly to OCI Object Storage later.</p>
+      <h3>Retention</h3>
+      <p>Retention hours control how much historical data remains available to dashboards and troubleshooting workflows. Lower retention reduces storage use and keeps the UI fast.</p>
+      <h3>Self-Service Provisioning</h3>
+      <p>If you choose local storage and ask the application to provision it for you, the app fills in the managed connection settings automatically and disables the fields it now owns.</p>
+      <div class="help-callout">
+        <strong>Cloud-friendly design:</strong>
+        <p>The PostgreSQL plus object-storage split makes it much easier to transition the entire data layer to OCI over time without redesigning the dashboard model.</p>
+      </div>
+    `,
+  },
+  {
+    id: "deployment-modes",
+    section: "deployment",
+    title: "Deployment Overview",
+    summary: "Understand the supported deployment paths before choosing local, Docker, Kubernetes, Helm, or offline.",
+    keywords: ["docker", "offline", "local", "scaled ui", "deployment", "compose", "kubernetes", "helm"],
+    content: () => `
+      <h3>Supported Deployment Paths</h3>
+      <div class="help-example-grid">
+        <article class="help-example-card">
+          <h4>Local Python</h4>
+          <p>Best for development, feature work, and debugging on a workstation.</p>
+        </article>
+        <article class="help-example-card">
+          <h4>Docker / Docker Desktop</h4>
+          <p>Best for local runtime parity, single-node testing, and Docker-oriented container workflows.</p>
+        </article>
+        <article class="help-example-card">
+          <h4>Kubernetes</h4>
+          <p>Best for managed cloud deployment, higher operability, stronger platform controls, and cluster-native scaling.</p>
+        </article>
+        <article class="help-example-card">
+          <h4>Offline</h4>
+          <p>Best for air-gapped or disconnected environments after dependencies and images are pre-staged.</p>
+        </article>
+      </div>
+      <h3>Local Development</h3>
+      <pre class="mono">py -3 -m venv .venv
+.venv\\Scripts\\Activate.ps1
+pip install -e .
+py -3 -m service_monitor --config config.yaml</pre>
+      <h3>Docker Runtime</h3>
+      <pre class="mono">docker build -t async-service-monitor .
+docker run --rm -p 8000:8000 -v ${"${PWD}"}/config.yaml:/app/config.yaml async-service-monitor</pre>
+      <h3>Kubernetes Runtime</h3>
+      <p>The repo now supports both <strong>Kustomize overlays</strong> and a <strong>Helm chart</strong> for OKE, EKS, and AKS. Use Kubernetes when you want a managed control plane, cloud load balancers, ingress, TLS, autoscaling, and more mature day-two operations.</p>
+      <h3>Scaled UI Mode</h3>
+      <p>Enable UI scaling from Administration when you want dashboard-heavy read traffic served by separate dashboard containers behind the proxy.</p>
+      <h3>Offline Mode</h3>
+      <p>Prepare the wheelhouse, browser payloads, and Docker images on a connected machine first, then load them in the air-gapped environment using the provided scripts.</p>
+      <h3>Recommended Reading Order</h3>
+      <ol class="help-numbered-list">
+        <li><a href="${guideTopicHref("deployment", "kubernetes-prerequisites")}" data-link>Kubernetes Prerequisites</a></li>
+        <li><a href="${guideTopicHref("deployment", "publish-container-image")}" data-link>Publish The Container Image</a></li>
+        <li><a href="${guideTopicHref("deployment", "kustomize-deployments")}" data-link>Deploy With Kustomize</a> or <a href="${guideTopicHref("deployment", "helm-deployments")}" data-link>Deploy With Helm</a></li>
+        <li><a href="${guideTopicHref("deployment", "provider-specific-kubernetes")}" data-link>Review OKE, EKS, and AKS Notes</a></li>
+        <li><a href="${guideTopicHref("deployment", "validate-kubernetes-deployment")}" data-link>Validate The Deployment</a></li>
+      </ol>
+    `,
+  },
+  {
+    id: "kubernetes-prerequisites",
+    section: "deployment",
+    title: "Kubernetes Prerequisites",
+    summary: "What you need in place before deploying to OKE, EKS, or AKS.",
+    keywords: ["kubernetes", "prerequisites", "oke", "eks", "aks", "kubectl", "helm", "kustomize"],
+    content: () => `
+      <h3>Required Tools</h3>
+      <ul class="help-bullet-list">
+        <li><strong>kubectl</strong> configured for your target cluster</li>
+        <li><strong>Docker</strong> or another container build tool</li>
+        <li><strong>Kustomize</strong> if you want plain-manifest deployment</li>
+        <li><strong>Helm</strong> if you want parameterized chart-based deployment</li>
+      </ul>
+      <h3>Cluster Requirements</h3>
+      <ul class="help-bullet-list">
+        <li>A reachable cluster in OKE, EKS, or AKS</li>
+        <li>A registry the cluster can pull from</li>
+        <li>Permissions to create namespaces, Deployments, Services, ConfigMaps, and optionally Ingress and HPA resources</li>
+      </ul>
+      <h3>Application Prerequisites</h3>
+      <ul class="help-bullet-list">
+        <li>Review <code>config.kubernetes.yaml</code> before the first deployment</li>
+        <li>If you use encrypted config values, create the Kubernetes secret for <code>ASM_CONFIG_PASSPHRASE</code></li>
+        <li>For the first deployment, keep the setup simple: minimal checks, telemetry off, and cluster mode off</li>
+      </ul>
+      <div class="help-callout">
+        <strong>Recommended first production milestone:</strong>
+        <p>Get the UI reachable and sign-in working first. Add managed telemetry and more complex monitor sets only after the base deployment is stable.</p>
+      </div>
+    `,
+  },
+  {
+    id: "publish-container-image",
+    section: "deployment",
+    title: "Publish The Container Image",
+    summary: "Build the image, tag it, and push it to a registry your cluster can pull from.",
+    keywords: ["container image", "registry", "ecr", "acr", "ocir", "docker build", "docker push"],
+    content: () => `
+      <h3>Step 1: Build The Image</h3>
+      <pre class="mono">docker build -t async-service-monitor:latest .</pre>
+      <h3>Step 2: Tag For Your Registry</h3>
+      <pre class="mono">docker tag async-service-monitor:latest &lt;registry&gt;/async-service-monitor:&lt;tag&gt;</pre>
+      <h3>Step 3: Push</h3>
+      <pre class="mono">docker push &lt;registry&gt;/async-service-monitor:&lt;tag&gt;</pre>
+      <h3>Typical Registry Choices</h3>
+      <ul class="help-bullet-list">
+        <li><strong>OKE</strong>: OCIR</li>
+        <li><strong>EKS</strong>: ECR</li>
+        <li><strong>AKS</strong>: ACR</li>
+      </ul>
+      <h3>Important Note</h3>
+      <p>Your Kubernetes deployment files reference the image name only. You must update the Kustomize overlay or Helm values to point at the registry image your cluster can actually pull.</p>
+    `,
+  },
+  {
+    id: "kustomize-deployments",
+    section: "deployment",
+    title: "Deploy With Kustomize",
+    summary: "Use the provider overlays to deploy plain Kubernetes manifests to OKE, EKS, or AKS.",
+    keywords: ["kustomize", "kubectl apply -k", "overlays", "oke", "eks", "aks"],
+    content: () => `
+      <h3>What Kustomize Is Best For</h3>
+      <p>Use Kustomize when you want plain YAML in the repo and a small, reviewable overlay per cloud provider.</p>
+      <h3>Step 1: Review The Base Layout</h3>
+      <ul class="help-bullet-list">
+        <li><code>kubernetes/base</code> contains the shared Deployment, Service, PodDisruptionBudget, and ConfigMap wiring</li>
+        <li><code>kubernetes/overlays/oke</code>, <code>eks</code>, and <code>aks</code> add provider-specific load balancer behavior</li>
+      </ul>
+      <h3>Step 2: Set The Image</h3>
+      <pre class="mono">cd kubernetes\\overlays\\eks
+kustomize edit set image async-service-monitor=&lt;registry&gt;/async-service-monitor:&lt;tag&gt;</pre>
+      <h3>Step 3: Apply The Overlay</h3>
+      <pre class="mono">kubectl apply -k kubernetes\\overlays\\eks</pre>
+      <h3>When To Use It</h3>
+      <p>Kustomize is a great fit when your deployment model is mostly static and your platform team prefers checked-in YAML instead of runtime chart values.</p>
+    `,
+  },
+  {
+    id: "helm-deployments",
+    section: "deployment",
+    title: "Deploy With Helm",
+    summary: "Use the Helm chart when you want values-driven installs, ingress, TLS, or HPA options.",
+    keywords: ["helm", "chart", "ingress", "tls", "autoscaling", "hpa"],
+    content: () => `
+      <h3>What Helm Is Best For</h3>
+      <p>Use Helm when you want environment-specific values, smoother promotion across stages, optional ingress and TLS, or easy HPA toggles.</p>
+      <h3>Basic Install</h3>
+      <pre class="mono">helm upgrade --install async-service-monitor .\\helm\\async-service-monitor ^
+  --namespace async-service-monitor ^
+  --create-namespace ^
+  --set image.repository=&lt;registry&gt;/async-service-monitor ^
+  --set image.tag=&lt;tag&gt;</pre>
+      <h3>Provider Presets</h3>
+      <ul class="help-bullet-list">
+        <li><code>values-oke.yaml</code></li>
+        <li><code>values-eks.yaml</code></li>
+        <li><code>values-aks.yaml</code></li>
+      </ul>
+      <h3>Ingress And TLS</h3>
+      <p>The chart can also switch to <code>ClusterIP</code> plus ingress and attach TLS hosts and secrets without maintaining a second set of manifests.</p>
+      <h3>Autoscaling</h3>
+      <p>The chart includes an optional Horizontal Pod Autoscaler for higher-traffic UI/API scenarios.</p>
+    `,
+  },
+  {
+    id: "provider-specific-kubernetes",
+    section: "deployment",
+    title: "OKE, EKS, and AKS Notes",
+    summary: "What changes per cloud provider and what to validate after deployment.",
+    keywords: ["oke", "eks", "aks", "load balancer", "health probe", "nlb", "oci", "azure"],
+    content: () => `
+      <h3>OKE</h3>
+      <p>The OKE overlay and values preset use a public OCI load balancer with a flexible shape. In some environments you may still need to add subnet-related annotations depending on your tenancy networking model.</p>
+      <h3>EKS</h3>
+      <p>The EKS overlay and values preset use a public Network Load Balancer and point the load balancer health check at <code>/healthz</code>. You may still need to adapt internet-facing versus internal behavior and any security group expectations.</p>
+      <h3>AKS</h3>
+      <p>The AKS overlay and values preset use an Azure load balancer and set the Azure health probe request path to <code>/healthz</code>. You may still need to adapt public versus internal exposure or static IP requirements.</p>
+      <h3>Common Validation Steps</h3>
+      <ul class="help-bullet-list">
+        <li>Check the pod state with <code>kubectl get pods -n async-service-monitor</code></li>
+        <li>Check the service with <code>kubectl get svc -n async-service-monitor</code></li>
+        <li>Describe the service if the external address does not appear as expected</li>
+        <li>Use <code>kubectl port-forward</code> during early validation if the load balancer path is not ready yet</li>
+      </ul>
+    `,
+  },
+  {
+    id: "validate-kubernetes-deployment",
+    section: "deployment",
+    title: "Validate And Operate The Deployment",
+    summary: "How to confirm the app is healthy in-cluster and what to configure next.",
+    keywords: ["validate", "deployment", "port-forward", "probes", "readiness", "healthz", "operate"],
+    content: () => `
+      <h3>Validation Order</h3>
+      <ol class="help-numbered-list">
+        <li>Confirm the pod is running</li>
+        <li>Confirm the service exists</li>
+        <li>Confirm Kubernetes probes are passing</li>
+        <li>Confirm the portal is reachable</li>
+        <li>Sign in and verify the UI loads correctly</li>
+      </ol>
+      <h3>Useful Commands</h3>
+      <pre class="mono">kubectl get pods -n async-service-monitor
+kubectl get svc -n async-service-monitor
+kubectl describe pod -n async-service-monitor &lt;pod-name&gt;
+kubectl port-forward -n async-service-monitor svc/async-service-monitor 8000:80</pre>
+      <h3>After The First Successful Login</h3>
+      <ul class="help-bullet-list">
+        <li>Configure telemetry storage</li>
+        <li>Point the app at managed PostgreSQL and object storage if desired</li>
+        <li>Create or import your first monitors</li>
+        <li>Only then consider more advanced scaling, ingress, and storage adjustments</li>
+      </ul>
+      <div class="help-callout">
+        <strong>Kubernetes operating model:</strong>
+        <p>The app can run in Kubernetes cleanly, but the in-app Docker container lifecycle tools remain Docker-focused. For Kubernetes, treat Deployments, Services, ingress, and HPA as the primary operational controls.</p>
+      </div>
+    `,
+  },
+  {
+    id: "third-party-libraries",
+    section: "libraries",
+    title: "Third-Party Libraries",
+    summary: "Runtime and optional libraries used to build, operate, and visualize the platform.",
+    keywords: ["libraries", "dependencies", "licenses", "versions", "third party", "plotly", "fastapi", "playwright"],
+    content: () => `
+      <h3>What This Covers</h3>
+      <p>This topic documents the main third-party libraries used by the application runtime, browser monitoring stack, Docker integration layer, and the optional help-diagram toolchain.</p>
+      <div class="help-callout">
+        <strong>Version note:</strong>
+        <p><strong>Declared Version</strong> comes from the project dependency definition. <strong>Observed Version</strong> reflects what is installed in this current desktop environment, which may differ if an optional dependency is not installed here yet.</p>
+      </div>
+      ${thirdPartyLibrariesMarkup()}
+      <h3>License Guidance</h3>
+      <p>Some packages expose a clean SPDX-style license in metadata, while others only expose classifiers or project pages. For entries that say <strong>See runtime package metadata when installed</strong> or <strong>Project metadata does not expose a simple SPDX string in this environment</strong>, the package is either optional here or its installed metadata is not normalized into a short license field.</p>
+      <h3>Why This Matters</h3>
+      <ul class="help-bullet-list">
+        <li>Offline deployments need the runtime dependencies and any vendored frontend assets prepared ahead of time.</li>
+        <li>Cloud or regulated environments often need software-bill-of-materials style visibility before deployment.</li>
+        <li>Browser monitoring depends on both the Playwright Python library and the browser runtime payloads that are staged separately for offline use.</li>
+      </ul>
+    `,
+  },
+];
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -177,6 +799,14 @@ function errorRatePercent(points = []) {
 function formatPercent(value) {
   if (value == null || Number.isNaN(Number(value))) return "n/a";
   return `${Number(value).toFixed(1)}%`;
+}
+
+function plotlyHostMarkup(kind, payload, fallbackMarkup, className = "") {
+  return `
+    <div class="plotly-chart-host ${className}" data-plotly-kind="${escapeHtml(kind)}" data-plotly-payload="${escapeHtml(encodeURIComponent(JSON.stringify(payload)))}">
+      ${fallbackMarkup}
+    </div>
+  `;
 }
 
 function defaultAlertThresholds() {
@@ -317,7 +947,7 @@ function browserResultToHar(check, result) {
   };
 }
 
-function sparklineMarkup(points, variant = "good") {
+function sparklineSvgMarkup(points, variant = "good") {
   const values = Array.isArray(points) && points.length
     ? points.map((point) => (point.healthy ? 1 : 0))
     : [0];
@@ -339,7 +969,11 @@ function sparklineMarkup(points, variant = "good") {
   `;
 }
 
-function historyChartMarkup(points, variant = "good", width = 720, height = 180) {
+function sparklineMarkup(points, variant = "good") {
+  return plotlyHostMarkup("sparkline", { points, variant }, sparklineSvgMarkup(points, variant), "plotly-sparkline");
+}
+
+function historyChartSvgMarkup(points, variant = "good", width = 720, height = 180) {
   const normalized = Array.isArray(points) && points.length
     ? points.map((point) => ({
         timestamp: Number(point.timestamp || 0),
@@ -385,7 +1019,11 @@ function historyChartMarkup(points, variant = "good", width = 720, height = 180)
   `;
 }
 
-function outcomeBarsMarkup(points, width = 720, height = 96) {
+function historyChartMarkup(points, variant = "good", width = 720, height = 180) {
+  return plotlyHostMarkup("history", { points, variant, width, height }, historyChartSvgMarkup(points, variant, width, height), "plotly-history");
+}
+
+function outcomeBarsSvgMarkup(points, width = 720, height = 96) {
   const normalized = Array.isArray(points) && points.length
     ? points.map((point) => ({
         timestamp: Number(point.timestamp || 0),
@@ -424,7 +1062,11 @@ function outcomeBarsMarkup(points, width = 720, height = 96) {
   `;
 }
 
-function latencyLineChartMarkup(points, width = 720, height = 180) {
+function outcomeBarsMarkup(points, width = 720, height = 96) {
+  return plotlyHostMarkup("bars", { points, width, height }, outcomeBarsSvgMarkup(points, width, height), "plotly-bars");
+}
+
+function latencyLineSvgMarkup(points, width = 720, height = 180) {
   const normalized = Array.isArray(points) && points.length
     ? points.map((point) => ({
         timestamp: Number(point.timestamp || 0),
@@ -472,6 +1114,238 @@ function latencyLineChartMarkup(points, width = 720, height = 180) {
       }).join("")}
     </svg>
   `;
+}
+
+function latencyLineChartMarkup(points, width = 720, height = 180) {
+  return plotlyHostMarkup("latency", { points, width, height }, latencyLineSvgMarkup(points, width, height), "plotly-latency");
+}
+
+function resultErrorCount(result) {
+  if (!result) return 0;
+  const details = result.details || {};
+  if (result.check_type === "browser") {
+    const pageErrors = Array.isArray(details.page_errors) ? details.page_errors.length : 0;
+    const consoleErrors = Array.isArray(details.console)
+      ? details.console.filter((entry) => String(entry?.type || "").toLowerCase() === "error").length
+      : 0;
+    const failedRequests = Array.isArray(details.network)
+      ? details.network.filter((entry) => entry.failure || entry.ok === false).length
+      : 0;
+    const failedSteps = Array.isArray(details.steps)
+      ? details.steps.filter((step) => step.success === false).length
+      : 0;
+    const total = pageErrors + consoleErrors + failedRequests + failedSteps;
+    return total || (result.success ? 0 : 1);
+  }
+  const statusCode = Number(details.status_code || details.authenticated_status || 0);
+  if (!result.success) {
+    return statusCode >= 400 ? 1 : 1;
+  }
+  return statusCode >= 400 ? 1 : 0;
+}
+
+function errorTrendPoints(results = []) {
+  return (Array.isArray(results) ? results : []).map((result) => ({
+    timestamp: Number(result.timestamp || 0),
+    error_count: resultErrorCount(result),
+    success: Boolean(result.success),
+    duration_ms: Number(result.duration_ms || 0),
+  }));
+}
+
+function errorTrendSvgMarkup(points, width = 720, height = 180) {
+  const normalized = Array.isArray(points) && points.length
+    ? points
+    : [];
+  if (!normalized.length) {
+    return `
+      <div class="empty-chart-state latency-empty-state">
+        <p>No error samples have been captured yet.</p>
+      </div>
+    `;
+  }
+  const minTime = Math.min(...normalized.map((point) => point.timestamp));
+  const maxTime = Math.max(...normalized.map((point) => point.timestamp));
+  const maxErrors = Math.max(...normalized.map((point) => Number(point.error_count || 0)), 1);
+  const plotWidth = width - 24;
+  const plotHeight = height - 28;
+  const baseX = 12;
+  const baseY = 8;
+  const coords = normalized.map((point) => {
+    const x = normalized.length === 1
+      ? baseX + plotWidth / 2
+      : baseX + (((point.timestamp - minTime) / Math.max(maxTime - minTime, 1)) * plotWidth);
+    const y = baseY + plotHeight - ((Number(point.error_count || 0) / maxErrors) * plotHeight);
+    return { x, y, errorCount: Number(point.error_count || 0), timestamp: point.timestamp };
+  });
+  const line = coords.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`).join(" ");
+  const area = `${line} L ${coords[coords.length - 1].x.toFixed(1)} ${height - 20} L ${coords[0].x.toFixed(1)} ${height - 20} Z`;
+  return `
+    <svg class="error-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true">
+      <line x1="12" y1="${height - 20}" x2="${width - 12}" y2="${height - 20}" class="axis"></line>
+      <line x1="12" y1="8" x2="12" y2="${height - 20}" class="axis"></line>
+      <path class="error-area" d="${area}"></path>
+      <path class="error-line" d="${line}"></path>
+      ${coords.map((point) => `
+        <g>
+          <title>${escapeHtml(`${fmtTime(point.timestamp)} | ${point.errorCount} error events`)}</title>
+          <circle cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="4" class="error-dot"></circle>
+        </g>
+      `).join("")}
+    </svg>
+  `;
+}
+
+function errorTrendChartMarkup(points, width = 720, height = 180) {
+  return plotlyHostMarkup("errors", { points, width, height }, errorTrendSvgMarkup(points, width, height), "plotly-errors");
+}
+
+function plotlyPalette() {
+  const dark = document.body.dataset.theme === "dark";
+  return {
+    paper: dark ? "#111827" : "#ffffff",
+    plot: dark ? "#111827" : "#ffffff",
+    text: dark ? "#e5e7eb" : "#1f2937",
+    muted: dark ? "#94a3b8" : "#6b7280",
+    line: dark ? "rgba(148,163,184,0.25)" : "rgba(107,114,128,0.2)",
+    green: "#0f766e",
+    red: "#b42318",
+    amber: "#b57a00",
+  };
+}
+
+function hydratePlotlyCharts(root = document) {
+  if (!window.Plotly) {
+    return;
+  }
+  const palette = plotlyPalette();
+  root.querySelectorAll(".plotly-chart-host").forEach((host) => {
+    const encoded = host.dataset.plotlyPayload;
+    const kind = host.dataset.plotlyKind;
+    if (!encoded || !kind) return;
+    let payload;
+    try {
+      payload = JSON.parse(decodeURIComponent(encoded));
+    } catch {
+      return;
+    }
+    const points = Array.isArray(payload.points) ? payload.points : [];
+    const config = { displayModeBar: false, responsive: true };
+    let traces = [];
+    let layout = {
+      paper_bgcolor: palette.paper,
+      plot_bgcolor: palette.plot,
+      margin: { l: 22, r: 12, t: 8, b: 18 },
+      font: { color: palette.text, size: 11 },
+    };
+
+    if (kind === "sparkline") {
+      traces = [{
+        x: points.map((_, index) => index + 1),
+        y: points.length ? points.map((point) => (point.healthy ? 1 : 0)) : [0],
+        type: "scatter",
+        mode: "lines+markers",
+        line: { color: payload.variant === "bad" ? palette.red : payload.variant === "neutral" ? palette.muted : palette.green, width: 2 },
+        marker: { size: 4 },
+        fill: "tozeroy",
+        fillcolor: payload.variant === "bad" ? "rgba(180,35,24,0.12)" : payload.variant === "neutral" ? "rgba(107,114,128,0.12)" : "rgba(15,118,110,0.12)",
+        hovertemplate: "Run %{x}<br>Healthy: %{y}<extra></extra>",
+      }];
+      layout = {
+        ...layout,
+        height: 44,
+        margin: { l: 0, r: 0, t: 0, b: 0 },
+        xaxis: { visible: false, fixedrange: true },
+        yaxis: { visible: false, fixedrange: true, range: [-0.1, 1.1] },
+      };
+    } else if (kind === "history") {
+      traces = [
+        {
+          x: points.map((point) => new Date(Number(point.timestamp || 0) * 1000)),
+          y: points.map((point) => (point.healthy ? 1 : 0)),
+          type: "scatter",
+          mode: "lines+markers",
+          name: "Availability",
+          line: { color: payload.variant === "bad" ? palette.red : payload.variant === "neutral" ? palette.muted : palette.green, width: 3 },
+          marker: { size: 7, color: points.map((point) => point.healthy ? palette.green : palette.red) },
+          hovertemplate: "%{x}<br>Healthy: %{y}<extra></extra>",
+        },
+        {
+          x: points.map((point) => new Date(Number(point.timestamp || 0) * 1000)),
+          y: points.map((point) => Number(point.duration_ms || 0)),
+          type: "scatter",
+          mode: "lines",
+          name: "Latency (ms)",
+          yaxis: "y2",
+          line: { color: "rgba(59,130,246,0.75)", width: 2, dash: "dot" },
+          hovertemplate: "%{x}<br>Latency %{y:.0f} ms<extra></extra>",
+        },
+      ];
+      layout = {
+        ...layout,
+        height: payload.height || 180,
+        legend: { orientation: "h", x: 0, y: 1.15, font: { color: palette.muted, size: 10 } },
+        xaxis: { gridcolor: palette.line, color: palette.muted },
+        yaxis: { range: [-0.1, 1.1], tickvals: [0, 1], ticktext: ["Down", "Up"], gridcolor: palette.line, color: palette.muted, fixedrange: true },
+        yaxis2: { overlaying: "y", side: "right", showgrid: false, color: palette.muted, fixedrange: true },
+      };
+    } else if (kind === "bars") {
+      traces = [{
+        x: points.map((point) => new Date(Number(point.timestamp || 0) * 1000)),
+        y: points.map((point) => Number(point.duration_ms || 0)),
+        type: "bar",
+        marker: { color: points.map((point) => point.healthy ? "rgba(15,118,110,0.78)" : "rgba(180,35,24,0.82)") },
+        hovertemplate: "%{x}<br>Latency %{y:.0f} ms<extra></extra>",
+      }];
+      layout = {
+        ...layout,
+        height: payload.height || 96,
+        xaxis: { gridcolor: palette.line, color: palette.muted },
+        yaxis: { gridcolor: palette.line, color: palette.muted, title: { text: "ms", font: { color: palette.muted, size: 10 } } },
+      };
+    } else if (kind === "latency") {
+      traces = [{
+        x: points.map((point) => new Date(Number(point.timestamp || 0) * 1000)),
+        y: points.map((point) => Number(point.duration_ms || 0)),
+        type: "scatter",
+        mode: "lines+markers",
+        line: { color: "#2563eb", width: 3 },
+        marker: { size: 7, color: points.map((point) => point.healthy ? palette.green : palette.red) },
+        fill: "tozeroy",
+        fillcolor: "rgba(37,99,235,0.10)",
+        hovertemplate: "%{x}<br>Latency %{y:.0f} ms<extra></extra>",
+      }];
+      layout = {
+        ...layout,
+        height: payload.height || 180,
+        xaxis: { gridcolor: palette.line, color: palette.muted },
+        yaxis: { gridcolor: palette.line, color: palette.muted, title: { text: "Latency (ms)", font: { color: palette.muted, size: 10 } } },
+      };
+    } else if (kind === "errors") {
+      traces = [{
+        x: points.map((point) => new Date(Number(point.timestamp || 0) * 1000)),
+        y: points.map((point) => Number(point.error_count || 0)),
+        type: "scatter",
+        mode: "lines+markers",
+        line: { color: palette.red, width: 3 },
+        marker: { size: 7, color: palette.red },
+        fill: "tozeroy",
+        fillcolor: "rgba(180,35,24,0.10)",
+        hovertemplate: "%{x}<br>Error Events %{y:.0f}<extra></extra>",
+      }];
+      layout = {
+        ...layout,
+        height: payload.height || 180,
+        xaxis: { gridcolor: palette.line, color: palette.muted },
+        yaxis: { gridcolor: palette.line, color: palette.muted, title: { text: "Errors", font: { color: palette.muted, size: 10 } } },
+      };
+    } else {
+      return;
+    }
+
+    host.innerHTML = "";
+    window.Plotly.react(host, traces, layout, config);
+  });
 }
 
 function sloBudgetMarkup(points, targetAvailability = 99.0) {
@@ -722,39 +1596,10 @@ function renderSidebar(checks, containersData) {
           currentPath.startsWith("/monitors/"));
       const isHomeLink = href === "/" && currentPath === "/";
       const isDashboardsLink = href === "/dashboards" && (currentPath === "/dashboards" || currentPath.startsWith("/dashboards/"));
-      link.classList.toggle("active", visible && (isHomeLink || isDashboardsLink || href === currentPath || isMonitorsLink));
+      const isAdminLink = href === "/admin" && (currentPath === "/admin" || currentPath.startsWith("/admin/"));
+      link.classList.toggle("active", visible && (isHomeLink || isDashboardsLink || isAdminLink || href === currentPath || isMonitorsLink));
     }
   });
-
-  const clusterList = document.getElementById("sidebar-cluster-containers");
-  const clusterSection = document.getElementById("cluster-section");
-  const clusterToggle = document.getElementById("cluster-toggle");
-  const clusterChevron = document.getElementById("cluster-chevron");
-  const configureLink = document.getElementById("configure-containers-link");
-  const clusterVisible = authenticated && hasRole("admin");
-  clusterSection.classList.toggle("hidden", !clusterVisible || !state.clusterExpanded);
-  clusterToggle.classList.toggle("hidden", !clusterVisible);
-  clusterToggle.classList.toggle("active", state.clusterExpanded || currentPath.startsWith("/cluster"));
-  clusterChevron.textContent = state.clusterExpanded ? "-" : "+";
-  configureLink.classList.toggle("active", currentPath === "/cluster/configure" || currentPath === "/containers");
-  if (!authenticated) {
-    clusterList.innerHTML = "";
-    return;
-  }
-
-  const containers = containersData?.available ? containersData.containers || [] : [];
-  clusterList.innerHTML = containers.length
-    ? containers
-        .map(
-          (container) => `
-            <a class="sidebar-link ${currentPath === `/cluster/${encodeURIComponent(container.name)}` ? "active" : ""}" href="/cluster/${encodeURIComponent(container.name)}" data-link>
-              <span>${escapeHtml(container.name)}</span>
-              <span class="dot ${container.status === "running" ? "healthy" : "disabled"}"></span>
-            </a>
-          `
-        )
-        .join("")
-    : `<div class="monitor-group"><div class="monitor-group-title"><strong>containers</strong><span>0</span></div><div class="subtle">No live cluster containers found.</div></div>`;
 }
 
 function renderMonitorsHomePage(checks) {
@@ -1401,23 +2246,6 @@ function renderDashboard(overview, checks, summaryCounts, checkMetrics, nodeMetr
       </section>
 
       <section class="grafana-main-grid">
-        <details class="accordion-item aggregate-${enabledMonitorState}" data-dashboard-panel="enabledMonitors" ${state.dashboardPanels.enabledMonitors ? "open" : ""}>
-          <summary class="accordion-summary">
-            <div>
-              <strong>Enabled Monitors</strong>
-              <div class="status-meta">
-                <span>${healthyEnabledEndpointChecks.length} healthy</span>
-                <span>${unhealthyEnabledEndpointChecks.length} unhealthy</span>
-              </div>
-            </div>
-          </summary>
-          <div class="accordion-body">
-            <div class="status-list">
-              ${endpointCards || `<article class="guide-card"><p>No endpoint monitors are configured yet.</p></article>`}
-            </div>
-          </div>
-        </details>
-
         <details class="accordion-item aggregate-${nodeState}" data-dashboard-panel="monitoringNodes" ${state.dashboardPanels.monitoringNodes ? "open" : ""}>
           <summary class="accordion-summary">
             <div>
@@ -1431,6 +2259,23 @@ function renderDashboard(overview, checks, summaryCounts, checkMetrics, nodeMetr
           <div class="accordion-body">
             <div class="stack">
               ${nodeCards || `<article class="guide-card"><p>No node history is available yet.</p></article>`}
+            </div>
+          </div>
+        </details>
+
+        <details class="accordion-item aggregate-${enabledMonitorState}" data-dashboard-panel="enabledMonitors" ${state.dashboardPanels.enabledMonitors ? "open" : ""}>
+          <summary class="accordion-summary">
+            <div>
+              <strong>Enabled Monitors</strong>
+              <div class="status-meta">
+                <span>${healthyEnabledEndpointChecks.length} healthy</span>
+                <span>${unhealthyEnabledEndpointChecks.length} unhealthy</span>
+              </div>
+            </div>
+          </summary>
+          <div class="accordion-body">
+            <div class="status-list">
+              ${endpointCards || `<article class="guide-card"><p>No endpoint monitors are configured yet.</p></article>`}
             </div>
           </div>
         </details>
@@ -1554,6 +2399,7 @@ function renderDashboardsPage(checks, checkMetrics, recentResults = []) {
             const checkResults = monitorResults(check, recentResults);
             const recentFailures = checkResults.filter((result) => !result.success).slice(0, 3);
             const avgLatency = averageDuration(points);
+            const p50Latency = percentileDuration(points, 50);
             const p95Latency = percentileDuration(points, 95);
             const errorRate = errorRatePercent(points);
             const availability = availabilityPercent(points);
@@ -1587,14 +2433,15 @@ function renderDashboardsPage(checks, checkMetrics, recentResults = []) {
                 </div>
                 <div class="guide-card compact-chart-card">
                   <div class="mini-panel-header">
-                    <h4>Latency Profile</h4>
+                    <h4>Latency Trend</h4>
                     <span>${recentFailures.length ? `${recentFailures.length} recent failures` : "Stable signal"}</span>
                   </div>
-                  ${outcomeBarsMarkup(points, 540, 84)}
+                  ${latencyLineChartMarkup(points, 540, 116)}
                 </div>
                 <div class="dashboard-card-stats">
                   <div class="compact-card"><h4>Availability</h4><p>${formatPercent(availability)}</p></div>
                   <div class="compact-card"><h4>Avg Latency</h4><p>${formatDuration(avgLatency)}</p></div>
+                  <div class="compact-card"><h4>P50 Latency</h4><p>${formatDuration(p50Latency)}</p></div>
                   <div class="compact-card"><h4>Error Rate</h4><p>${formatPercent(errorRate)}</p></div>
                   <div class="compact-card"><h4>P95 Latency</h4><p>${formatDuration(p95Latency)}</p></div>
                 </div>
@@ -1800,11 +2647,14 @@ function renderMonitorDashboardPage(check, checkMetrics, recentResults = [], act
   const rangeResults = filterResultsByRange(allResults, activeRange, customStart, customEnd);
   const latest = rangeResults[0] || allResults[0] || check.latest_result || null;
   const failures = rangeResults.filter((result) => !result.success);
+  const errors = errorTrendPoints(rangeResults.length ? rangeResults : allResults);
+  const errorEvents = errors.reduce((sum, point) => sum + Number(point.error_count || 0), 0);
   const healthyCount = points.filter((point) => point.healthy).length;
   const failureCount = points.filter((point) => !point.healthy).length;
   const availability = availabilityPercent(points);
   const errorRate = errorRatePercent(points);
   const avgLatency = averageDuration(points);
+  const p50Latency = percentileDuration(points, 50);
   const p95Latency = percentileDuration(points, 95);
   const p99Latency = percentileDuration(points, 99);
   const troubleshootingHints = monitorTroubleshootingHints(check, latest, failures);
@@ -1831,8 +2681,12 @@ function renderMonitorDashboardPage(check, checkMetrics, recentResults = [], act
             <p>${failureCount}</p>
           </div>
           <div class="guide-card compact-card">
-            <h4>Samples</h4>
+            <h4>Traffic</h4>
             <p>${points.length}</p>
+          </div>
+          <div class="guide-card compact-card">
+            <h4>Error Events</h4>
+            <p>${errorEvents}</p>
           </div>
           <div class="guide-card compact-card">
             <h4>Last Fired</h4>
@@ -1850,17 +2704,17 @@ function renderMonitorDashboardPage(check, checkMetrics, recentResults = [], act
           </div>
           <div class="guide-card dashboard-history-chart">
             <div class="mini-panel-header">
-              <h4>Latency Profile</h4>
-              <span>Duration scaled by run</span>
+              <h4>Latency Trend</h4>
+              <span>Response time over time</span>
             </div>
-            ${outcomeBarsMarkup(points)}
+            ${latencyLineChartMarkup(points)}
           </div>
           <div class="guide-card dashboard-history-chart dashboard-span-full">
             <div class="mini-panel-header">
-              <h4>Latency Timeline</h4>
-              <span>P95 ${formatDuration(p95Latency)} · P99 ${formatDuration(p99Latency)}</span>
+              <h4>Error Trend</h4>
+              <span>${errorEvents} error events in range</span>
             </div>
-            ${latencyLineChartMarkup(points)}
+            ${errorTrendChartMarkup(errors)}
           </div>
         </div>
         <div class="stack" style="margin-top: 12px;">
@@ -1971,6 +2825,10 @@ function renderMonitorDashboardPage(check, checkMetrics, recentResults = [], act
               <p>${formatDuration(avgLatency)}</p>
             </div>
             <div class="guide-card compact-card">
+              <h4>P50 Latency</h4>
+              <p>${formatDuration(p50Latency)}</p>
+            </div>
+            <div class="guide-card compact-card">
               <h4>P95 Latency</h4>
               <p>${formatDuration(p95Latency)}</p>
             </div>
@@ -1983,8 +2841,12 @@ function renderMonitorDashboardPage(check, checkMetrics, recentResults = [], act
               <p>${formatPercent(errorRate)}</p>
             </div>
             <div class="guide-card compact-card">
-              <h4>Samples</h4>
+              <h4>Traffic</h4>
               <p>${points.length}</p>
+            </div>
+            <div class="guide-card compact-card">
+              <h4>Error Events</h4>
+              <p>${errorEvents}</p>
             </div>
             <div class="guide-card compact-card">
               <h4>Last Fired</h4>
@@ -2030,16 +2892,16 @@ function renderMonitorDashboardPage(check, checkMetrics, recentResults = [], act
             <div class="guide-card dashboard-history-chart">
               <div class="mini-panel-header">
                 <h4>Latency Trend</h4>
-                <span>Per-run duration and state</span>
+                <span>P50 ${formatDuration(p50Latency)} · P95 ${formatDuration(p95Latency)} · P99 ${formatDuration(p99Latency)}</span>
               </div>
-              ${outcomeBarsMarkup(points)}
+              ${latencyLineChartMarkup(points)}
             </div>
             <div class="guide-card dashboard-history-chart dashboard-span-full">
               <div class="mini-panel-header">
-                <h4>Latency Timeline</h4>
-                <span>Avg ${formatDuration(avgLatency)} · P95 ${formatDuration(p95Latency)}</span>
+                <h4>Error Trend</h4>
+                <span>${errorEvents} error events in range</span>
               </div>
-              ${latencyLineChartMarkup(points)}
+              ${errorTrendChartMarkup(errors)}
             </div>
           </div>
         </section>
@@ -3488,16 +4350,35 @@ function renderMonitorRecorderPage(cluster = { node_id: "monitor-1", peers: [], 
   refreshRecorderUi();
 }
 
+function adminSectionNavMarkup(active = "home") {
+  const links = [
+    ["home", "/admin", "Administration Home"],
+    ["users", "/admin/users", "User Administration"],
+    ["config", "/admin/config", "Application Configuration"],
+    ["cluster", "/admin/cluster", "Cluster And Containers"],
+  ];
+  return `
+    <section class="panel">
+      <div class="admin-subnav">
+        ${links.map(([key, href, label]) => `
+          <a href="${href}" data-link class="admin-subnav-link ${active === key ? "active" : ""}">${label}</a>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
 function renderContainersPage(peers, containers, nodeMetrics, cluster = { enabled: false, node_id: "monitor-1", peers: [], local_assigned_checks: [] }) {
-  setWorkspaceHeader("Configure Containers", "Configure peer monitors, add new nodes, and define how the cluster is managed.", [
-    { label: "Cluster", href: "/cluster/configure" },
-    { label: "Configure Containers" },
+  setWorkspaceHeader("Cluster And Containers", "Configure peer monitors, add new nodes, and define how the cluster is managed.", [
+    { label: "Administration", href: "/admin" },
+    { label: "Cluster And Containers" },
   ]);
   const root = document.getElementById("app-root");
   const canAdmin = hasRole("admin");
   const clusterContainers = containers.available ? containers.containers : [];
   root.innerHTML = `
     <div class="stack">
+      ${adminSectionNavMarkup("cluster")}
       <section class="panel">
         <div class="panel-head">
           <h3>Cluster Status</h3>
@@ -3681,15 +4562,17 @@ function renderContainersPage(peers, containers, nodeMetrics, cluster = { enable
 
 function renderContainerDetailPage(container, peer, nodeMetrics) {
   setWorkspaceHeader(container.name, "Manage the current live container and review its cluster health.", [
-    { label: "Cluster", href: "/cluster/configure" },
-    { label: "Configure Containers", href: "/cluster/configure" },
+    { label: "Administration", href: "/admin" },
+    { label: "Cluster And Containers", href: "/admin/cluster" },
     { label: container.name },
   ]);
   const root = document.getElementById("app-root");
   const canAdmin = hasRole("admin");
   const status = container.status === "running" ? "healthy" : "disabled";
   root.innerHTML = `
-    <div class="detail-grid">
+    <div class="stack">
+      ${adminSectionNavMarkup("cluster")}
+      <div class="detail-grid">
       <section class="panel">
         <div class="panel-head">
           <h3>Live Container</h3>
@@ -3759,202 +4642,313 @@ function renderContainerDetailPage(container, peer, nodeMetrics) {
           </article>
         </div>
       </section>
+      </div>
     </div>
   `;
 }
 
+function guideSectionHref(sectionId = "all") {
+  return sectionId && sectionId !== "all" ? `/guide?section=${encodeURIComponent(sectionId)}` : "/guide";
+}
+
+function guideTopicHref(sectionId, topicId) {
+  return `/guide?section=${encodeURIComponent(sectionId)}&topic=${encodeURIComponent(topicId)}`;
+}
+
+function helpSection(sectionId) {
+  return HELP_SECTIONS.find((section) => section.id === sectionId) || HELP_SECTIONS[0];
+}
+
+function helpTopic(topicId) {
+  return HELP_TOPICS.find((topic) => topic.id === topicId) || null;
+}
+
+function helpTopicSearchText(topic) {
+  return [topic.title, topic.summary, ...(topic.keywords || [])].join(" ").toLowerCase();
+}
+
+function firstHelpTopicForSection(sectionId) {
+  return HELP_TOPICS.find((topic) => topic.section === sectionId) || null;
+}
+
+function thirdPartyLibrariesMarkup() {
+  return `
+    <div class="help-library-table-wrap">
+      <table class="help-library-table">
+        <thead>
+          <tr>
+            <th>Library</th>
+            <th>Used For</th>
+            <th>Declared Version</th>
+            <th>Observed Version</th>
+            <th>License</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${THIRD_PARTY_LIBRARIES.map((library) => `
+            <tr>
+              <td>
+                <strong>${escapeHtml(library.name)}</strong>
+                ${library.url ? `<div><a href="${escapeHtml(library.url)}" target="_blank" rel="noreferrer">Project</a></div>` : ""}
+              </td>
+              <td>${escapeHtml(library.area)}</td>
+              <td>${escapeHtml(library.declared)}</td>
+              <td>${escapeHtml(library.version)}</td>
+              <td>${escapeHtml(library.license)}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function filteredHelpTopics(query = "", sectionId = "all") {
+  const normalizedQuery = String(query || "").trim().toLowerCase();
+  return HELP_TOPICS.filter((topic) => {
+    const sectionMatch = sectionId === "all" || topic.section === sectionId;
+    const queryMatch = !normalizedQuery || helpTopicSearchText(topic).includes(normalizedQuery);
+    return sectionMatch && queryMatch;
+  });
+}
+
+function helpSectionPillsMarkup(activeSection, activeTopicId) {
+  const allHref = activeTopicId ? `/guide?topic=${encodeURIComponent(activeTopicId)}` : "/guide";
+  return `
+    <div class="help-section-pills">
+      <a href="${allHref}" data-link class="help-section-pill ${activeSection === "all" ? "active" : ""}">All Topics</a>
+      ${HELP_SECTIONS.map((section) => `
+        <a
+          href="${guideTopicHref(section.id, firstHelpTopicForSection(section.id)?.id || "")}"
+          data-link
+          class="help-section-pill ${activeSection === section.id ? "active" : ""}"
+        >${escapeHtml(section.title)}</a>
+      `).join("")}
+    </div>
+  `;
+}
+
+function helpSidebarMarkup(topics, activeSection, activeTopicId) {
+  const grouped = HELP_SECTIONS.map((section) => ({
+    ...section,
+    topics: topics.filter((topic) => topic.section === section.id),
+  })).filter((section) => activeSection === "all" || section.id === activeSection || section.topics.length);
+
+  return `
+    <aside class="help-sidebar-panel">
+      <div class="panel-head compact">
+        <h3>Knowledge Base</h3>
+        <p>Browse by area of responsibility.</p>
+      </div>
+      <div class="help-topic-groups">
+        ${grouped.map((section) => `
+          <section class="help-topic-group">
+            <a href="${guideTopicHref(section.id, firstHelpTopicForSection(section.id)?.id || "")}" data-link class="help-topic-group-title">${escapeHtml(section.title)}</a>
+            <p>${escapeHtml(section.summary)}</p>
+            <div class="help-topic-links">
+              ${section.topics.length
+                ? section.topics.map((topic) => `
+                  <a
+                    href="${guideTopicHref(section.id, topic.id)}"
+                    data-link
+                    class="help-topic-link ${topic.id === activeTopicId ? "active" : ""}"
+                  >
+                    <strong>${escapeHtml(topic.title)}</strong>
+                    <span>${escapeHtml(topic.summary)}</span>
+                  </a>
+                `).join("")
+                : `<div class="help-topic-empty">No topics match the current search.</div>`}
+            </div>
+          </section>
+        `).join("")}
+      </div>
+    </aside>
+  `;
+}
+
+function helpDiagramCardMarkup(src, alt, title, description) {
+  return `
+    <article class="help-diagram-card">
+      <button
+        type="button"
+        class="help-diagram-button"
+        data-help-diagram-src="${escapeHtml(src)}"
+        data-help-diagram-alt="${escapeHtml(alt)}"
+        data-help-diagram-title="${escapeHtml(title)}"
+      >
+        <img src="${escapeHtml(src)}" alt="${escapeHtml(alt)}" />
+      </button>
+      <div>
+        <h4>${escapeHtml(title)}</h4>
+        <p>${escapeHtml(description)}</p>
+        <button
+          type="button"
+          class="button-link secondary help-diagram-expand"
+          data-help-diagram-src="${escapeHtml(src)}"
+          data-help-diagram-alt="${escapeHtml(alt)}"
+          data-help-diagram-title="${escapeHtml(title)}"
+        >Expand Diagram</button>
+      </div>
+    </article>
+  `;
+}
+
+function helpOverviewMarkup(filteredTopicsList, activeSection, query) {
+  const visibleSection = activeSection === "all" ? null : helpSection(activeSection);
+  const quickTopics = filteredTopicsList.slice(0, 6);
+  return `
+    <article class="panel help-article">
+      <div class="panel-head">
+        <h3>${visibleSection ? escapeHtml(visibleSection.title) : "Help Center"}</h3>
+        <p>${visibleSection ? escapeHtml(visibleSection.summary) : "Use search, section links, and topic articles to learn the application from first login through advanced operations."}</p>
+      </div>
+      <section class="help-welcome-card">
+        <div>
+          <p class="eyebrow">Searchable operator guide</p>
+          <h3>Use this page like an internal wiki</h3>
+          <p>Search for a task, choose a functional area, and open a topic article. The knowledge base is organized around what operators actually do: creating monitors, reading dashboards, managing the cluster, and configuring the service.</p>
+        </div>
+        <div class="help-link-grid">
+          <a class="button-link" href="${guideTopicHref("getting-started", "getting-started")}" data-link>Start Here</a>
+          <a class="button-link secondary" href="${guideTopicHref("monitors", "basic-monitors")}" data-link>Build A Monitor</a>
+          <a class="button-link secondary" href="${guideTopicHref("operations", "dashboards-and-troubleshooting")}" data-link>Read Dashboards</a>
+        </div>
+      </section>
+      <section class="help-diagram-gallery">
+        ${helpDiagramCardMarkup("/help-assets/architecture-overview.svg", "Architecture overview diagram", "Platform Architecture", "Shows how the portal, config store, runner, targets, and telemetry layers connect.")}
+        ${helpDiagramCardMarkup("/help-assets/monitor-lifecycle.svg", "Monitor lifecycle diagram", "Monitor Lifecycle", "Shows how operators create, place, observe, and continuously tune monitors.")}
+        ${helpDiagramCardMarkup("/help-assets/telemetry-data-layer.svg", "Telemetry data layer diagram", "Telemetry Data Layer", "Explains the PostgreSQL plus object-storage split for metrics and rich diagnostics.")}
+      </section>
+      <section class="help-results-section">
+        <div class="mini-panel-header">
+          <h4>${query ? `Search Results for "${escapeHtml(query)}"` : "Popular Topics"}</h4>
+          <span>${filteredTopicsList.length} topic${filteredTopicsList.length === 1 ? "" : "s"}</span>
+        </div>
+        <div class="help-results-grid">
+          ${quickTopics.length ? quickTopics.map((topic) => `
+            <a href="${guideTopicHref(topic.section, topic.id)}" data-link class="help-result-card">
+              <span class="help-parent-chip">${escapeHtml(helpSection(topic.section).title)}</span>
+              <h4>${escapeHtml(topic.title)}</h4>
+              <p>${escapeHtml(topic.summary)}</p>
+            </a>
+          `).join("") : `<div class="guide-card"><p>No help topics match the current search.</p></div>`}
+        </div>
+      </section>
+    </article>
+  `;
+}
+
+function helpArticleMarkup(topic) {
+  const section = helpSection(topic.section);
+  const related = HELP_TOPICS.filter((candidate) => candidate.section === topic.section && candidate.id !== topic.id).slice(0, 3);
+  return `
+    <article class="panel help-article">
+      <div class="panel-head">
+        <div class="help-topic-header">
+          <span class="help-parent-chip">${escapeHtml(section.title)}</span>
+          <h3>${escapeHtml(topic.title)}</h3>
+          <p>${escapeHtml(topic.summary)}</p>
+        </div>
+      </div>
+      <div class="help-topic-body">
+        ${topic.content()}
+      </div>
+      <section class="help-related-topics">
+        <div class="mini-panel-header">
+          <h4>Related Topics</h4>
+          <span>Keep exploring this area</span>
+        </div>
+        <div class="help-results-grid">
+          ${related.length ? related.map((relatedTopic) => `
+            <a href="${guideTopicHref(relatedTopic.section, relatedTopic.id)}" data-link class="help-result-card">
+              <h4>${escapeHtml(relatedTopic.title)}</h4>
+              <p>${escapeHtml(relatedTopic.summary)}</p>
+            </a>
+          `).join("") : `<div class="guide-card"><p>This topic is the best entry point for this section.</p></div>`}
+        </div>
+      </section>
+    </article>
+  `;
+}
+
 function renderGuidePage() {
-  setWorkspaceHeader("Help", "Reference topics for setup, operations, security, Docker, and offline deployment.", [
+  const params = new URLSearchParams(window.location.search);
+  if (!state.helpWorkspace.query && params.get("q")) {
+    state.helpWorkspace.query = params.get("q") || "";
+  }
+  const activeSection = params.get("section") || "all";
+  const activeTopicId = params.get("topic") || "";
+  const query = state.helpWorkspace.query || "";
+  const matchingTopics = filteredHelpTopics(query, activeSection);
+  const selectedTopic = activeTopicId
+    ? helpTopic(activeTopicId)
+    : (activeSection !== "all" && !query ? firstHelpTopicForSection(activeSection) : null);
+  const showArticle = selectedTopic && (!query || matchingTopics.some((topic) => topic.id === selectedTopic.id));
+
+  setWorkspaceHeader("Help", "Searchable guidance for first-time users, monitor builders, operators, and administrators.", [
     { label: "Help" },
+    ...(showArticle ? [{ label: selectedTopic.title }] : []),
   ]);
+
   const root = document.getElementById("app-root");
   root.innerHTML = `
     <div class="stack">
       <section class="panel">
         <div class="panel-head">
-          <h3>Help Topics</h3>
-          <p>Use this page as in-product documentation for the service architecture, portal areas, deployment paths, and operator workflows.</p>
+          <h3>Help Explorer</h3>
+          <p>Search by task, drill into functional areas, and open step-by-step guidance without leaving the portal.</p>
         </div>
-        <div class="guide-grid">
-          <article class="guide-card">
-            <h4>At A Glance</h4>
-            <p>The service combines endpoint monitoring, cluster coordination, container operations, access control, and optional PostgreSQL plus object-storage telemetry retention in one admin portal.</p>
-          </article>
-          <article class="guide-card">
-            <h4>Portal Areas</h4>
-            <p>Home, Dashboards, Monitors, Cluster, Administration, Profile, and Help each focus on a specific part of operating the monitoring platform.</p>
-          </article>
-          <article class="guide-card">
-            <h4>Security And Secrets</h4>
-            <p>The service supports encrypted config secrets using <code>ASM_CONFIG_PASSPHRASE</code> so sensitive usernames, passwords, tokens, and headers can stay out of plaintext storage.</p>
-          </article>
-          <article class="guide-card">
-            <h4>Deployment Modes</h4>
-            <p>You can run locally, with Docker, as a clustered Docker deployment, or through an offline air-gapped workflow with prebuilt assets.</p>
-          </article>
+        <div class="help-toolbar">
+          <label class="help-search">
+            <span>Search Help</span>
+            <input type="search" id="help-search" placeholder="Try: browser monitor, telemetry, roles, offline deployment" value="${escapeHtml(query)}" />
+          </label>
+          <button type="button" id="help-search-clear" class="secondary">Clear Search</button>
         </div>
+        ${helpSectionPillsMarkup(activeSection, activeTopicId)}
       </section>
-
-      <section class="panel">
-        <div class="panel-head">
-          <h3>Architecture</h3>
-          <p>This is the end-to-end flow from portal changes to monitor execution and telemetry storage.</p>
+      <div class="help-layout">
+        ${helpSidebarMarkup(matchingTopics, activeSection, activeTopicId)}
+        ${showArticle ? helpArticleMarkup(selectedTopic) : helpOverviewMarkup(matchingTopics, activeSection, query)}
+      </div>
+      <div id="help-diagram-lightbox" class="help-diagram-lightbox hidden" role="dialog" aria-modal="true" aria-labelledby="help-diagram-lightbox-title">
+        <div class="help-diagram-lightbox-backdrop" data-help-diagram-close></div>
+        <div class="help-diagram-lightbox-panel">
+          <div class="help-diagram-lightbox-head">
+            <h3 id="help-diagram-lightbox-title">Diagram</h3>
+            <button type="button" class="secondary" data-help-diagram-close>Close</button>
+          </div>
+          <div class="help-diagram-lightbox-body">
+            <img id="help-diagram-lightbox-image" src="" alt="" />
+          </div>
         </div>
-        <div class="diagram-row">
-          <div class="diagram-node">Portal UI</div>
-          <div class="diagram-arrow">→</div>
-          <div class="diagram-node">Config Store</div>
-          <div class="diagram-arrow">→</div>
-          <div class="diagram-node">Monitor Runner</div>
-          <div class="diagram-arrow">→</div>
-          <div class="diagram-node">Checks + Peer Pollers</div>
-          <div class="diagram-arrow">→</div>
-          <div class="diagram-node">Home + Dashboards</div>
-        </div>
-      </section>
-
-      <section class="panel">
-        <div class="panel-head">
-          <h3>Cluster Coordination</h3>
-          <p>Monitoring nodes can watch the same targets, watch one another, and recover failed peers.</p>
-        </div>
-        <div class="diagram-grid">
-          <div class="diagram-node">Monitor Node A</div>
-          <div class="diagram-node">Monitor Node B</div>
-          <div class="diagram-node">Monitor Node C</div>
-          <div class="diagram-node wide">Shared Endpoints, Peer Health, Recovery Decisions, Email Alerts</div>
-        </div>
-      </section>
-
-      <section class="panel">
-        <div class="panel-head">
-          <h3>Telemetry Storage</h3>
-          <p>Telemetry can stay local in memory or be retained in PostgreSQL plus MinIO-compatible object storage for two hours, locally or in OCI.</p>
-        </div>
-        <div class="diagram-row">
-          <div class="diagram-node">Check Result</div>
-          <div class="diagram-arrow">→</div>
-          <div class="diagram-node">Monitor State</div>
-          <div class="diagram-arrow">→</div>
-          <div class="diagram-node">Live Graphs</div>
-          <div class="diagram-arrow">+</div>
-          <div class="diagram-node">PostgreSQL + Object Storage</div>
-        </div>
-      </section>
-
-      <section class="panel">
-        <div class="panel-head">
-          <h3>Portal Areas</h3>
-          <p>These map the main areas of the application to the operational tasks they support.</p>
-        </div>
-        <div class="guide-grid">
-          <article class="guide-card">
-            <h4>Home</h4>
-            <p>Use Home to watch endpoint health dots, availability graphs, node health, and the latest outcomes across enabled monitors.</p>
-          </article>
-          <article class="guide-card">
-            <h4>Dashboards</h4>
-            <p>Use Dashboards to troubleshoot one or more monitors with live history, outcome details, and failure-focused observability cards.</p>
-          </article>
-          <article class="guide-card">
-            <h4>Monitors</h4>
-            <p>Use Monitors to start a new monitor flow, bulk-manage configured monitors, or open a dedicated monitor page for editing and validation.</p>
-          </article>
-          <article class="guide-card">
-            <h4>Cluster</h4>
-            <p>Use Cluster to manage peer nodes, monitor containers, published ports, Docker networks, and cluster topology details.</p>
-          </article>
-          <article class="guide-card">
-            <h4>Administration</h4>
-            <p>Use Administration for user accounts, auth settings, telemetry storage, email configuration, and service-level integration settings.</p>
-          </article>
-        </div>
-      </section>
-
-      <section class="panel">
-        <div class="panel-head">
-          <h3>Running Locally</h3>
-          <p>These are the standard local startup steps pulled from the project README.</p>
-        </div>
-        <div class="guide-card">
-          <h4>Local Startup</h4>
-          <pre class="mono">py -3 -m venv .venv
-.venv\\Scripts\\Activate.ps1
-pip install -e .
-py -3 -m service_monitor --config config.yaml</pre>
-          <p>On a brand-new config with no users yet, the first visitor is guided through initial admin onboarding before the rest of the portal becomes available.</p>
-        </div>
-      </section>
-
-      <section class="panel">
-        <div class="panel-head">
-          <h3>Config Encryption</h3>
-          <p>Sensitive values can be encrypted before storing or moving a config file between machines.</p>
-        </div>
-        <div class="guide-grid">
-          <article class="guide-card">
-            <h4>Protected Fields</h4>
-            <p>Portal credentials, email credentials, telemetry credentials, and monitor auth secrets can all be encrypted in <code>config.yaml</code>.</p>
-          </article>
-          <article class="guide-card">
-            <h4>Passphrase Workflow</h4>
-            <p>Set <code>ASM_CONFIG_PASSPHRASE</code>, generate a passphrase if needed, and use the CLI encrypt command before committing or transferring the config file.</p>
-          </article>
-        </div>
-        <div class="guide-card">
-          <h4>Encryption Commands</h4>
-          <pre class="mono">py -3 -m service_monitor --generate-config-passphrase
-$env:ASM_CONFIG_PASSPHRASE = "replace-with-your-passphrase"
-py -3 -m service_monitor --encrypt-config --config config.yaml</pre>
-        </div>
-      </section>
-
-      <section class="panel">
-        <div class="panel-head">
-          <h3>Docker Deployment</h3>
-          <p>The built-in image supports single-node Docker runs and clustered Docker Compose runs.</p>
-        </div>
-        <div class="guide-grid">
-          <article class="guide-card">
-            <h4>Single Node Docker</h4>
-            <pre class="mono">docker build -t async-service-monitor .
-docker run --rm -p 8000:8000 -v \${PWD}/config.yaml:/app/config.yaml async-service-monitor</pre>
-          </article>
-          <article class="guide-card">
-            <h4>Clustered Compose</h4>
-            <pre class="mono">docker compose up --build</pre>
-          </article>
-        </div>
-        <div class="guide-card">
-          <h4>Docker Note</h4>
-          <p>If your config uses encrypted values or if you want the admin UI to create new peer containers, pass through the matching config secrets and host-side config binding values too.</p>
-        </div>
-      </section>
-
-      <section class="panel">
-        <div class="panel-head">
-          <h3>Offline Deployment</h3>
-          <p>The project supports air-gapped deployment after offline assets are prepared on a connected machine.</p>
-        </div>
-        <div class="guide-grid">
-          <article class="guide-card">
-            <h4>Prepare Assets</h4>
-            <pre class="mono">.\\scripts\\prepare-offline-assets.ps1
-.\\scripts\\verify-offline-assets.ps1</pre>
-          </article>
-          <article class="guide-card">
-            <h4>Load And Run Offline</h4>
-            <pre class="mono">.\\scripts\\load-offline-assets.ps1
-docker compose -f docker-compose.offline.yml up</pre>
-          </article>
-        </div>
-        <div class="guide-card">
-          <h4>Air-Gap Notes</h4>
-          <p>Offline support expects the Python wheels and supporting Docker images to be prepared first. Self-provisioned local PostgreSQL, MinIO, and Mailpit still need their images loaded into Docker in the disconnected environment.</p>
-        </div>
-      </section>
+      </div>
     </div>
   `;
+}
+
+function openHelpDiagramLightbox(src, alt, title) {
+  const lightbox = document.getElementById("help-diagram-lightbox");
+  const image = document.getElementById("help-diagram-lightbox-image");
+  const heading = document.getElementById("help-diagram-lightbox-title");
+  if (!lightbox || !image || !heading) return;
+  image.src = src;
+  image.alt = alt || title || "Expanded help diagram";
+  heading.textContent = title || "Diagram";
+  lightbox.classList.remove("hidden");
+  document.body.classList.add("modal-open");
+}
+
+function closeHelpDiagramLightbox() {
+  const lightbox = document.getElementById("help-diagram-lightbox");
+  const image = document.getElementById("help-diagram-lightbox-image");
+  if (!lightbox || lightbox.classList.contains("hidden")) return;
+  lightbox.classList.add("hidden");
+  document.body.classList.remove("modal-open");
+  if (image) {
+    image.src = "";
+    image.alt = "";
+  }
 }
 
 function renderAdminPage(users, telemetry, portalSettings, emailSettings, uiScaling) {
@@ -4308,6 +5302,362 @@ function renderAdminPage(users, telemetry, portalSettings, emailSettings, uiScal
         </details>
         </div>
     </section>
+  `;
+}
+
+function renderAdminHomePage(users, telemetry, portalSettings, emailSettings, uiScaling, clusterSummary = {}) {
+  setWorkspaceHeader("Administration", "Choose the part of the platform you want to administer.", [
+    { label: "Administration" },
+  ]);
+  const root = document.getElementById("app-root");
+  const enabledUsers = users.filter((user) => user.enabled).length;
+  const trackedContainers = clusterSummary?.containers?.available ? (clusterSummary.containers.containers || []).length : 0;
+  root.innerHTML = `
+    <div class="stack">
+      ${adminSectionNavMarkup("home")}
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Administration Home</h3>
+          <p>Open a focused administrative workspace instead of managing everything from one long page.</p>
+        </div>
+        <div class="guide-grid">
+          <a class="guide-card admin-home-card" href="/admin/users" data-link>
+            <h4>User Administration</h4>
+            <p>Create accounts, assign roles, disable access, and manage who can operate the portal.</p>
+            <div class="status-meta">
+              <span>${users.length} accounts</span>
+              <span>${enabledUsers} enabled</span>
+            </div>
+          </a>
+          <a class="guide-card admin-home-card" href="/admin/config" data-link>
+            <h4>Application Configuration</h4>
+            <p>Set up telemetry, notifications, scaling, portal auth, and cloud integration options.</p>
+            <div class="status-meta">
+              <span>${telemetry?.enabled ? "Telemetry enabled" : "Telemetry disabled"}</span>
+              <span>${emailSettings?.enabled ? "Notifications enabled" : "Notifications disabled"}</span>
+              <span>${uiScaling?.enabled ? "Scaled UI enabled" : "Scaled UI disabled"}</span>
+            </div>
+          </a>
+          <a class="guide-card admin-home-card" href="/admin/cluster" data-link>
+            <h4>Cluster And Containers</h4>
+            <p>Manage peers, monitoring containers, container topology, Docker networks, and live cluster health.</p>
+            <div class="status-meta">
+              <span>${clusterSummary?.enabled ? "Cluster mode" : "Standalone mode"}</span>
+              <span>${trackedContainers} tracked containers</span>
+            </div>
+          </a>
+        </div>
+        <div class="guide-card">
+          <h4>Why The Split</h4>
+          <p>User management, service configuration, and cluster operations are separate responsibilities. Breaking them into dedicated pages keeps each workflow smaller, clearer, and faster to use.</p>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function renderAdminUsersPage(users) {
+  setWorkspaceHeader("User Administration", "Manage user accounts, roles, and access to the portal.", [
+    { label: "Administration", href: "/admin" },
+    { label: "User Administration" },
+  ]);
+  const root = document.getElementById("app-root");
+  const enabledUsers = users.filter((user) => user.enabled).length;
+  root.innerHTML = `
+    <div class="stack">
+      ${adminSectionNavMarkup("users")}
+      <section class="panel">
+        <div class="panel-head">
+          <h3>User Administration</h3>
+          <p>Create accounts and manage read-only, read-write, and administrator access.</p>
+        </div>
+        <div class="accordion">
+          <details class="accordion-item">
+            <summary class="accordion-summary">
+              <div>
+                <strong>Add User</strong>
+                <div class="status-meta">
+                  <span>Create a new portal account</span>
+                  <span>Basic auth today, OCI-ready later</span>
+                </div>
+              </div>
+            </summary>
+            <div class="accordion-body">
+              <form id="create-user-form" class="check-form">
+                <label><span>First Name</span><input name="first_name" /></label>
+                <label><span>Last Name</span><input name="last_name" /></label>
+                <label><span>Username</span><input name="username" required /></label>
+                <label><span>Password</span><input name="password" type="password" required /></label>
+                <label>
+                  <span>Role</span>
+                  <select name="role">
+                    <option value="read_only">Read-Only</option>
+                    <option value="read_write">Read-Write</option>
+                    <option value="admin">Administrator</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Account State</span>
+                  <select name="enabled">
+                    <option value="true">Enabled</option>
+                    <option value="false">Disabled</option>
+                  </select>
+                </label>
+                <button type="submit">Create User</button>
+                <p class="form-status" id="user-create-status"></p>
+              </form>
+            </div>
+          </details>
+
+          <details class="accordion-item" open>
+            <summary class="accordion-summary">
+              <div>
+                <strong>User Accounts</strong>
+                <div class="status-meta">
+                  <span>${users.length} total accounts</span>
+                  <span>${enabledUsers} enabled</span>
+                </div>
+              </div>
+            </summary>
+            <div class="accordion-body">
+              <div class="stack">
+                ${users.map((user) => `
+                  <details class="accordion-item nested-item">
+                    <summary class="accordion-summary">
+                      <div class="summary-identity">
+                        <span class="dot ${user.enabled ? "healthy" : "disabled"}"></span>
+                        <div>
+                          <strong>${escapeHtml([user.first_name, user.last_name].filter(Boolean).join(" ") || user.username)}</strong>
+                          <div class="status-meta">
+                            <span>${escapeHtml(user.username)}</span>
+                            <span>${escapeHtml(user.role.replaceAll("_", " "))}</span>
+                            <span>${user.last_login_at ? `Last login ${fmtTime(user.last_login_at)}` : "No logins yet"}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </summary>
+                    <div class="accordion-body">
+                      <form class="check-form user-form" data-username="${escapeHtml(user.username)}">
+                        <label><span>First Name</span><input name="first_name" value="${escapeHtml(user.first_name || "")}" /></label>
+                        <label><span>Last Name</span><input name="last_name" value="${escapeHtml(user.last_name || "")}" /></label>
+                        <label><span>Username</span><input name="username" value="${escapeHtml(user.username)}" required /></label>
+                        <label><span>New Password</span><input name="password" type="password" placeholder="Enter a replacement password" required /></label>
+                        <label>
+                          <span>Role</span>
+                          <select name="role">
+                            <option value="read_only" ${user.role === "read_only" ? "selected" : ""}>Read-Only</option>
+                            <option value="read_write" ${user.role === "read_write" ? "selected" : ""}>Read-Write</option>
+                            <option value="admin" ${user.role === "admin" ? "selected" : ""}>Administrator</option>
+                          </select>
+                        </label>
+                        <label>
+                          <span>Account State</span>
+                          <select name="enabled">
+                            <option value="true" ${user.enabled ? "selected" : ""}>Enabled</option>
+                            <option value="false" ${!user.enabled ? "selected" : ""}>Disabled</option>
+                          </select>
+                        </label>
+                        <div class="button-row">
+                          <button type="submit">Save User</button>
+                          <button type="button" class="danger" data-delete-user="${escapeHtml(user.username)}">Delete</button>
+                        </div>
+                        <p class="form-status"></p>
+                      </form>
+                    </div>
+                  </details>
+                `).join("")}
+              </div>
+            </div>
+          </details>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function renderAdminConfigPage(telemetry, portalSettings, emailSettings, uiScaling) {
+  setWorkspaceHeader("Application Configuration", "Configure notifications, storage, UI scaling, and cloud integrations.", [
+    { label: "Administration", href: "/admin" },
+    { label: "Application Configuration" },
+  ]);
+  const root = document.getElementById("app-root");
+  root.innerHTML = `
+    <div class="stack">
+      ${adminSectionNavMarkup("config")}
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Application Configuration</h3>
+          <p>Set up telemetry storage, email notifications, scaled dashboards, authentication, and OCI-ready service integrations.</p>
+        </div>
+        <div class="accordion">
+          <details class="accordion-item">
+            <summary class="accordion-summary">
+              <div>
+                <strong>Telemetry Storage</strong>
+                <div class="status-meta">
+                  <span>${telemetry?.timeseries_provider === "oci_postgresql" ? "OCI PostgreSQL" : "Local PostgreSQL"}</span>
+                  <span>${telemetry?.object_provider === "oci_object_storage" ? "OCI Object Storage" : "MinIO Compatible Object Store"}</span>
+                  <span>${telemetry?.retention_hours || 2} hour retention</span>
+                </div>
+              </div>
+            </summary>
+            <div class="accordion-body">
+              <form id="telemetry-form" class="check-form">
+                <h4>Timeseries</h4>
+                <label>
+                  <span>Enabled</span>
+                  <select name="enabled">
+                    <option value="true" ${telemetry?.enabled ? "selected" : ""}>Enabled</option>
+                    <option value="false" ${!telemetry?.enabled ? "selected" : ""}>Disabled</option>
+                  </select>
+                </label>
+                <label>
+                  <span>PostgreSQL Target</span>
+                  <select name="timeseries_provider">
+                    <option value="local_postgresql" ${telemetry?.timeseries_provider === "local_postgresql" ? "selected" : ""}>Local PostgreSQL Instance</option>
+                    <option value="oci_postgresql" ${telemetry?.timeseries_provider === "oci_postgresql" ? "selected" : ""}>OCI Hosted PostgreSQL</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Provision Local PostgreSQL For Me</span>
+                  <select name="auto_provision_timeseries_local">
+                    <option value="true" ${telemetry?.auto_provision_timeseries_local ? "selected" : ""}>Yes, provision it automatically</option>
+                    <option value="false" ${!telemetry?.auto_provision_timeseries_local ? "selected" : ""}>No, I will point to my own server</option>
+                  </select>
+                </label>
+                <label><span>Local PostgreSQL Container Name</span><input name="timeseries_local_container_name" value="${escapeHtml(telemetry?.timeseries_local_container_name || "async-service-monitor-postgres")}" /></label>
+                <label data-telemetry-timeseries-managed><span>Host</span><input name="timeseries_host" value="${escapeHtml(telemetry?.timeseries_host || "")}" placeholder="postgres.example.internal" /></label>
+                <label data-telemetry-timeseries-managed><span>Port</span><input name="timeseries_port" type="number" min="1" value="${escapeHtml(telemetry?.timeseries_port || 5432)}" /></label>
+                <label data-telemetry-timeseries-managed><span>Database</span><input name="timeseries_database" value="${escapeHtml(telemetry?.timeseries_database || "")}" /></label>
+                <label data-telemetry-timeseries-managed><span>Username</span><input name="timeseries_username" value="${escapeHtml(telemetry?.timeseries_username || "")}" /></label>
+                <label data-telemetry-timeseries-managed><span>Password</span><input name="timeseries_password" type="password" value="${escapeHtml(telemetry?.timeseries_password || "")}" /></label>
+                <label data-telemetry-timeseries-managed><span>Use SSL</span><select name="timeseries_use_ssl"><option value="true" ${telemetry?.timeseries_use_ssl ? "selected" : ""}>Enabled</option><option value="false" ${!telemetry?.timeseries_use_ssl ? "selected" : ""}>Disabled</option></select></label>
+                <label><span>Retention Hours</span><input name="retention_hours" type="number" min="1" value="${escapeHtml(telemetry?.retention_hours || 2)}" /></label>
+
+                <h4>Diagnostics Object Storage</h4>
+                <label>
+                  <span>Object Storage Target</span>
+                  <select name="object_provider">
+                    <option value="local_minio" ${telemetry?.object_provider === "local_minio" ? "selected" : ""}>Local MinIO</option>
+                    <option value="oci_object_storage" ${telemetry?.object_provider === "oci_object_storage" ? "selected" : ""}>OCI Object Storage</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Provision Local MinIO For Me</span>
+                  <select name="auto_provision_object_local">
+                    <option value="true" ${telemetry?.auto_provision_object_local ? "selected" : ""}>Yes, provision it automatically</option>
+                    <option value="false" ${!telemetry?.auto_provision_object_local ? "selected" : ""}>No, I will point to my own server</option>
+                  </select>
+                </label>
+                <label><span>Local MinIO Container Name</span><input name="object_local_container_name" value="${escapeHtml(telemetry?.object_local_container_name || "async-service-monitor-minio")}" /></label>
+                <label><span>Local MinIO Console Port</span><input name="object_console_port" type="number" min="1" value="${escapeHtml(telemetry?.object_console_port || 9001)}" /></label>
+                <label data-telemetry-object-managed><span>Endpoint</span><input name="object_endpoint" value="${escapeHtml(telemetry?.object_endpoint || "")}" placeholder="http://127.0.0.1:9000" /></label>
+                <label data-telemetry-object-managed><span>Bucket</span><input name="object_bucket" value="${escapeHtml(telemetry?.object_bucket || "async-service-monitor")}" /></label>
+                <label data-telemetry-object-managed><span>Access Key</span><input name="object_access_key" value="${escapeHtml(telemetry?.object_access_key || "")}" /></label>
+                <label data-telemetry-object-managed><span>Secret Key</span><input name="object_secret_key" type="password" value="${escapeHtml(telemetry?.object_secret_key || "")}" /></label>
+                <label data-telemetry-object-managed><span>Region</span><input name="object_region" value="${escapeHtml(telemetry?.object_region || "")}" placeholder="us-phoenix-1" /></label>
+                <label data-telemetry-object-managed><span>Use TLS</span><select name="object_use_ssl"><option value="true" ${telemetry?.object_use_ssl ? "selected" : ""}>Enabled</option><option value="false" ${!telemetry?.object_use_ssl ? "selected" : ""}>Disabled</option></select></label>
+                <button type="submit">Save Telemetry Settings</button>
+                <p class="form-note">Timeseries data is retained in PostgreSQL, while full diagnostics and config snapshots are retained in MinIO or OCI Object Storage.</p>
+                <p class="form-note" id="telemetry-managed-note"></p>
+                <p class="form-status" id="telemetry-status"></p>
+              </form>
+            </div>
+          </details>
+
+          <details class="accordion-item">
+            <summary class="accordion-summary">
+              <div>
+                <strong>Email Notifications</strong>
+                <div class="status-meta">
+                  <span>${escapeHtml(emailSettings?.provider || "custom")}</span>
+                  <span>${emailSettings?.auto_provision_local ? "Local mail container" : "External email service"}</span>
+                </div>
+              </div>
+            </summary>
+            <div class="accordion-body">
+              <form id="email-settings-form" class="check-form">
+                <label><span>Enabled</span><select name="enabled"><option value="true" ${emailSettings?.enabled ? "selected" : ""}>Enabled</option><option value="false" ${!emailSettings?.enabled ? "selected" : ""}>Disabled</option></select></label>
+                <label><span>Email Provider</span><select name="provider"><option value="m365" ${emailSettings?.provider === "m365" ? "selected" : ""}>Microsoft 365</option><option value="yahoo" ${emailSettings?.provider === "yahoo" ? "selected" : ""}>Yahoo Mail</option><option value="gmail" ${emailSettings?.provider === "gmail" ? "selected" : ""}>Gmail</option><option value="outlook" ${emailSettings?.provider === "outlook" ? "selected" : ""}>Outlook</option><option value="custom" ${!emailSettings?.provider || emailSettings?.provider === "custom" ? "selected" : ""}>Custom Email Service</option></select></label>
+                <label><span>Provision Local Email Service For Me</span><select name="auto_provision_local"><option value="true" ${emailSettings?.auto_provision_local ? "selected" : ""}>Yes, build and wire a local mail container</option><option value="false" ${!emailSettings?.auto_provision_local ? "selected" : ""}>No, I will use an existing email service</option></select></label>
+                <label><span>SMTP Host</span><input name="host" value="${escapeHtml(emailSettings?.host || "")}" placeholder="smtp.gmail.com" /></label>
+                <label><span>SMTP Port</span><input name="port" type="number" min="1" value="${escapeHtml(emailSettings?.port || 587)}" /></label>
+                <label><span>Username</span><input name="username" value="${escapeHtml(emailSettings?.username || "")}" placeholder="alerts@example.com" /></label>
+                <label><span>Password</span><input name="password" type="password" value="${escapeHtml(emailSettings?.password || "")}" /></label>
+                <label><span>From Address</span><input name="from_address" value="${escapeHtml(emailSettings?.from_address || "")}" placeholder="monitor@example.com" /></label>
+                <label><span>To Addresses</span><input name="to_addresses" value="${escapeHtml(csv(emailSettings?.to_addresses || []))}" placeholder="admin@example.com, oncall@example.com" /></label>
+                <label><span>Subject Prefix</span><input name="subject_prefix" value="${escapeHtml(emailSettings?.subject_prefix || "[async-service-monitor]")}" /></label>
+                <label><span>Use STARTTLS</span><select name="use_tls"><option value="true" ${emailSettings?.use_tls !== false ? "selected" : ""}>Enabled</option><option value="false" ${emailSettings?.use_tls === false ? "selected" : ""}>Disabled</option></select></label>
+                <label><span>Use SSL</span><select name="use_ssl"><option value="true" ${emailSettings?.use_ssl ? "selected" : ""}>Enabled</option><option value="false" ${!emailSettings?.use_ssl ? "selected" : ""}>Disabled</option></select></label>
+                <label><span>Local Email Container Name</span><input name="local_container_name" value="${escapeHtml(emailSettings?.local_container_name || "async-service-monitor-mailpit")}" /></label>
+                <label><span>Local Email UI Port</span><input name="local_ui_port" type="number" min="1" value="${escapeHtml(emailSettings?.local_ui_port || 8025)}" /></label>
+                <button type="submit">Save Email Settings</button>
+                <p class="form-status" id="email-settings-status"></p>
+              </form>
+            </div>
+          </details>
+
+          <details class="accordion-item">
+            <summary class="accordion-summary">
+              <div>
+                <strong>UI Scaling</strong>
+                <div class="status-meta">
+                  <span>${uiScaling?.enabled ? `${uiScaling.dashboard_replicas} dashboard replicas` : "Disabled"}</span>
+                  <span>${uiScaling?.session_strategy === "sticky_proxy" ? "Sticky proxy sessions" : "Shared signed sessions"}</span>
+                </div>
+              </div>
+            </summary>
+            <div class="accordion-body">
+              <form id="ui-scaling-form" class="check-form">
+                <label><span>Enable UI Scaling</span><select name="enabled"><option value="true" ${uiScaling?.enabled ? "selected" : ""}>Enabled</option><option value="false" ${!uiScaling?.enabled ? "selected" : ""}>Disabled</option></select></label>
+                <label><span>Session Handling</span><select name="session_strategy"><option value="shared_cookie" ${!uiScaling?.session_strategy || uiScaling?.session_strategy === "shared_cookie" ? "selected" : ""}>Shared signed sessions</option><option value="sticky_proxy" ${uiScaling?.session_strategy === "sticky_proxy" ? "selected" : ""}>Sticky proxy sessions</option></select></label>
+                <label><span>Enable Sticky Sessions</span><select name="sticky_sessions"><option value="true" ${uiScaling?.sticky_sessions ? "selected" : ""}>Enabled</option><option value="false" ${!uiScaling?.sticky_sessions ? "selected" : ""}>Disabled</option></select></label>
+                <label><span>Dashboard Replica Count</span><input name="dashboard_replicas" type="number" min="1" max="10" value="${escapeHtml(uiScaling?.dashboard_replicas || 2)}" /></label>
+                <label><span>Proxy Container Name</span><input name="proxy_container_name" value="${escapeHtml(uiScaling?.proxy_container_name || "async-service-monitor-proxy")}" /></label>
+                <label><span>Dashboard Container Prefix</span><input name="dashboard_container_prefix" value="${escapeHtml(uiScaling?.dashboard_container_prefix || "async-service-monitor-dashboard")}" /></label>
+                <label><span>Proxy Port</span><input name="proxy_port" type="number" min="1" value="${escapeHtml(uiScaling?.proxy_port || 8000)}" /></label>
+                <div class="guide-card">
+                  <h4>Scaling Notes</h4>
+                  <p>When enabled, the service provisions Docker-based dashboard replicas and a proxy automatically. Shared telemetry is required, and the portal will auto-generate a shared session secret if one is missing.</p>
+                </div>
+                <button type="submit">Save UI Scaling</button>
+                <p class="form-status" id="ui-scaling-status"></p>
+              </form>
+            </div>
+          </details>
+
+          <details class="accordion-item">
+            <summary class="accordion-summary">
+              <div>
+                <strong>Portal Authentication</strong>
+                <div class="status-meta">
+                  <span>${portalSettings?.provider === "oci" ? "OCI Auth" : "Basic Auth"}</span>
+                  <span>${portalSettings?.realm || "Async Service Monitor"}</span>
+                </div>
+              </div>
+            </summary>
+            <div class="accordion-body">
+              <form id="portal-settings-form" class="check-form">
+                <label><span>Portal Auth Enabled</span><select name="enabled"><option value="true" ${portalSettings?.enabled ? "selected" : ""}>Enabled</option><option value="false" ${!portalSettings?.enabled ? "selected" : ""}>Disabled</option></select></label>
+                <label><span>Provider</span><select name="provider"><option value="basic" ${portalSettings?.provider === "basic" ? "selected" : ""}>Basic Auth</option><option value="oci" ${portalSettings?.provider === "oci" ? "selected" : ""}>OCI Auth</option></select></label>
+                <label><span>Realm</span><input name="realm" value="${escapeHtml(portalSettings?.realm || "Async Service Monitor")}" /></label>
+                <div class="guide-card">
+                  <h4>Session Handling</h4>
+                  <p>${portalSettings?.session_secret_configured ? "A shared signed session secret is configured for multi-container portal access." : "A shared session secret will be generated automatically when scaled UI mode is enabled."}</p>
+                </div>
+                <label><span>OCI Settings Enabled</span><select name="oci_enabled"><option value="true" ${portalSettings?.oci_enabled ? "selected" : ""}>Enabled</option><option value="false" ${!portalSettings?.oci_enabled ? "selected" : ""}>Disabled</option></select></label>
+                <label><span>OCI Tenancy OCID</span><input name="tenancy_ocid" value="${escapeHtml(portalSettings?.tenancy_ocid || "")}" /></label>
+                <label><span>OCI User OCID</span><input name="user_ocid" value="${escapeHtml(portalSettings?.user_ocid || "")}" /></label>
+                <label><span>OCI Region</span><input name="region" value="${escapeHtml(portalSettings?.region || "")}" /></label>
+                <label><span>OCI Group Claim</span><input name="group_claim" value="${escapeHtml(portalSettings?.group_claim || "")}" placeholder="groups" /></label>
+                <button type="submit">Save Portal Settings</button>
+                <p class="form-status" id="portal-settings-status"></p>
+              </form>
+            </div>
+          </details>
+        </div>
+      </section>
+    </div>
   `;
 }
 
@@ -4834,6 +6184,7 @@ function isInteractiveRoute(path = window.location.pathname) {
   return (
     path === "/monitors" ||
     path === "/configured-monitors" ||
+    path === "/guide" ||
     path === "/monitors/new" ||
     path === "/monitors/new/basic" ||
     path === "/monitors/new/advanced" ||
@@ -4843,8 +6194,7 @@ function isInteractiveRoute(path = window.location.pathname) {
     path.startsWith("/monitors/") ||
     path === "/profile" ||
     path === "/admin" ||
-    path === "/cluster/configure" ||
-    path.startsWith("/cluster/")
+    path.startsWith("/admin/")
   );
 }
 
@@ -4865,9 +6215,6 @@ async function renderRoute() {
     } else {
       stopPlaywrightRecorderPolling();
     }
-  }
-  if (path.startsWith("/cluster") || path === "/containers") {
-    state.clusterExpanded = true;
   }
   if (state.session?.setup_required) {
     renderSidebar([], { available: false, containers: [] });
@@ -4894,6 +6241,7 @@ async function renderRoute() {
       api("/api/cluster"),
     ]);
     renderDashboard(overview, checks, summaryCounts, checkMetrics, nodeMetrics, cluster);
+    hydratePlotlyCharts(document.getElementById("app-root"));
     return;
   }
 
@@ -4903,6 +6251,7 @@ async function renderRoute() {
       api("/api/results?limit=200"),
     ]);
     renderDashboardsPage(checks, checkMetrics, recentResults);
+    hydratePlotlyCharts(document.getElementById("app-root"));
     return;
   }
 
@@ -4927,6 +6276,7 @@ async function renderRoute() {
       customStart ? Number(customStart) : null,
       customEnd ? Number(customEnd) : null
     );
+    hydratePlotlyCharts(document.getElementById("app-root"));
     return;
   }
 
@@ -4936,6 +6286,7 @@ async function renderRoute() {
       check.metric_points = monitorPoints(check, checkMetrics);
     });
     renderMonitorsHomePage(checks);
+    hydratePlotlyCharts(document.getElementById("app-root"));
     return;
   }
 
@@ -4964,14 +6315,40 @@ async function renderRoute() {
       navigate("/");
       return;
     }
-    const [users, telemetry, portalSettings, emailSettings, uiScaling] = await Promise.all([
+    const [users, telemetry, portalSettings, emailSettings, uiScaling, cluster] = await Promise.all([
       api("/api/users"),
       api("/api/settings/telemetry"),
       api("/api/settings/portal"),
       api("/api/settings/email"),
       api("/api/settings/ui-scaling"),
+      api("/api/cluster"),
     ]);
-    renderAdminPage(users, telemetry, portalSettings, emailSettings, uiScaling);
+    renderAdminHomePage(users, telemetry, portalSettings, emailSettings, uiScaling, { ...cluster, containers: containersData });
+    return;
+  }
+
+  if (path === "/admin/users") {
+    if (!hasRole("admin")) {
+      navigate("/");
+      return;
+    }
+    const users = await api("/api/users");
+    renderAdminUsersPage(users);
+    return;
+  }
+
+  if (path === "/admin/config") {
+    if (!hasRole("admin")) {
+      navigate("/");
+      return;
+    }
+    const [telemetry, portalSettings, emailSettings, uiScaling] = await Promise.all([
+      api("/api/settings/telemetry"),
+      api("/api/settings/portal"),
+      api("/api/settings/email"),
+      api("/api/settings/ui-scaling"),
+    ]);
+    renderAdminConfigPage(telemetry, portalSettings, emailSettings, uiScaling);
     hydrateTelemetrySettingsForm(document.getElementById("telemetry-form"));
     hydrateEmailSettingsForm(document.getElementById("email-settings-form"));
     return;
@@ -5099,6 +6476,7 @@ async function renderRoute() {
       document.getElementById("app-root").innerHTML = browserMonitorMarkup(check, "edit", cluster);
       document.querySelectorAll("[data-browser-step]").forEach((row) => updateBrowserStepVisibility(row));
       applyNetworkFilters();
+      hydratePlotlyCharts(document.getElementById("app-root"));
       if (!hasRole("read_write")) {
         disableForm(document.getElementById("browser-monitor-form"), true);
       }
@@ -5112,6 +6490,7 @@ async function renderRoute() {
     document.getElementById("app-root").innerHTML = monitorFormMarkup(check, "edit", cluster);
     const form = document.getElementById("monitor-form");
     hydrateFormVisibility(form);
+    hydratePlotlyCharts(document.getElementById("app-root"));
     if (!hasRole("read_write")) {
       disableForm(form, true);
       setStatus(document.getElementById("monitor-form-status"), "Read-only access: editing is disabled for this account.");
@@ -5119,7 +6498,7 @@ async function renderRoute() {
     return;
   }
 
-  if (path === "/containers" || path === "/cluster/configure" || path === "/cluster") {
+  if (path === "/admin/cluster" || path === "/containers" || path === "/cluster/configure" || path === "/cluster") {
     const [peers, containers, nodeMetrics, cluster] = await Promise.all([
       api("/api/peers"),
       api("/api/containers"),
@@ -5130,7 +6509,7 @@ async function renderRoute() {
     return;
   }
 
-  if (path.startsWith("/cluster/")) {
+  if (path.startsWith("/admin/cluster/") || path.startsWith("/cluster/")) {
     const containerName = decodeURIComponent(path.split("/").pop());
     const [peers, containers, nodeMetrics] = await Promise.all([
       api("/api/peers"),
@@ -5139,7 +6518,7 @@ async function renderRoute() {
     ]);
     const container = (containers.available ? containers.containers : []).find((item) => item.name === containerName);
     if (!container) {
-      navigate("/cluster/configure");
+      navigate("/admin/cluster");
       return;
     }
     const peer = peers.find((item) => item.container_name === containerName || item.node_id === containerName);
@@ -5567,9 +6946,20 @@ async function handleClick(event) {
     return;
   }
 
-  if (event.target.closest("#cluster-toggle")) {
-    state.clusterExpanded = !state.clusterExpanded;
-    await renderRoute();
+  const helpDiagramTrigger = event.target.closest("[data-help-diagram-src]");
+  if (helpDiagramTrigger) {
+    event.preventDefault();
+    openHelpDiagramLightbox(
+      helpDiagramTrigger.dataset.helpDiagramSrc,
+      helpDiagramTrigger.dataset.helpDiagramAlt || "",
+      helpDiagramTrigger.dataset.helpDiagramTitle || "Diagram"
+    );
+    return;
+  }
+
+  if (event.target.closest("[data-help-diagram-close]")) {
+    event.preventDefault();
+    closeHelpDiagramLightbox();
     return;
   }
 
@@ -5711,6 +7101,12 @@ async function handleClick(event) {
         history_points: context.points || [],
       }
     );
+    return;
+  }
+
+  if (event.target.id === "help-search-clear") {
+    state.helpWorkspace.query = "";
+    renderGuidePage();
     return;
   }
 
@@ -5904,6 +7300,18 @@ function handleChange(event) {
 }
 
 function handleInput(event) {
+  if (event.target.id === "help-search") {
+    state.helpWorkspace.query = event.target.value || "";
+    renderGuidePage();
+    const nextInput = document.getElementById("help-search");
+    if (nextInput) {
+      nextInput.focus();
+      const cursor = state.helpWorkspace.query.length;
+      nextInput.setSelectionRange(cursor, cursor);
+    }
+    return;
+  }
+
   if (event.target.id === "dashboards-search") {
     state.dashboardWorkspace.query = event.target.value || "";
     renderRoute().catch((error) => alert(error.message));

@@ -1,0 +1,9 @@
+apiVersion: v2
+name: async-service-monitor
+description: Async Service Monitor deployment chart for Kubernetes
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/CoreyW-git/async-service-monitor
+sources:
+  - https://github.com/CoreyW-git/async-service-monitor

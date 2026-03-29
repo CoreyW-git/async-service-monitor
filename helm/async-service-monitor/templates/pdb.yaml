@@ -1,0 +1,13 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "async-service-monitor.fullname" . }}
+  labels:
+    {{- include "async-service-monitor.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "async-service-monitor.selectorLabels" . | nindent 6 }}
+{{- end }}

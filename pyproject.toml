@@ -21,6 +21,11 @@ dependencies = [
   "uvicorn>=0.35.0,<1.0.0",
 ]
 
+[project.optional-dependencies]
+docs = [
+  "diagrams>=0.24.4,<1.0.0",
+]
+
 [project.scripts]
 service-monitor = "service_monitor.cli:main"
 
@@ -32,4 +37,4 @@ include-package-data = true
 where = ["src"]
 
 [tool.setuptools.package-data]
-service_monitor = ["web/*.html", "web/*.css", "web/*.js"]
+service_monitor = ["web/*.html", "web/*.css", "web/*.js", "web/vendor/*.js", "web/help_assets/*.svg"]

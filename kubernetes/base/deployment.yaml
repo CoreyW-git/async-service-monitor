@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: async-service-monitor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: async-service-monitor
+      app.kubernetes.io/component: control-plane
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: async-service-monitor
+        app.kubernetes.io/component: control-plane
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: async-service-monitor
+          image: async-service-monitor:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - --config
+            - /app/config.yaml
+            - --host
+            - 0.0.0.0
+            - --port
+            - "8000"
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: ASM_CONFIG_PASSPHRASE
+              valueFrom:
+                secretKeyRef:
+                  name: async-service-monitor-secrets
+                  key: ASM_CONFIG_PASSPHRASE
+                  optional: true
+          ports:
+            - name: http
+              containerPort: 8000
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 18
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            - name: app-config
+              mountPath: /app/config.yaml
+              subPath: config.kubernetes.yaml
+              readOnly: true
+      volumes:
+        - name: app-config
+          configMap:
+            name: async-service-monitor-config
