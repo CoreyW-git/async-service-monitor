@@ -310,6 +310,54 @@ body[data-theme="dark"] .dashboard-summary-row {
   min-width: 0;
 }
 
+.monitor-builder-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.75fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.monitor-builder-preview {
+  position: sticky;
+  top: 20px;
+}
+
+.builder-preview-stack {
+  display: grid;
+  gap: 10px;
+}
+
+.builder-preview-block {
+  max-height: 260px;
+  overflow: auto;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--surface-alt);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.builder-preview-body {
+  max-height: 360px;
+}
+
+.builder-locked {
+  opacity: 0.78;
+}
+
+.builder-locked::after {
+  content: "Run a test to unlock better assertion guidance.";
+  display: block;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.monitor-builder-actions {
+  justify-content: flex-end;
+}
+
 .workspace-hero {
   display: grid;
   gap: 16px;
@@ -2044,7 +2092,8 @@ body.modal-open {
   .dashboard-card-stats,
   .dashboard-custom-range-form,
   .help-results-grid,
-  .help-example-grid {
+  .help-example-grid,
+  .monitor-builder-layout {
     grid-template-columns: 1fr;
   }
 

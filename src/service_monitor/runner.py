@@ -313,7 +313,7 @@ class MonitorRunner:
 
         if check.type == "dns":
             return await run_dns_check(check)
-        if check.type == "http":
+        if check.type in {"http", "api"}:
             return await run_http_check(client, check, timeout_seconds)
         if check.type == "auth":
             return await run_auth_check(client, check, timeout_seconds)

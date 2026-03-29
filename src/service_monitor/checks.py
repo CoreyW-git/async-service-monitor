@@ -47,6 +47,44 @@ def _build_request_kwargs(auth: AuthConfig | None) -> dict[str, object]:
     return kwargs
 
 
+def _merged_request_headers(check: CheckConfig) -> dict[str, str]:
+    headers = {header.name: header.value for header in check.request_headers if header.name}
+    auth_kwargs = _build_request_kwargs(check.auth)
+    auth_headers = auth_kwargs.get("headers") or {}
+    headers.update(auth_headers)
+    return headers
+
+
+def _request_payload_kwargs(check: CheckConfig) -> dict[str, object]:
+    kwargs: dict[str, object] = {}
+    headers = _merged_request_headers(check)
+    auth_kwargs = _build_request_kwargs(check.auth)
+    if "auth" in auth_kwargs:
+        kwargs["auth"] = auth_kwargs["auth"]
+    if headers:
+        kwargs["headers"] = headers
+    body = check.request_body
+    if body and check.request_method not in {"GET", "HEAD", "OPTIONS"}:
+        if check.request_body_mode == "json":
+            try:
+                kwargs["json"] = json.loads(body)
+            except json.JSONDecodeError:
+                kwargs["content"] = body
+        elif check.request_body_mode == "text":
+            kwargs["content"] = body
+    return kwargs
+
+
+def _validate_expected_headers(response: httpx.Response, check: CheckConfig) -> tuple[bool, str]:
+    for assertion in check.expected_headers:
+        actual = response.headers.get(assertion.name)
+        if actual is None:
+            return False, f"missing expected header: {assertion.name}"
+        if actual != assertion.expected_value:
+            return False, f"header {assertion.name} mismatch"
+    return True, "header validation passed"
+
+
 def _validate_content(body: str, check: CheckConfig) -> tuple[bool, str]:
     content = check.content
     if not content:
@@ -129,15 +167,72 @@ async def run_http_check(
     client: httpx.AsyncClient, check: CheckConfig, timeout_seconds: float
 ) -> CheckResult:
     started = time.perf_counter()
+    attempts = max(1, int(check.retry.attempts or 1))
+    retry_statuses = {int(status) for status in (check.retry.retry_on_statuses or [])}
+    last_exception: Exception | None = None
+    response: httpx.Response | None = None
+    current_attempt = 0
     try:
-        response = await client.get(
-            _resolved_url(check),
-            timeout=timeout_seconds,
-            follow_redirects=True,
-            **_build_request_kwargs(check.auth),
-        )
+        for current_attempt in range(1, attempts + 1):
+            try:
+                response = await client.request(
+                    check.request_method,
+                    _resolved_url(check),
+                    timeout=timeout_seconds,
+                    follow_redirects=True,
+                    **_request_payload_kwargs(check),
+                )
+                if response.status_code not in retry_statuses or current_attempt >= attempts:
+                    break
+            except httpx.TimeoutException as exc:
+                last_exception = exc
+                if not check.retry.retry_on_timeout or current_attempt >= attempts:
+                    raise
+            except httpx.RequestError as exc:
+                last_exception = exc
+                if not check.retry.retry_on_connection_error or current_attempt >= attempts:
+                    raise
+            if check.retry.delay_seconds > 0 and current_attempt < attempts:
+                await asyncio.sleep(check.retry.delay_seconds)
+
+        if response is None:
+            if last_exception is not None:
+                raise last_exception
+            raise RuntimeError("HTTP request did not produce a response")
+
+        assertions: list[dict[str, object]] = []
+        details = {
+            "status_code": response.status_code,
+            "request": {
+                "method": check.request_method,
+                "url": str(response.request.url),
+                "headers": dict(response.request.headers),
+                "body": check.request_body,
+                "body_mode": check.request_body_mode,
+            },
+            "response": {
+                "status_code": response.status_code,
+                "url": str(response.url),
+                "headers": dict(response.headers),
+                "body": response.text[:20000],
+                "body_preview": response.text[:4000],
+            },
+            "retry": {
+                "attempts": current_attempt,
+                "max_attempts": attempts,
+                "retried": current_attempt > 1,
+            },
+            "assertions": assertions,
+        }
 
         if response.status_code not in check.expected_statuses:
+            assertions.append(
+                {
+                    "name": "expected_statuses",
+                    "success": False,
+                    "message": f"Expected {check.expected_statuses}, got {response.status_code}",
+                }
+            )
             duration_ms = (time.perf_counter() - started) * 1000
             return CheckResult(
                 name=check.name,
@@ -145,18 +240,77 @@ async def run_http_check(
                 success=False,
                 message=f"unexpected status: {response.status_code}",
                 duration_ms=duration_ms,
-                details={"status_code": response.status_code},
+                details=details,
             )
+        assertions.append(
+            {
+                "name": "expected_statuses",
+                "success": True,
+                "message": f"Matched status {response.status_code}",
+            }
+        )
+
+        header_ok, header_message = _validate_expected_headers(response, check)
+        if not header_ok:
+            assertions.append({"name": "expected_headers", "success": False, "message": header_message})
+            duration_ms = (time.perf_counter() - started) * 1000
+            return CheckResult(
+                name=check.name,
+                check_type=check.type,
+                success=False,
+                message=f"header validation failed: {header_message}",
+                duration_ms=duration_ms,
+                details=details,
+            )
+        if check.expected_headers:
+            assertions.append({"name": "expected_headers", "success": True, "message": header_message})
 
         content_ok, content_message = _validate_content(response.text, check)
         duration_ms = (time.perf_counter() - started) * 1000
+        details["response_time_assertion_ms"] = check.max_response_time_ms
+        if check.max_response_time_ms is not None and duration_ms > float(check.max_response_time_ms):
+            assertions.append(
+                {
+                    "name": "max_response_time_ms",
+                    "success": False,
+                    "message": (
+                        f"Duration {int(duration_ms)} ms exceeded {int(float(check.max_response_time_ms))} ms"
+                    ),
+                }
+            )
+            return CheckResult(
+                name=check.name,
+                check_type=check.type,
+                success=False,
+                message=(
+                    f"response time exceeded assertion: {int(duration_ms)} ms > "
+                    f"{int(float(check.max_response_time_ms))} ms"
+                ),
+                duration_ms=duration_ms,
+                details=details,
+            )
+        if check.max_response_time_ms is not None:
+            assertions.append(
+                {
+                    "name": "max_response_time_ms",
+                    "success": True,
+                    "message": f"Duration {int(duration_ms)} ms within limit",
+                }
+            )
+        assertions.append(
+            {
+                "name": "content",
+                "success": bool(content_ok),
+                "message": content_message,
+            }
+        )
         return CheckResult(
             name=check.name,
             check_type=check.type,
             success=content_ok,
             message=content_message if content_ok else f"content validation failed: {content_message}",
             duration_ms=duration_ms,
-            details={"status_code": response.status_code},
+            details=details,
         )
     except Exception as exc:
         duration_ms = (time.perf_counter() - started) * 1000
@@ -166,6 +320,20 @@ async def run_http_check(
             success=False,
             message=f"http request failed: {exc}",
             duration_ms=duration_ms,
+            details={
+                "request": {
+                    "method": check.request_method,
+                    "url": _resolved_url(check),
+                    "headers": _merged_request_headers(check),
+                    "body": check.request_body,
+                    "body_mode": check.request_body_mode,
+                },
+                "retry": {
+                    "attempts": current_attempt,
+                    "max_attempts": attempts,
+                    "retried": current_attempt > 1,
+                },
+            },
         )
 
 

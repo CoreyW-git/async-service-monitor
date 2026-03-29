@@ -13,6 +13,7 @@ function createRecorderState() {
     playwrightError: "",
     playwrightBrowserOpen: false,
     playwrightPollHandle: null,
+    lastTestResult: null,
   };
 }
 
@@ -40,6 +41,12 @@ const state = {
     query: "",
   },
   dashboardDetailContext: null,
+  basicMonitorBuilder: {
+    lastTestResult: null,
+  },
+  browserMonitorBuilder: {
+    lastTestResult: null,
+  },
   recorder: createRecorderState(),
 };
 
@@ -124,14 +131,15 @@ const HELP_TOPICS = [
       <h3>Recommended First Workflow</h3>
       <ol class="help-numbered-list">
         <li>Sign in and land on <strong>Home</strong> to confirm the service is up.</li>
-        <li>Open <strong>Monitors</strong> and choose <strong>Add Monitor</strong>, then start with a Basic HTTP, DNS, or Generic monitor.</li>
-        <li>Save the monitor and immediately open its dedicated page to test it.</li>
-        <li>Open <strong>Dashboards</strong> to review availability, latency, and error signals for the new monitor.</li>
+        <li>Open <strong>Monitors</strong>, choose <strong>Add Monitor</strong>, then start with the <strong>Basic Monitor Builder</strong>.</li>
+        <li>Select a request type such as HTTP, API, DNS, Database, or Generic, define the request, and run a live test before you save.</li>
+        <li>Use the right-side live test console to review the request preview, response preview, body content, and assertion results.</li>
+        <li>Save the monitor and immediately open its dedicated dashboard to review availability, latency, and error signals.</li>
         <li>Use <strong>Administration</strong> only after the first monitor works so storage, email, and scaling changes are easier to validate.</li>
       </ol>
       <div class="help-callout">
         <strong>Best first monitor:</strong>
-        <p>An HTTP monitor against an internal app health page or a DNS monitor against a stable hostname is the easiest way to validate the platform end to end.</p>
+        <p>An HTTP or API monitor against an internal health endpoint is the easiest way to validate the platform end to end because you can test the request, define assertions, and immediately see the results in the live console.</p>
       </div>
       <h3>Where To Go Next</h3>
       <div class="help-link-grid">
@@ -210,11 +218,11 @@ const HELP_TOPICS = [
         </article>
         <article class="help-example-card">
           <h4>Monitors</h4>
-          <p>Create or edit monitors, recorder-based browser journeys, auth, validation rules, and placement.</p>
+          <p>Use the monitor builders to create Basic and Advanced monitors, define assertions, test requests, record browser journeys, and control placement.</p>
         </article>
         <article class="help-example-card">
           <h4>Administration</h4>
-          <p>Manage users, service configuration, telemetry storage, email notifications, auth, UI scaling, and cluster/container operations.</p>
+          <p>Use dedicated admin pages for User Administration, Application Configuration, and Cluster And Containers.</p>
         </article>
         <article class="help-example-card">
           <h4>Personal Settings</h4>
@@ -229,9 +237,23 @@ const HELP_TOPICS = [
     id: "basic-monitors",
     section: "monitors",
     title: "Build Basic Monitors",
-    summary: "How to create HTTP, DNS, Auth, Database, and Generic monitors with examples.",
-    keywords: ["basic monitor", "http", "dns", "auth", "database", "generic", "examples", "port"],
+    summary: "How to use the Basic Monitor builder for HTTP, API, DNS, Auth, Database, and Generic monitors.",
+    keywords: ["basic monitor", "builder", "http", "api", "dns", "auth", "database", "generic", "examples", "port"],
     content: () => `
+      <h3>How The Basic Monitor Builder Works</h3>
+      <ol class="help-numbered-list">
+        <li><strong>Select Request Type</strong> to choose the monitor family you want to build.</li>
+        <li><strong>Define Request</strong> to provide the URL, host, path, port, method, headers, or body needed for the test.</li>
+        <li><strong>Test Request</strong> to validate the target before you save it.</li>
+        <li><strong>Define Assertions</strong> to set status-code, response-time, response-header, body, or content expectations.</li>
+        <li><strong>Define Retry Conditions</strong> for retry counts, delays, and retryable status codes.</li>
+        <li><strong>Define Scheduling And Alert Conditions</strong> for interval, placement, and threshold behavior.</li>
+        <li><strong>Configure The Monitor</strong> to name it and create it.</li>
+      </ol>
+      <div class="help-callout">
+        <strong>Live Test Console:</strong>
+        <p>The right-side panel shows the full request preview, response preview, response body, and assertion outcomes while you are building the monitor. Use it before you click create.</p>
+      </div>
       <h3>Available Basic Monitor Types</h3>
       <div class="help-example-grid">
         <article class="help-example-card">
@@ -239,10 +261,21 @@ const HELP_TOPICS = [
           <p>Checks URL availability, response codes, content rules, and custom ports.</p>
           <pre class="mono">Name: Public Home
 Type: HTTP
-URL: https://example.com
-Port: 443
-Expected Statuses: 200
-Contains Text: Welcome</pre>
+          URL: https://example.com
+          Port: 443
+          Expected Statuses: 200
+          Contains Text: Welcome</pre>
+        </article>
+        <article class="help-example-card">
+          <h4>API</h4>
+          <p>Best for request-and-response validation when you need methods, headers, request bodies, header assertions, and response-time rules.</p>
+          <pre class="mono">Name: Orders API
+Type: API
+Method: POST
+URL: https://api.example.com/orders/search
+Headers: Authorization, Content-Type
+Expected Status: 200
+Max Response Time: 800 ms</pre>
         </article>
         <article class="help-example-card">
           <h4>DNS</h4>
@@ -281,6 +314,7 @@ Port: 6379</pre>
       <h3>Important Configuration Choices</h3>
       <ul class="help-bullet-list">
         <li><strong>Port</strong> is available anywhere a service might not use a default port.</li>
+        <li><strong>API request definitions</strong> support HTTP method, headers, and request body so the monitor can reflect a real API call instead of a shallow ping.</li>
         <li><strong>Placement</strong> controls whether a monitor is auto-balanced or pinned to a specific monitoring node.</li>
         <li><strong>Alert Thresholds</strong> can be learned automatically or set manually per monitor.</li>
         <li><strong>Validation Rules</strong> should be strict enough to catch regressions but not so strict that harmless copy changes create noise.</li>
@@ -304,13 +338,14 @@ Port: 6379</pre>
         <li>Required selectors that must render for success</li>
         <li>Journey steps such as navigate, click, fill, press, and assertions</li>
         <li>Optional authenticated session reuse for continuous runs</li>
+        <li>Per-monitor alert thresholds in either auto-learned or manual mode</li>
       </ul>
       <div class="help-callout">
         <strong>Use Browser Health when:</strong>
         <p>You need to know whether the page experience is truly working, not just whether the endpoint returned a 200.</p>
       </div>
       <h3>What Appears On The Dashboard</h3>
-      <p>Browser dashboards surface latency trends, error trends, step-level outcomes, session diagnostics, network diagnostics, and downloadable HAR-style files for deeper investigation.</p>
+      <p>Browser dashboards surface P50, average, P95, and P99 latency trends, availability, error trends, step-level outcomes, session diagnostics, network diagnostics, and downloadable HAR-style files for deeper investigation.</p>
     `,
   },
   {
@@ -327,19 +362,25 @@ Port: 6379</pre>
           <p>Fastest option for internal pages and simpler sites that work well inside the app.</p>
         </article>
         <article class="help-example-card">
-          <h4>Chromium Recorder</h4>
-          <p>Best choice when the target site uses bot protection, popup behavior, or more advanced browser flows.</p>
+          <h4>Desktop Chromium Recorder</h4>
+          <p>Best choice when the target site uses bot protection, popup behavior, or more advanced browser flows that do not behave well inside the embedded view.</p>
         </article>
       </div>
       <h3>Recommended Workflow</h3>
       <ol class="help-numbered-list">
         <li>Open <strong>Monitors → Add Monitor → Advanced Monitor → Monitor Recorder</strong>.</li>
         <li>Enter the target URL and start with the embedded recorder.</li>
-        <li>If the page is blocked or rate limited, switch to <strong>Use Chromium Recorder</strong>.</li>
+        <li>If the page is blocked, rate limited, or starts behaving badly inside the embedded view, switch to <strong>Use Chromium Recorder</strong>.</li>
         <li>Click through the journey, including login if needed.</li>
         <li>Choose whether to persist the authenticated browser session for future scheduled runs.</li>
         <li>Test the journey, then save it as a browser monitor.</li>
       </ol>
+      <h3>What The Desktop Recorder Does Differently</h3>
+      <ul class="help-bullet-list">
+        <li>Launches a separate visible browser helper in your desktop session.</li>
+        <li>Keeps the recorder focused on one controlled page even when a site attempts to open new tabs or popups.</li>
+        <li>Streams recorded steps, page navigation, and captured browser session state back into the portal.</li>
+      </ul>
       <h3>Authentication Notes</h3>
       <p>The recorder can capture browser session state and reuse it later. You can also update the stored browser session manually on the saved monitor page without recreating the entire monitor.</p>
     `,
@@ -357,6 +398,13 @@ Port: 6379</pre>
         <li><strong>Latency</strong> shows P50, average, P95, and P99 performance characteristics.</li>
         <li><strong>Error Trend</strong> counts failures and smaller browser/runtime errors separately from full outages.</li>
         <li><strong>Traffic</strong> shows how many monitor runs are contributing to the current window.</li>
+      </ul>
+      <h3>Four Golden Signals In This Portal</h3>
+      <ul class="help-bullet-list">
+        <li><strong>Latency</strong> is shown through the latency trend and percentile cards.</li>
+        <li><strong>Traffic</strong> is approximated by monitor run volume in the selected time window.</li>
+        <li><strong>Errors</strong> are surfaced both as monitor failures and as browser/runtime error events that do not always cause full outage.</li>
+        <li><strong>Saturation</strong> is approximated through node health, cluster pressure, and monitor placement rather than full host APM metrics.</li>
       </ul>
       <h3>How To Troubleshoot</h3>
       <ol class="help-numbered-list">
@@ -388,6 +436,10 @@ Port: 6379</pre>
       </ul>
       <h3>Placement Guidance</h3>
       <p>When creating a monitor, use auto placement by default. Pin a monitor to a specific node only when you have a strong reason, such as network locality or a dedicated troubleshooting path.</p>
+      <div class="help-callout">
+        <strong>Important scope note:</strong>
+        <p>Cluster And Containers is now an administration workflow. It no longer has its own primary left-navigation destination outside Administration.</p>
+      </div>
     `,
   },
   {
@@ -418,6 +470,13 @@ Port: 6379</pre>
         <li>Email notification provider settings and optional local email service provisioning</li>
         <li>Portal authentication settings and OCI auth scaffolding</li>
         <li>UI scaling controls for Docker-based dashboard replicas and sticky/session-aware access</li>
+        <li>Cluster And Containers controls for peer definitions, node status, container scope, and container lifecycle</li>
+      </ul>
+      <h3>Administration Page Layout</h3>
+      <ul class="help-bullet-list">
+        <li><strong>User Administration</strong> is for accounts, access levels, and profile-related governance.</li>
+        <li><strong>Application Configuration</strong> is for telemetry, email, auth, scaling, and cloud integration settings.</li>
+        <li><strong>Cluster And Containers</strong> is for monitoring-node configuration, live cluster status, and container management.</li>
       </ul>
     `,
   },
@@ -434,6 +493,7 @@ Port: 6379</pre>
       <p>Retention hours control how much historical data remains available to dashboards and troubleshooting workflows. Lower retention reduces storage use and keeps the UI fast.</p>
       <h3>Self-Service Provisioning</h3>
       <p>If you choose local storage and ask the application to provision it for you, the app fills in the managed connection settings automatically and disables the fields it now owns.</p>
+      <p>That same pattern now applies to local object storage provisioning as well, so operators do not have to manually wire PostgreSQL or MinIO connection details when they choose automatic local setup.</p>
       <div class="help-callout">
         <strong>Cloud-friendly design:</strong>
         <p>The PostgreSQL plus object-storage split makes it much easier to transition the entire data layer to OCI over time without redesigning the dashboard model.</p>
@@ -1491,6 +1551,7 @@ function checkTargetLabel(check) {
 function checkCategoryLabel(type) {
   const labels = {
     http: "HTTP",
+    api: "API",
     dns: "DNS",
     auth: "Auth",
     generic: "Generic",
@@ -2362,6 +2423,7 @@ function renderDashboardsPage(checks, checkMetrics, recentResults = []) {
                 <select id="dashboards-type-filter">
                   <option value="all" ${state.dashboardWorkspace.type === "all" ? "selected" : ""}>All types</option>
                   <option value="http" ${state.dashboardWorkspace.type === "http" ? "selected" : ""}>HTTP</option>
+                  <option value="api" ${state.dashboardWorkspace.type === "api" ? "selected" : ""}>API</option>
                   <option value="dns" ${state.dashboardWorkspace.type === "dns" ? "selected" : ""}>DNS</option>
                   <option value="auth" ${state.dashboardWorkspace.type === "auth" ? "selected" : ""}>Auth</option>
                   <option value="generic" ${state.dashboardWorkspace.type === "generic" ? "selected" : ""}>Generic</option>
@@ -3016,9 +3078,554 @@ function disableForm(form, disabled) {
   });
 }
 
+function parseHeaderLines(value) {
+  return String(value || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const separator = line.indexOf(":");
+      if (separator < 0) {
+        return null;
+      }
+      const name = line.slice(0, separator).trim();
+      const headerValue = line.slice(separator + 1).trim();
+      return name ? { name, value: headerValue } : null;
+    })
+    .filter(Boolean);
+}
+
+function parseExpectedHeaderLines(value) {
+  return String(value || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const separator = line.indexOf(":");
+      if (separator < 0) {
+        return null;
+      }
+      const name = line.slice(0, separator).trim();
+      const expected_value = line.slice(separator + 1).trim();
+      return name ? { name, expected_value } : null;
+    })
+    .filter(Boolean);
+}
+
+function formatHeaderLines(headers = [], expected = false) {
+  return (headers || [])
+    .map((header) => `${header.name || ""}: ${expected ? header.expected_value || "" : header.value || ""}`.trim())
+    .join("\n");
+}
+
+function basicMonitorBuilderPreviewMarkup(result) {
+  const details = result?.details || {};
+  const request = details.request || {};
+  const response = details.response || {};
+  const retry = details.retry || {};
+  const assertionText = Array.isArray(details.assertions)
+    ? details.assertions
+        .map((item) => `${item.success ? "PASS" : "FAIL"}: ${item.message || item.name || "assertion"}`)
+        .join("\n")
+    : "";
+  return `
+    <aside class="panel monitor-builder-preview">
+      <div class="panel-head">
+        <h3>Live Test Console</h3>
+        <p>${result ? "Request, response, and body details from the last builder test." : "Run a test to populate the live request and response preview."}</p>
+      </div>
+      ${
+        result
+          ? `
+            <div class="builder-preview-stack">
+              <div class="guide-card compact-card">
+                <h4>Latest Outcome</h4>
+                <p>${escapeHtml(result.message || "No message")}</p>
+                <div class="status-meta">
+                  <span>${statusLabel(result.success ? "healthy" : "unhealthy")}</span>
+                  <span>${formatDuration(result.duration_ms)}</span>
+                  <span>${retry.attempts || 1} of ${retry.max_attempts || 1} attempt(s)</span>
+                </div>
+              </div>
+              <div class="guide-card">
+                <h4>Request Preview</h4>
+                <pre class="mono builder-preview-block">${escapeHtml(JSON.stringify(request, null, 2))}</pre>
+              </div>
+              <div class="guide-card">
+                <h4>Response Preview</h4>
+                <pre class="mono builder-preview-block">${escapeHtml(JSON.stringify({
+                  status_code: response.status_code,
+                  url: response.url,
+                  headers: response.headers,
+                }, null, 2))}</pre>
+              </div>
+              <div class="guide-card">
+                <h4>Response Body</h4>
+                <pre class="mono builder-preview-block builder-preview-body">${escapeHtml(response.body || response.body_preview || "")}</pre>
+              </div>
+              <div class="guide-card ${assertionText ? "" : "hidden"}">
+                <h4>Assertion Results</h4>
+                <pre class="mono builder-preview-block">${escapeHtml(assertionText)}</pre>
+              </div>
+            </div>
+          `
+          : `
+            <div class="guide-card">
+              <h4>No Test Yet</h4>
+              <p>Fill out the request details, run a test, and this panel will show the full request preview, response preview, response body, and assertion results.</p>
+            </div>
+          `
+      }
+    </aside>
+  `;
+}
+
+function basicMonitorBuilderMarkup(
+  check,
+  cluster = { node_id: "monitor-1", peers: [], healthy_nodes: [] },
+  testResult = null
+) {
+  const nodes = assignableNodeOptions(cluster);
+  const auth = check.auth || {};
+  const authType = auth.type || (check.type === "auth" ? "bearer" : "none");
+  const placementMode = check.placement_mode || "auto";
+  const requestLike = ["http", "auth", "api"].includes(check.type);
+  const requestBodyMode = check.request_body_mode || "none";
+  const retry = check.retry || {};
+  const builderHasTest = Boolean(testResult);
+  return `
+    <div class="monitor-builder-layout">
+      <section class="stack">
+        <form class="check-form monitor-builder-form" id="monitor-form" data-original-name="" data-original-id="">
+          <section class="panel">
+            <div class="panel-head">
+              <h3>Basic Monitor Builder</h3>
+              <p>Build a monitor step by step, test it in place, then save it once the request and assertions look right.</p>
+            </div>
+            <div class="stack">
+              <div class="guide-card">
+                <h4>1. Select Request Type</h4>
+                <label>
+                  <span>Monitor Type</span>
+                  <select name="type">
+                    <option value="http" ${check.type === "http" ? "selected" : ""}>HTTP</option>
+                    <option value="api" ${check.type === "api" ? "selected" : ""}>API</option>
+                    <option value="auth" ${check.type === "auth" ? "selected" : ""}>Auth</option>
+                    <option value="dns" ${check.type === "dns" ? "selected" : ""}>DNS</option>
+                    <option value="database" ${check.type === "database" ? "selected" : ""}>Database</option>
+                    <option value="generic" ${check.type === "generic" ? "selected" : ""}>Generic</option>
+                  </select>
+                </label>
+              </div>
+
+              <div class="guide-card builder-section-request">
+                <h4>2. Define Request</h4>
+                <div class="guide-grid">
+                  <label class="field-url ${requestLike ? "" : "hidden"}"><span>URL</span><input name="url" value="${escapeHtml(check.url || "")}" placeholder="https://api.example.com/v1/orders" /></label>
+                  <label class="field-host ${requestLike ? "hidden" : ""} ${["dns", "database", "generic"].includes(check.type) ? "" : "hidden"}"><span>Host</span><input name="host" value="${escapeHtml(check.host || "")}" placeholder="service.internal" /></label>
+                  <label class="field-port ${check.type !== "dns" ? "" : "hidden"}"><span>Port</span><input name="port" type="number" min="1" max="65535" value="${escapeHtml(check.port || "")}" placeholder="443" /></label>
+                  <label class="builder-request-method ${requestLike ? "" : "hidden"}">
+                    <span>Method</span>
+                    <select name="request_method">
+                      ${["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"].map((method) => `<option value="${method}" ${check.request_method === method ? "selected" : ""}>${method}</option>`).join("")}
+                    </select>
+                  </label>
+                  <label class="builder-request-body-mode ${requestLike ? "" : "hidden"}">
+                    <span>Body Mode</span>
+                    <select name="request_body_mode">
+                      <option value="none" ${requestBodyMode === "none" ? "selected" : ""}>No Body</option>
+                      <option value="json" ${requestBodyMode === "json" ? "selected" : ""}>JSON</option>
+                      <option value="text" ${requestBodyMode === "text" ? "selected" : ""}>Text</option>
+                    </select>
+                  </label>
+                </div>
+                <label class="builder-request-headers ${requestLike ? "" : "hidden"}">
+                  <span>Request Headers</span>
+                  <textarea name="request_headers_text" rows="5" placeholder="Accept: application/json&#10;X-Correlation-Id: monitor-build">${escapeHtml(formatHeaderLines(check.request_headers || []))}</textarea>
+                </label>
+                <label class="builder-request-body ${requestLike && requestBodyMode !== "none" ? "" : "hidden"}">
+                  <span>Request Body</span>
+                  <textarea name="request_body" rows="8" placeholder='{"customerId":"12345"}'>${escapeHtml(check.request_body || "")}</textarea>
+                </label>
+                <details class="accordion-item auth-only ${requestLike ? "" : "hidden"}">
+                  <summary class="accordion-summary">
+                    <div>
+                      <strong>Authentication</strong>
+                      <div class="status-meta">
+                        <span>Optional credentials or auth headers for protected APIs and endpoints</span>
+                      </div>
+                    </div>
+                  </summary>
+                  <div class="accordion-body">
+                    <label data-auth-field="type">
+                      <span>Auth Type</span>
+                      <select name="auth_type">
+                        <option value="none" ${authType === "none" ? "selected" : ""}>None</option>
+                        <option value="bearer" ${authType === "bearer" ? "selected" : ""}>Bearer</option>
+                        <option value="basic" ${authType === "basic" ? "selected" : ""}>Basic</option>
+                        <option value="header" ${authType === "header" ? "selected" : ""}>Header</option>
+                      </select>
+                    </label>
+                    <label data-auth-field="token" class="${authType === "bearer" ? "" : "hidden"}"><span>Bearer Token</span><input name="token" value="${escapeHtml(auth.token || "")}" /></label>
+                    <label data-auth-field="username" class="${authType === "basic" ? "" : "hidden"}"><span>Username</span><input name="username" value="${escapeHtml(auth.username || "")}" /></label>
+                    <label data-auth-field="password" class="${authType === "basic" ? "" : "hidden"}"><span>Password</span><input name="password" type="password" value="${escapeHtml(auth.password || "")}" /></label>
+                    <label data-auth-field="header_name" class="${authType === "header" ? "" : "hidden"}"><span>Header Name</span><input name="header_name" value="${escapeHtml(auth.header_name || "")}" /></label>
+                    <label data-auth-field="header_value" class="${authType === "header" ? "" : "hidden"}"><span>Header Value</span><input name="header_value" value="${escapeHtml(auth.header_value || "")}" /></label>
+                  </div>
+                </details>
+                <div class="button-row">
+                  <button type="button" class="secondary" id="test-monitor-btn">Test Request</button>
+                </div>
+                <p class="form-status" id="monitor-form-status"></p>
+              </div>
+
+              <div class="guide-card builder-section-assertions ${builderHasTest ? "" : "builder-locked"}">
+                <h4>3. Define Assertions</h4>
+                <p class="subtle">${builderHasTest ? "Tune the assertions using the live test output on the right." : "Run a request test first. This section becomes much easier to configure once the builder has a real response to work from."}</p>
+                <div class="guide-grid">
+                  <label class="${requestLike ? "" : "hidden"}"><span>Expected Status Codes</span><input name="expected_statuses" value="${escapeHtml(csv(check.expected_statuses || [200]))}" placeholder="200,201" /></label>
+                  <label class="${requestLike ? "" : "hidden"}"><span>Max Response Time (ms)</span><input name="max_response_time_ms" type="number" min="1" value="${escapeHtml(check.max_response_time_ms || "")}" placeholder="1500" /></label>
+                </div>
+                <label class="${requestLike ? "" : "hidden"}">
+                  <span>Expected Response Headers</span>
+                  <textarea name="expected_headers_text" rows="4" placeholder="content-type: application/json&#10;cache-control: no-store">${escapeHtml(formatHeaderLines(check.expected_headers || [], true))}</textarea>
+                </label>
+                <label class="${requestLike ? "" : "hidden"}"><span>Body Must Contain</span><input name="contains" value="${escapeHtml(csv(check.content_rules?.contains || []))}" placeholder="success,orderId" /></label>
+                <label class="${requestLike ? "" : "hidden"}"><span>Body Must Not Contain</span><input name="not_contains" value="${escapeHtml(csv(check.content_rules?.not_contains || []))}" placeholder="error,failure" /></label>
+                <label class="${requestLike ? "" : "hidden"}"><span>Regex Match</span><input name="regex" value="${escapeHtml(check.content_rules?.regex || "")}" placeholder="\"status\"\\s*:\\s*\"ok\"" /></label>
+              </div>
+
+              <div class="guide-card">
+                <h4>4. Define Retry Conditions</h4>
+                <div class="guide-grid">
+                  <label><span>Attempts</span><input name="retry_attempts" type="number" min="1" value="${escapeHtml(retry.attempts || 1)}" /></label>
+                  <label><span>Delay Seconds</span><input name="retry_delay_seconds" type="number" min="0" step="0.1" value="${escapeHtml(retry.delay_seconds || 0)}" /></label>
+                </div>
+                <label class="${requestLike ? "" : "hidden"}"><span>Retry On Status Codes</span><input name="retry_on_statuses" value="${escapeHtml(csv(retry.retry_on_statuses || []))}" placeholder="429,500,502,503,504" /></label>
+                <div class="guide-grid">
+                  <label>
+                    <span>Retry On Timeout</span>
+                    <select name="retry_on_timeout">
+                      <option value="true" ${retry.retry_on_timeout !== false ? "selected" : ""}>Yes</option>
+                      <option value="false" ${retry.retry_on_timeout === false ? "selected" : ""}>No</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Retry On Connection Error</span>
+                    <select name="retry_on_connection_error">
+                      <option value="true" ${retry.retry_on_connection_error !== false ? "selected" : ""}>Yes</option>
+                      <option value="false" ${retry.retry_on_connection_error === false ? "selected" : ""}>No</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
+
+              <div class="guide-card">
+                <h4>5. Define Scheduling And Alert Conditions</h4>
+                <div class="guide-grid">
+                  <label><span>Interval Seconds</span><input name="interval_seconds" type="number" min="1" value="${escapeHtml(check.interval_seconds || 300)}" /></label>
+                  <label><span>Timeout Seconds</span><input name="timeout_seconds" type="number" min="1" value="${escapeHtml(check.timeout_seconds || 10)}" /></label>
+                </div>
+                <div class="guide-grid">
+                  <label>
+                    <span>Placement</span>
+                    <select name="placement_mode">
+                      <option value="auto" ${placementMode !== "specific" ? "selected" : ""}>Auto-select the healthiest least-loaded container</option>
+                      <option value="specific" ${placementMode === "specific" ? "selected" : ""}>Choose a specific monitoring container</option>
+                    </select>
+                  </label>
+                  <label class="field-assigned-node ${placementMode === "specific" ? "" : "hidden"}">
+                    <span>Monitoring Container</span>
+                    <select name="assigned_node_id">
+                      <option value="">Select a monitoring container</option>
+                      ${nodes
+                        .map(
+                          (node) => `<option value="${escapeHtml(node.node_id)}" ${check.assigned_node_id === node.node_id ? "selected" : ""}>${escapeHtml(node.label)}</option>`
+                        )
+                        .join("")}
+                    </select>
+                  </label>
+                </div>
+                ${alertThresholdFieldsMarkup(check, true)}
+              </div>
+
+              <div class="guide-card">
+                <h4>6. Configure The Monitor</h4>
+                <div class="guide-grid">
+                  <label><span>Monitor Name</span><input name="name" value="${escapeHtml(check.name || "")}" placeholder="Orders API" required /></label>
+                  <label>
+                    <span>Enabled State</span>
+                    <select name="enabled">
+                      <option value="true" ${check.enabled !== false ? "selected" : ""}>Enabled</option>
+                      <option value="false" ${check.enabled === false ? "selected" : ""}>Disabled</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
+            </div>
+            <div class="button-row monitor-builder-actions">
+              <button type="button" class="secondary" id="abandon-monitor-builder-btn">Abandon</button>
+              <button type="submit">Create Monitor</button>
+            </div>
+          </section>
+        </form>
+      </section>
+      ${basicMonitorBuilderPreviewMarkup(testResult)}
+    </div>
+  `;
+}
+
+function browserMonitorBuilderPreviewMarkup(result) {
+  return `
+    <aside class="panel monitor-builder-preview" id="browser-builder-preview">
+      <div class="panel-head">
+        <h3>Live Test Console</h3>
+        <p>${result ? "Browser timing, journey status, and diagnostics from the last live test." : "Run a browser test to populate the journey timing, step status, network diagnostics, and page errors."}</p>
+      </div>
+      ${
+        result
+          ? browserDiagnosticsMarkup(result, { compact: true })
+          : `
+            <div class="guide-card">
+              <h4>No Test Yet</h4>
+              <p>Define the page target, run a test, and this panel will fill with browser timing, network activity, console messages, and script errors.</p>
+            </div>
+          `
+      }
+    </aside>
+  `;
+}
+
+function browserMonitorBuilderMarkup(check, mode, cluster = { node_id: "monitor-1", peers: [], healthy_nodes: [] }, testResult = null) {
+  const isNew = mode === "create";
+  const canWrite = hasRole("read_write");
+  const placementMode = check.placement_mode || "auto";
+  const nodes = assignableNodeOptions(cluster);
+  const selectedNodeId = check.assigned_node_id || "";
+  const browser = check.browser || {};
+  const steps = Array.isArray(browser.steps) && browser.steps.length ? browser.steps : [];
+  const activeResult = testResult || (!isNew ? check.latest_result || null : null);
+  return `
+    <div class="monitor-builder-layout">
+      <section class="stack">
+        ${isNew ? "" : `
+          <section class="panel">
+            <div class="panel-head">
+              <h3>Monitor Status</h3>
+              <p>Latest browser outcome, ownership, and the current health of the synthetic journey.</p>
+            </div>
+            <div class="status-row">
+              <span class="dot ${statusClass(check.status)}"></span>
+              <div>
+                <strong>${escapeHtml(check.name || "Browser monitor")}</strong>
+                <div class="status-meta">
+                  <span>Browser</span>
+                  <span>${escapeHtml(check.url || "")}</span>
+                </div>
+              </div>
+              <div>${sparklineMarkup(check.metric_points || [], check.status === "unhealthy" ? "bad" : "good")}</div>
+              ${statusPill(check.status || "unknown")}
+              <span class="subtle">${escapeHtml(check.latest_result?.message || "No result yet")}</span>
+            </div>
+          </section>
+        `}
+        <form class="check-form monitor-builder-form" id="browser-monitor-form" data-original-name="${escapeHtml(check.name || "")}" data-original-id="${escapeHtml(check.id || "")}">
+          <section class="panel">
+            <div class="panel-head">
+              <h3>${isNew ? "Browser Health Monitor Builder" : `Edit ${escapeHtml(check.name)}`}</h3>
+              <p>Define the browser target, test the page, refine the journey, and then save the synthetic monitor when the diagnostics look right.</p>
+            </div>
+            <div class="stack">
+              <div class="guide-card">
+                <h4>1. Define The Browser Target</h4>
+                <div class="guide-grid">
+                  <label><span>Page URL</span><input name="url" value="${escapeHtml(check.url || "")}" placeholder="https://example.com" required ${canWrite ? "" : "disabled"} /></label>
+                  <label><span>Port</span><input name="port" type="number" min="1" max="65535" value="${escapeHtml(check.port || "")}" placeholder="Optional" ${canWrite ? "" : "disabled"} /></label>
+                  <label><span>Wait Until</span><select name="browser_wait_until" ${canWrite ? "" : "disabled"}><option value="networkidle" ${browser.wait_until === "networkidle" || !browser.wait_until ? "selected" : ""}>Network Idle</option><option value="load" ${browser.wait_until === "load" ? "selected" : ""}>Load</option><option value="domcontentloaded" ${browser.wait_until === "domcontentloaded" ? "selected" : ""}>DOMContentLoaded</option></select></label>
+                  <label><span>Timeout Seconds</span><input name="timeout_seconds" type="number" min="1" value="${escapeHtml(check.timeout_seconds || 30)}" ${canWrite ? "" : "disabled"} /></label>
+                  <label><span>Viewport Width</span><input name="browser_viewport_width" type="number" min="320" value="${escapeHtml(browser.viewport_width || 1440)}" ${canWrite ? "" : "disabled"} /></label>
+                  <label><span>Viewport Height</span><input name="browser_viewport_height" type="number" min="320" value="${escapeHtml(browser.viewport_height || 900)}" ${canWrite ? "" : "disabled"} /></label>
+                </div>
+              </div>
+
+              <div class="guide-card">
+                <h4>2. Test The Browser Target</h4>
+                <p class="subtle">Run the page in place so the right-side console can show timing, step results, console noise, page errors, and the captured network log.</p>
+                <div class="button-row">
+                  ${canWrite ? `<button type="button" id="test-browser-monitor-btn">Test Browser Monitor</button>` : ""}
+                </div>
+                <p class="form-status" id="browser-monitor-form-status"></p>
+              </div>
+
+              <div class="guide-card ${activeResult ? "" : "builder-locked"}">
+                <h4>3. Define Assertions</h4>
+                <p class="subtle">${activeResult ? "Tune the browser assertions using the test diagnostics on the right." : "Run a browser test first so you can validate the journey against a real page result instead of guessing."}</p>
+                <label><span>Expected Title Contains</span><input name="browser_expected_title_contains" value="${escapeHtml(browser.expected_title_contains || "")}" placeholder="Home | Example" ${canWrite ? "" : "disabled"} /></label>
+                <label><span>Required Selectors</span><input name="browser_required_selectors" value="${escapeHtml(csv(browser.required_selectors || []))}" placeholder="#app, nav a.login, footer" ${canWrite ? "" : "disabled"} /></label>
+                <label class="checkbox-field"><input name="browser_persist_auth_session" type="checkbox" ${browser.persist_auth_session ? "checked" : ""} ${canWrite ? "" : "disabled"} /><span>Reuse a captured authenticated browser session during scheduled runs</span></label>
+                <div class="guide-card compact-card session-state-card">
+                  <h4>Stored Browser Session</h4>
+                  <p>${browser.has_storage_state ? "A recorded browser session is stored for this monitor." : "No recorded browser session is stored yet."}</p>
+                  <div class="status-meta">
+                    <span>${browser.persist_auth_session ? "Session replay enabled" : "Session replay disabled"}</span>
+                    <span>${browser.storage_state_captured_at ? `Captured ${fmtTime(browser.storage_state_captured_at)}` : "No capture timestamp"}</span>
+                  </div>
+                </div>
+                ${!isNew ? `
+                  <label><span>Manual Browser Session Update</span><textarea name="browser_storage_state" rows="8" placeholder='Paste Playwright storage_state JSON here if you need to update the authenticated browser session manually.' ${canWrite ? "" : "disabled"}></textarea></label>
+                  <div class="button-row ${canWrite ? "" : "hidden"}">
+                    <button type="button" class="secondary" id="update-browser-session-btn">Update Stored Session</button>
+                    <button type="button" class="ghost danger" id="clear-browser-session-btn">Clear Stored Session</button>
+                  </div>
+                  <p class="form-note">Use this to rotate the stored authenticated browser session without rebuilding the monitor.</p>
+                  <p class="form-status" id="browser-session-status"></p>
+                ` : ""}
+              </div>
+
+              <div class="guide-card">
+                <h4>4. Define The Browser Journey</h4>
+                <p class="subtle">Add the browser steps you want to validate. The recorded and manual steps are replayed in this order every time the monitor runs.</p>
+                <div class="button-row ${canWrite ? "" : "hidden"}">
+                  <button type="button" id="add-browser-step-btn">Add Step</button>
+                </div>
+                <div class="stack" id="browser-steps-list">
+                  ${(steps.length ? steps : [{ name: "Wait for main app", action: "wait_for_selector", selector: "body" }]).map((step, index) => browserStepRowMarkup(step, index)).join("")}
+                </div>
+              </div>
+
+              <div class="guide-card">
+                <h4>5. Define Scheduling And Alert Conditions</h4>
+                <div class="guide-grid">
+                  <label><span>Interval Seconds</span><input name="interval_seconds" type="number" min="1" value="${escapeHtml(check.interval_seconds || 300)}" ${canWrite ? "" : "disabled"} /></label>
+                  <label>
+                    <span>Placement</span>
+                    <select name="placement_mode" ${canWrite ? "" : "disabled"}>
+                      <option value="auto" ${placementMode !== "specific" ? "selected" : ""}>Auto-select the healthiest least-loaded container</option>
+                      <option value="specific" ${placementMode === "specific" ? "selected" : ""}>Choose a specific monitoring container</option>
+                    </select>
+                  </label>
+                  <label class="field-assigned-node ${placementMode === "specific" ? "" : "hidden"}"><span>Monitoring Container</span><select name="assigned_node_id" ${canWrite ? "" : "disabled"}><option value="">Select a monitoring container</option>${nodes.map((node) => `<option value="${escapeHtml(node.node_id)}" ${selectedNodeId === node.node_id ? "selected" : ""}>${escapeHtml(node.label)}${node.healthy ? " | healthy" : " | unhealthy"} | ${escapeHtml(node.description || "")}</option>`).join("")}</select></label>
+                </div>
+                ${alertThresholdFieldsMarkup(check, canWrite)}
+              </div>
+
+              <div class="guide-card">
+                <h4>6. Configure The Monitor</h4>
+                <div class="guide-grid">
+                  <label><span>Name</span><input name="name" value="${escapeHtml(check.name || "")}" required ${canWrite ? "" : "disabled"} /></label>
+                  <label><span>Enabled</span><select name="enabled" ${canWrite ? "" : "disabled"}><option value="true" ${check.enabled !== false ? "selected" : ""}>Enabled</option><option value="false" ${check.enabled === false ? "selected" : ""}>Disabled</option></select></label>
+                </div>
+              </div>
+            </div>
+
+            <div class="button-row monitor-builder-actions">
+              ${isNew ? `<button type="button" class="secondary" id="abandon-browser-builder-btn">Abandon</button>` : ""}
+              ${canWrite ? `<button type="submit">${isNew ? "Create Browser Monitor" : "Save Browser Monitor"}</button>` : ""}
+              ${!isNew && canWrite ? `<button type="button" class="secondary" id="toggle-browser-monitor-btn">${check.enabled === false ? "Enable Monitor" : "Disable Monitor"}</button>` : ""}
+              ${!isNew && canWrite ? `<button type="button" class="danger" id="delete-browser-monitor-btn">Delete Monitor</button>` : ""}
+            </div>
+          </section>
+        </form>
+      </section>
+      ${browserMonitorBuilderPreviewMarkup(activeResult)}
+    </div>
+  `;
+}
+
+function realUserMonitoringBuilderMarkup() {
+  return `
+    <div class="monitor-builder-layout">
+      <section class="stack">
+        <section class="panel">
+          <div class="panel-head">
+            <h3>Real User Monitoring Builder</h3>
+            <p>Use the same guided builder pattern to define how real user telemetry should eventually be captured, evaluated, and surfaced in the dashboards.</p>
+          </div>
+          <div class="stack">
+            <div class="guide-card">
+              <h4>1. Define The Experience Scope</h4>
+              <p class="subtle">Choose the application, routes, and user journeys you want to observe. This section will become the place where you define page groups, flows, and business-critical entry points.</p>
+            </div>
+            <div class="guide-card">
+              <h4>2. Define The Data Collection Model</h4>
+              <p class="subtle">This workflow is reserved for browser beacons, page timing, resource timing, and user-session context that represent how the application behaves for real users.</p>
+            </div>
+            <div class="guide-card">
+              <h4>3. Define Assertions And Experience Goals</h4>
+              <p class="subtle">Use this space for future thresholds like acceptable page responsiveness, error counts, and user-impacting regressions.</p>
+            </div>
+            <div class="guide-card">
+              <h4>4. Define Scheduling And Alert Conditions</h4>
+              <p class="subtle">Real user monitoring will eventually tie into alerting, retention, and SLO-style dashboarding the same way the other monitor types do.</p>
+            </div>
+            <div class="guide-card">
+              <h4>5. Configure The Monitor</h4>
+              <p class="subtle">This page is now framed like the other builders so the eventual feature can slot in without changing the user story again.</p>
+            </div>
+          </div>
+          <div class="button-row monitor-builder-actions">
+            <button type="button" class="secondary" id="abandon-rum-builder-btn">Abandon</button>
+            <button type="button" disabled>Coming Soon</button>
+          </div>
+        </section>
+      </section>
+      <aside class="panel monitor-builder-preview">
+        <div class="panel-head">
+          <h3>Live Preview</h3>
+          <p>This panel is reserved for future session metrics, waterfall timing, JavaScript error samples, and user experience diagnostics.</p>
+        </div>
+        <div class="guide-card">
+          <h4>Planned Output</h4>
+          <p>Real user monitoring will eventually render golden signals, route performance, user-session latency, page errors, and trend-based assertions here just like the other builders.</p>
+        </div>
+      </aside>
+    </div>
+  `;
+}
+
+function recorderBuilderPreviewMarkup() {
+  const result = state.recorder.lastTestResult || null;
+  return `
+    <aside class="panel monitor-builder-preview" id="recorder-builder-preview">
+      <div class="panel-head">
+        <h3>Live Test Console</h3>
+        <p>${result ? "Current recorder session details plus the latest synthetic replay diagnostics." : "As you record, this panel summarizes the session. Once you test the generated monitor, the browser diagnostics will appear here too."}</p>
+      </div>
+      <div class="builder-preview-stack">
+        <div class="guide-card compact-card">
+          <h4>Recorder Session</h4>
+          <p>${escapeHtml(state.recorder.mode === "playwright" ? (state.recorder.playwrightSessionId || "Not started") : (state.recorder.sessionId || "Not started"))}</p>
+          <div class="status-meta">
+            <span>${escapeHtml(state.recorder.mode === "playwright" ? "Chromium Recorder" : "Embedded Recorder")}</span>
+            <span>${state.recorder.steps.length} recorded step${state.recorder.steps.length === 1 ? "" : "s"}</span>
+          </div>
+        </div>
+        <div class="guide-card compact-card">
+          <h4>Current Target</h4>
+          <p>${escapeHtml(state.recorder.lastPageUrl || state.recorder.targetUrl || "No page loaded")}</p>
+          <div class="status-meta">
+            <span>${escapeHtml(state.recorder.playwrightError || state.recorder.playwrightStatus || state.recorder.status || "Recorder waiting for input")}</span>
+          </div>
+        </div>
+        ${
+          result
+            ? browserDiagnosticsMarkup(result, { compact: true })
+            : `
+              <div class="guide-card">
+                <h4>No Test Yet</h4>
+                <p>Start recording, build a journey, and then run <strong>Test Recorded Monitor</strong> to populate the replay diagnostics here.</p>
+              </div>
+            `
+        }
+      </div>
+    </aside>
+  `;
+}
+
 function monitorFormMarkup(check, mode, cluster = { node_id: "monitor-1", peers: [], healthy_nodes: [] }) {
   const auth = check.auth || {};
   const authType = auth.type || (check.type === "auth" ? "bearer" : "none");
+  const requestLike = ["http", "auth", "api"].includes(check.type);
   const isNew = mode === "create";
   const canWrite = hasRole("read_write");
   const managed = Boolean(check.generated);
@@ -3094,6 +3701,7 @@ function monitorFormMarkup(check, mode, cluster = { node_id: "monitor-1", peers:
                   <span>Type</span>
                   <select name="type" ${readonlyAttr}>
                     <option value="http" ${check.type === "http" ? "selected" : ""}>HTTP</option>
+                    <option value="api" ${check.type === "api" ? "selected" : ""}>API</option>
                     <option value="dns" ${check.type === "dns" ? "selected" : ""}>DNS</option>
                     <option value="auth" ${check.type === "auth" ? "selected" : ""}>Auth</option>
                     <option value="database" ${check.type === "database" ? "selected" : ""}>Database</option>
@@ -3122,9 +3730,13 @@ function monitorFormMarkup(check, mode, cluster = { node_id: "monitor-1", peers:
               <div class="accordion-body">
                 <label><span>Interval Seconds</span><input name="interval_seconds" type="number" min="1" value="${escapeHtml(check.interval_seconds || 300)}" required ${readonlyAttr} /></label>
                 <label><span>Timeout Seconds</span><input name="timeout_seconds" type="number" min="1" value="${escapeHtml(check.timeout_seconds || 10)}" ${readonlyAttr} /></label>
-                <label class="field-url ${["http", "auth"].includes(check.type) ? "" : "hidden"}"><span>URL</span><input name="url" value="${escapeHtml(check.url || "")}" ${readonlyAttr} /></label>
+                <label class="field-url ${requestLike ? "" : "hidden"}"><span>URL</span><input name="url" value="${escapeHtml(check.url || "")}" ${readonlyAttr} /></label>
                 <label class="field-host ${["dns", "database", "generic"].includes(check.type) ? "" : "hidden"}"><span>Host</span><input name="host" value="${escapeHtml(check.host || "")}" ${readonlyAttr} /></label>
-                <label class="field-port ${["http", "auth", "database", "generic"].includes(check.type) ? "" : "hidden"}"><span>Port</span><input name="port" type="number" min="1" max="65535" value="${escapeHtml(check.port || "")}" ${readonlyAttr} /></label>
+                <label class="field-port ${requestLike || ["database", "generic"].includes(check.type) ? "" : "hidden"}"><span>Port</span><input name="port" type="number" min="1" max="65535" value="${escapeHtml(check.port || "")}" ${readonlyAttr} /></label>
+                <label class="request-like-only ${requestLike ? "" : "hidden"}"><span>Method</span><select name="request_method" ${readonlyAttr}>${["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"].map((method) => `<option value="${method}" ${check.request_method === method ? "selected" : ""}>${method}</option>`).join("")}</select></label>
+                <label class="request-like-only ${requestLike ? "" : "hidden"}"><span>Request Body Mode</span><select name="request_body_mode" ${readonlyAttr}><option value="none" ${(check.request_body_mode || "none") === "none" ? "selected" : ""}>No Body</option><option value="json" ${check.request_body_mode === "json" ? "selected" : ""}>JSON</option><option value="text" ${check.request_body_mode === "text" ? "selected" : ""}>Text</option></select></label>
+                <label class="request-like-only ${requestLike ? "" : "hidden"}"><span>Request Headers</span><textarea name="request_headers_text" rows="4" ${readonlyAttr}>${escapeHtml(formatHeaderLines(check.request_headers || []))}</textarea></label>
+                <label class="builder-request-body ${requestLike && (check.request_body_mode || "none") !== "none" ? "" : "hidden"}"><span>Request Body</span><textarea name="request_body" rows="6" ${readonlyAttr}>${escapeHtml(check.request_body || "")}</textarea></label>
               </div>
             </details>
 
@@ -3163,8 +3775,8 @@ function monitorFormMarkup(check, mode, cluster = { node_id: "monitor-1", peers:
               </div>
             </details>
 
-            <details class="accordion-item ${["http", "auth"].includes(check.type) ? "validation-open" : ""}" ${!isNew && ["http", "auth"].includes(check.type) ? "open" : ""}>
-              <summary class="accordion-summary field-statuses ${["http", "auth"].includes(check.type) ? "" : "hidden"}">
+            <details class="accordion-item ${requestLike ? "validation-open" : ""}" ${!isNew && requestLike ? "open" : ""}>
+              <summary class="accordion-summary field-statuses ${requestLike ? "" : "hidden"}">
                 <div>
                   <strong>Validation Rules</strong>
                   <div class="status-meta">
@@ -3172,16 +3784,18 @@ function monitorFormMarkup(check, mode, cluster = { node_id: "monitor-1", peers:
                   </div>
                 </div>
               </summary>
-              <div class="accordion-body field-statuses ${["http", "auth"].includes(check.type) ? "" : "hidden"}">
-                <label class="field-statuses ${["http", "auth"].includes(check.type) ? "" : "hidden"}"><span>Expected Statuses</span><input name="expected_statuses" value="${escapeHtml(csv(check.expected_statuses || [200]))}" ${readonlyAttr} /></label>
-                <label class="field-content ${["http", "auth"].includes(check.type) ? "" : "hidden"}"><span>Contains Text</span><input name="contains" value="${escapeHtml(csv(check.content_rules?.contains || []))}" ${readonlyAttr} /></label>
-                <label class="field-content ${["http", "auth"].includes(check.type) ? "" : "hidden"}"><span>Exclude Text</span><input name="not_contains" value="${escapeHtml(csv(check.content_rules?.not_contains || []))}" ${readonlyAttr} /></label>
-                <label class="field-content ${["http", "auth"].includes(check.type) ? "" : "hidden"}"><span>Regex</span><input name="regex" value="${escapeHtml(check.content_rules?.regex || "")}" ${readonlyAttr} /></label>
+              <div class="accordion-body field-statuses ${requestLike ? "" : "hidden"}">
+                <label class="field-statuses ${requestLike ? "" : "hidden"}"><span>Expected Statuses</span><input name="expected_statuses" value="${escapeHtml(csv(check.expected_statuses || [200]))}" ${readonlyAttr} /></label>
+                <label class="request-like-only ${requestLike ? "" : "hidden"}"><span>Expected Response Headers</span><textarea name="expected_headers_text" rows="4" ${readonlyAttr}>${escapeHtml(formatHeaderLines(check.expected_headers || [], true))}</textarea></label>
+                <label class="request-like-only ${requestLike ? "" : "hidden"}"><span>Max Response Time (ms)</span><input name="max_response_time_ms" type="number" min="1" value="${escapeHtml(check.max_response_time_ms || "")}" ${readonlyAttr} /></label>
+                <label class="field-content ${requestLike ? "" : "hidden"}"><span>Contains Text</span><input name="contains" value="${escapeHtml(csv(check.content_rules?.contains || []))}" ${readonlyAttr} /></label>
+                <label class="field-content ${requestLike ? "" : "hidden"}"><span>Exclude Text</span><input name="not_contains" value="${escapeHtml(csv(check.content_rules?.not_contains || []))}" ${readonlyAttr} /></label>
+                <label class="field-content ${requestLike ? "" : "hidden"}"><span>Regex</span><input name="regex" value="${escapeHtml(check.content_rules?.regex || "")}" ${readonlyAttr} /></label>
               </div>
             </details>
 
-            <details class="accordion-item auth-only ${!["http", "auth"].includes(check.type) ? "hidden" : ""}" ${!isNew && ["http", "auth"].includes(check.type) ? "open" : ""}>
-              <summary class="accordion-summary auth-only ${!["http", "auth"].includes(check.type) ? "hidden" : ""}">
+            <details class="accordion-item auth-only ${!requestLike ? "hidden" : ""}" ${!isNew && requestLike ? "open" : ""}>
+              <summary class="accordion-summary auth-only ${!requestLike ? "hidden" : ""}">
                 <div>
                   <strong>Authentication</strong>
                   <div class="status-meta">
@@ -4117,6 +4731,10 @@ function refreshRecorderUi() {
       || "Chromium recorder not running.";
     setStatus(playwrightStatus, message, Boolean(state.recorder.playwrightError));
   }
+  const preview = document.getElementById("recorder-builder-preview");
+  if (preview) {
+    preview.outerHTML = recorderBuilderPreviewMarkup();
+  }
 }
 
 function suggestPlaywrightFallback(reason) {
@@ -4217,132 +4835,137 @@ function renderMonitorRecorderPage(cluster = { node_id: "monitor-1", peers: [], 
   const nodes = assignableNodeOptions(cluster);
   const selectedNodeId = cluster.node_id || "";
   document.getElementById("app-root").innerHTML = `
-    <div class="stack">
-      <section class="panel">
-        <div class="panel-head">
-          <h3>Recorded Browser Monitor</h3>
-          <p>Capture clicks, fills, submits, and navigations from the in-app recorder and save them as a reusable synthetic monitor.</p>
-        </div>
-        <div class="recorder-help">
-          <article class="guide-card">
-            <h4>How To Use The Embedded Recorder</h4>
-            <ol class="recorder-help-list">
-              <li>Enter the page URL you want to monitor.</li>
-              <li>Select <strong>Start Embedded Recorder</strong> to load the page inside the portal.</li>
-              <li>Click through the page, including login fields and navigation steps.</li>
-              <li>Watch the recorded journey build below as each step is captured.</li>
-              <li>Select <strong>Test Recorded Monitor</strong> to replay the generated synthetic before saving.</li>
-            </ol>
-          </article>
-          <article class="guide-card">
-            <h4>When To Use Chromium Recorder</h4>
-            <ol class="recorder-help-list">
-              <li>If the embedded page shows blocking behavior like rate limits, access denied, or bot checks, select <strong>Use Chromium Recorder</strong>.</li>
-              <li>A separate Chromium window will open for that page.</li>
-              <li>Walk through the flow in Chromium just like a normal browser session.</li>
-              <li>The portal will continue collecting your recorded steps and show them in the same journey list.</li>
-              <li>Select <strong>Stop Chromium Recorder</strong> when you are done, then test and save the monitor.</li>
-            </ol>
-          </article>
-        </div>
-        <form class="check-form" id="monitor-recorder-form">
-          <div class="accordion">
-            <details class="accordion-item" open>
-              <summary class="accordion-summary"><div><strong>Basics</strong><div class="status-meta"><span>Name, schedule, and placement for the generated synthetic monitor</span></div></div></summary>
-              <div class="accordion-body">
-                <label><span>Name</span><input name="name" value="Recorded Browser Monitor" required /></label>
-                <label><span>Enabled</span><select name="enabled"><option value="true" selected>Enabled</option><option value="false">Disabled</option></select></label>
-                <label><span>Interval Seconds</span><input name="interval_seconds" type="number" min="1" value="300" /></label>
-                <label><span>Timeout Seconds</span><input name="timeout_seconds" type="number" min="1" value="30" /></label>
-                <label><span>Placement</span><select name="placement_mode"><option value="auto" selected>Auto-select the healthiest least-loaded container</option><option value="specific">Choose a specific monitoring container</option></select></label>
-                <label class="field-assigned-node hidden"><span>Monitoring Container</span><select name="assigned_node_id"><option value="">Select a monitoring container</option>${nodes.map((node) => `<option value="${escapeHtml(node.node_id)}" ${selectedNodeId === node.node_id ? "selected" : ""}>${escapeHtml(node.label)}${node.healthy ? " | healthy" : " | unhealthy"} | ${escapeHtml(node.description || "")}</option>`).join("")}</select></label>
-              </div>
-            </details>
+    <div class="monitor-builder-layout">
+      <section class="stack">
+        <form class="check-form monitor-builder-form" id="monitor-recorder-form">
+          <section class="panel">
+            <div class="panel-head">
+              <h3>Monitor Recorder Builder</h3>
+              <p>Capture a browser journey inside the portal, validate it in place, and then save it as a reusable browser monitor.</p>
+            </div>
+            <div class="recorder-help">
+              <article class="guide-card">
+                <h4>How To Use The Embedded Recorder</h4>
+                <ol class="recorder-help-list">
+                  <li>Enter the page URL you want to monitor.</li>
+                  <li>Select <strong>Start Embedded Recorder</strong> to load the page inside the portal.</li>
+                  <li>Click through the page, including login fields and navigation steps.</li>
+                  <li>Watch the recorded journey build below as each step is captured.</li>
+                  <li>Select <strong>Test Recorded Monitor</strong> to replay the generated synthetic before saving.</li>
+                </ol>
+              </article>
+              <article class="guide-card">
+                <h4>When To Use Chromium Recorder</h4>
+                <ol class="recorder-help-list">
+                  <li>If the embedded page shows rate limits, access denied, or bot checks, switch to <strong>Use Chromium Recorder</strong>.</li>
+                  <li>A separate Chromium window will open for the target site.</li>
+                  <li>Walk through the flow there like a normal browser session.</li>
+                  <li>The portal continues collecting the steps in the same journey list.</li>
+                  <li>Stop Chromium, test the recorded monitor, and then save it.</li>
+                </ol>
+              </article>
+            </div>
 
-            <details class="accordion-item" open>
-              <summary class="accordion-summary"><div><strong>Recorder Target</strong><div class="status-meta"><span>Choose the page to load in the recorder and how the generated monitor should validate it</span></div></div></summary>
-              <div class="accordion-body">
-                <label><span>Target URL</span><input name="url" id="monitor-recorder-url" value="${escapeHtml(state.recorder.targetUrl || "")}" placeholder="https://example.com/login" required /></label>
-                <label><span>Wait Until</span><select name="wait_until"><option value="networkidle" selected>Network Idle</option><option value="load">Load</option><option value="domcontentloaded">DOMContentLoaded</option></select></label>
-                <label><span>Viewport Width</span><input name="viewport_width" type="number" min="320" value="1440" /></label>
-                <label><span>Viewport Height</span><input name="viewport_height" type="number" min="320" value="900" /></label>
-                <label><span>Expected Title Contains</span><input name="expected_title_contains" placeholder="Optional title assertion" /></label>
-                <label><span>Required Selectors</span><input name="required_selectors" placeholder="#app, nav a.login" /></label>
-                <label class="checkbox-field"><input name="persist_auth_session" type="checkbox" /><span>Keep the authenticated browser session and reuse it when this monitor runs continuously</span></label>
+            <div class="stack">
+              <div class="guide-card">
+                <h4>1. Define The Recorder Target</h4>
+                <div class="guide-grid">
+                  <label><span>Target URL</span><input name="url" id="monitor-recorder-url" value="${escapeHtml(state.recorder.targetUrl || "")}" placeholder="https://example.com/login" required /></label>
+                  <label><span>Wait Until</span><select name="wait_until"><option value="networkidle" selected>Network Idle</option><option value="load">Load</option><option value="domcontentloaded">DOMContentLoaded</option></select></label>
+                  <label><span>Viewport Width</span><input name="viewport_width" type="number" min="320" value="1440" /></label>
+                  <label><span>Viewport Height</span><input name="viewport_height" type="number" min="320" value="900" /></label>
+                </div>
+              </div>
+
+              <div class="guide-card">
+                <h4>2. Capture The Browser Journey</h4>
                 <div class="button-row">
                   <button type="button" id="start-monitor-recorder-btn">Start Embedded Recorder</button>
                   <button type="button" class="secondary" id="use-playwright-recorder-btn">Use Chromium Recorder</button>
                   <button type="button" class="secondary hidden" id="stop-playwright-recorder-btn">Stop Chromium Recorder</button>
                   <button type="button" class="secondary" id="clear-monitor-recorder-btn">Clear Recorded Steps</button>
                 </div>
-                <p class="form-note">The recorder uses a proxied in-app browser session. It works best for flows that can be rendered inside the application; some highly locked-down sites may still restrict parts of their behavior.</p>
+                <p class="form-note">The recorder uses an embedded proxy first and lets you fall back to Chromium when a site needs a fuller browser session.</p>
                 <div id="recorder-fallback-panel" class="recorder-alert hidden">
                   <strong>Embedded recorder hit a wall.</strong>
                   <p id="recorder-fallback-text"></p>
                   <p class="subtle">Switch to Chromium recorder and continue capturing the same journey in a real browser window.</p>
                 </div>
-                <p class="form-note">If you want this to become a continuously authenticated browser monitor, sign in during the recorder session and enable the session reuse option before saving.</p>
+                <div class="guide-grid compact-grid">
+                  <article class="guide-card compact-card">
+                    <h4>Recorder Session</h4>
+                    <p id="monitor-recorder-session-label">${escapeHtml(state.recorder.sessionId || "Not started")}</p>
+                  </article>
+                  <article class="guide-card compact-card">
+                    <h4>Current Page</h4>
+                    <p id="monitor-recorder-page-label">${escapeHtml(state.recorder.lastPageUrl || state.recorder.targetUrl || "No page loaded")}</p>
+                  </article>
+                  <article class="guide-card compact-card">
+                    <h4>Captured Steps</h4>
+                    <p id="recorder-step-count">${state.recorder.steps.length} recorded step${state.recorder.steps.length === 1 ? "" : "s"}</p>
+                  </article>
+                  <article class="guide-card compact-card recorder-mode-card">
+                    <h4>Recorder Mode</h4>
+                    <p id="monitor-recorder-mode-value">Embedded Recorder</p>
+                    <div class="status-meta"><span id="monitor-recorder-mode-hint">Using the in-app recorder frame inside the portal.</span></div>
+                  </article>
+                </div>
+                <div class="recorder-frame-wrap" id="recorder-frame-panel">
+                  <iframe id="monitor-recorder-frame" class="monitor-recorder-frame" title="Monitor Recorder"></iframe>
+                </div>
+                <div class="guide-card hidden" id="playwright-recorder-panel">
+                  <h4>Chromium Recorder</h4>
+                  <p>Chromium opens in its own window so protected sites can behave more like a normal browser session. Walk through the flow there and the recorded steps will stream back into this page.</p>
+                  <p class="form-status" id="playwright-recorder-status"></p>
+                </div>
+                <p class="form-status" id="monitor-recorder-status"></p>
               </div>
-            </details>
-          </div>
-          <div class="button-row">
-            <button type="button" id="test-monitor-recorder-btn">Test Recorded Monitor</button>
-            <button type="submit">Save As Browser Monitor</button>
-          </div>
-          <p class="form-status" id="monitor-recorder-form-status"></p>
+
+              <div class="guide-card ${state.recorder.steps.length ? "" : "builder-locked"}">
+                <h4>3. Define Assertions And Session Reuse</h4>
+                <p class="subtle">${state.recorder.steps.length ? "Use the recorded journey to decide what the synthetic should validate every time it runs." : "Capture at least one recorded interaction first so this section is driven by a real journey."}</p>
+                <label><span>Expected Title Contains</span><input name="expected_title_contains" placeholder="Optional title assertion" /></label>
+                <label><span>Required Selectors</span><input name="required_selectors" placeholder="#app, nav a.login" /></label>
+                <label class="checkbox-field"><input name="persist_auth_session" type="checkbox" /><span>Keep the authenticated browser session and reuse it when this monitor runs continuously</span></label>
+                <p class="form-note">If you want this to become a continuously authenticated browser monitor, sign in during the recorder session and enable session reuse before saving.</p>
+              </div>
+
+              <div class="guide-card">
+                <h4>4. Define Scheduling And Alert Conditions</h4>
+                <div class="guide-grid">
+                  <label><span>Interval Seconds</span><input name="interval_seconds" type="number" min="1" value="300" /></label>
+                  <label><span>Timeout Seconds</span><input name="timeout_seconds" type="number" min="1" value="30" /></label>
+                  <label><span>Placement</span><select name="placement_mode"><option value="auto" selected>Auto-select the healthiest least-loaded container</option><option value="specific">Choose a specific monitoring container</option></select></label>
+                  <label class="field-assigned-node hidden"><span>Monitoring Container</span><select name="assigned_node_id"><option value="">Select a monitoring container</option>${nodes.map((node) => `<option value="${escapeHtml(node.node_id)}" ${selectedNodeId === node.node_id ? "selected" : ""}>${escapeHtml(node.label)}${node.healthy ? " | healthy" : " | unhealthy"} | ${escapeHtml(node.description || "")}</option>`).join("")}</select></label>
+                </div>
+                ${alertThresholdFieldsMarkup({ alert_thresholds: defaultAlertThresholds() }, true)}
+              </div>
+
+              <div class="guide-card">
+                <h4>5. Configure The Monitor</h4>
+                <div class="guide-grid">
+                  <label><span>Name</span><input name="name" value="Recorded Browser Monitor" required /></label>
+                  <label><span>Enabled</span><select name="enabled"><option value="true" selected>Enabled</option><option value="false">Disabled</option></select></label>
+                </div>
+              </div>
+
+              <div class="guide-card">
+                <h4>Recorded Journey</h4>
+                <p class="subtle">These captured interactions are transformed into the synthetic browser steps that will be saved with the monitor.</p>
+                <div class="stack" id="recorder-steps-list"></div>
+              </div>
+            </div>
+
+            <div class="button-row monitor-builder-actions">
+              <button type="button" class="secondary" id="abandon-recorder-builder-btn">Abandon</button>
+              <button type="button" id="test-monitor-recorder-btn">Test Recorded Monitor</button>
+              <button type="submit">Save As Browser Monitor</button>
+            </div>
+            <p class="form-status" id="monitor-recorder-form-status"></p>
+          </section>
         </form>
       </section>
-
-      <section class="panel">
-        <div class="panel-head">
-          <h3>Recorder Workspace</h3>
-          <p>Interact with the page below. Captured actions will appear in the step list and be converted into browser-monitor steps automatically.</p>
-        </div>
-        <div class="guide-grid compact-grid">
-          <article class="guide-card compact-card">
-            <h4>Recorder Session</h4>
-            <p id="monitor-recorder-session-label">${escapeHtml(state.recorder.sessionId || "Not started")}</p>
-          </article>
-          <article class="guide-card compact-card">
-            <h4>Current Page</h4>
-            <p id="monitor-recorder-page-label">${escapeHtml(state.recorder.lastPageUrl || state.recorder.targetUrl || "No page loaded")}</p>
-          </article>
-          <article class="guide-card compact-card">
-            <h4>Captured Steps</h4>
-            <p id="recorder-step-count">${state.recorder.steps.length} recorded step${state.recorder.steps.length === 1 ? "" : "s"}</p>
-          </article>
-          <article class="guide-card compact-card recorder-mode-card">
-            <h4>Recorder Mode</h4>
-            <p id="monitor-recorder-mode-value">Embedded Recorder</p>
-            <div class="status-meta"><span id="monitor-recorder-mode-hint">Using the in-app recorder frame inside the portal.</span></div>
-          </article>
-        </div>
-        <div class="recorder-frame-wrap" id="recorder-frame-panel">
-          <iframe id="monitor-recorder-frame" class="monitor-recorder-frame" title="Monitor Recorder"></iframe>
-        </div>
-        <div class="guide-card hidden" id="playwright-recorder-panel">
-          <h4>Chromium Recorder</h4>
-          <p>Chromium opens in its own window so protected sites can behave more like a normal browser session. Walk through the flow there and the recorded steps will stream back into this page.</p>
-          <p class="form-status" id="playwright-recorder-status"></p>
-        </div>
-        <p class="form-status" id="monitor-recorder-status"></p>
-      </section>
-
-      <section class="panel">
-        <div class="panel-head">
-          <h3>Recorded Journey</h3>
-          <p>These recorded interactions are transformed into the synthetic browser steps that will be saved with the monitor.</p>
-        </div>
-        <div class="stack" id="recorder-steps-list"></div>
-      </section>
-
-      <section class="panel">
-        <div class="panel-head">
-          <h3>Recorder Test Session</h3>
-          <p>Run the generated browser monitor in place before saving it.</p>
-        </div>
-        <div id="browser-test-results">${browserTestResultsMarkup(null)}</div>
-      </section>
+      ${recorderBuilderPreviewMarkup()}
     </div>
   `;
   renderRecorderSteps();
@@ -5664,21 +6287,27 @@ function renderAdminConfigPage(telemetry, portalSettings, emailSettings, uiScali
 function hydrateFormVisibility(form) {
   const type = form.querySelector("select[name='type']")?.value;
   if (!type) return;
-  const showUrl = type === "http" || type === "auth";
+  const requestLike = type === "http" || type === "auth" || type === "api";
+  const showUrl = requestLike;
   const showHost = type === "dns" || type === "database" || type === "generic";
-  const showPort = type === "http" || type === "auth" || type === "database" || type === "generic";
-  const showStatuses = type === "http" || type === "auth";
-  const showContent = type === "http" || type === "auth";
+  const showPort = requestLike || type === "database" || type === "generic";
+  const showStatuses = requestLike;
+  const showContent = requestLike;
   const showDatabase = type === "database";
   form.querySelectorAll(".field-url").forEach((node) => node.classList.toggle("hidden", !showUrl));
   form.querySelectorAll(".field-host").forEach((node) => node.classList.toggle("hidden", !showHost));
   form.querySelectorAll(".field-port").forEach((node) => node.classList.toggle("hidden", !showPort));
   form.querySelectorAll(".field-statuses").forEach((node) => node.classList.toggle("hidden", !showStatuses));
   form.querySelectorAll(".field-content").forEach((node) => node.classList.toggle("hidden", !showContent));
+  form.querySelectorAll(".request-like-only").forEach((node) => node.classList.toggle("hidden", !requestLike));
+  const requestBodyMode = form.querySelector("select[name='request_body_mode']")?.value || "none";
+  form.querySelectorAll(".builder-request-body").forEach((node) => {
+    node.classList.toggle("hidden", !requestLike || requestBodyMode === "none");
+  });
   form.querySelectorAll(".database-only").forEach((node) => node.classList.toggle("hidden", !showDatabase));
   const authType = form.querySelector("select[name='auth_type']")?.value || (type === "auth" ? "bearer" : "none");
   const placementMode = form.querySelector("select[name='placement_mode']")?.value || "auto";
-  const showAuth = type === "http" || type === "auth";
+  const showAuth = requestLike;
   form.querySelectorAll(".auth-only").forEach((node) => node.classList.toggle("hidden", !showAuth));
   form.querySelectorAll("[data-auth-field='token']").forEach((node) => node.classList.toggle("hidden", !showAuth || authType !== "bearer"));
   form.querySelectorAll("[data-auth-field='username'], [data-auth-field='password']").forEach((node) => node.classList.toggle("hidden", !showAuth || authType !== "basic"));
@@ -5705,11 +6334,18 @@ function alertThresholdPayload(formData) {
 function monitorFormPayload(form) {
   const formData = new FormData(form);
   const type = String(formData.get("type"));
+  const requestLike = type === "http" || type === "auth" || type === "api";
   const authType = String(formData.get("auth_type") || (type === "auth" ? "bearer" : "none"));
   const placementMode = String(formData.get("placement_mode") || "auto");
   const portValue = String(formData.get("port") || "").trim();
   const databaseUsername = String(formData.get("database_username") || "").trim();
   const databasePassword = String(formData.get("database_password") || "");
+  const requestHeaders = parseHeaderLines(
+    formData.get("request_headers_text") || formData.get("request_headers") || ""
+  );
+  const expectedHeaders = parseExpectedHeaderLines(
+    formData.get("expected_headers_text") || formData.get("expected_headers") || ""
+  );
   return {
     id: form.dataset.originalId || null,
     name: String(formData.get("name")),
@@ -5724,16 +6360,32 @@ function monitorFormPayload(form) {
     port: portValue ? Number(portValue) : null,
     database_name: String(formData.get("database_name") || "") || null,
     database_engine: String(formData.get("database_engine") || "mysql"),
-    expected_statuses: type === "http" || type === "auth" ? parseCsv(formData.get("expected_statuses")).map(Number) : [200],
+    request_method: requestLike ? String(formData.get("request_method") || "GET") : "GET",
+    request_headers: requestLike ? requestHeaders : [],
+    request_body: requestLike ? String(formData.get("request_body") || "").trim() || null : null,
+    request_body_mode: requestLike ? String(formData.get("request_body_mode") || "none") : "none",
+    expected_statuses: requestLike ? parseCsv(formData.get("expected_statuses")).map(Number) : [200],
+    expected_headers: requestLike ? expectedHeaders : [],
+    max_response_time_ms:
+      requestLike && formData.get("max_response_time_ms")
+        ? Number(formData.get("max_response_time_ms"))
+        : null,
     expect_authenticated_statuses: type === "auth" ? parseCsv(formData.get("expected_statuses")).map(Number) : [200],
     content: {
-      contains: type === "http" || type === "auth" ? parseCsv(formData.get("contains")) : [],
-      not_contains: type === "http" || type === "auth" ? parseCsv(formData.get("not_contains")) : [],
-      regex: type === "http" || type === "auth" ? String(formData.get("regex") || "") || null : null,
+      contains: requestLike ? parseCsv(formData.get("contains")) : [],
+      not_contains: requestLike ? parseCsv(formData.get("not_contains")) : [],
+      regex: requestLike ? String(formData.get("regex") || "") || null : null,
+    },
+    retry: {
+      attempts: Number(formData.get("retry_attempts") || 1),
+      delay_seconds: Number(formData.get("retry_delay_seconds") || 0),
+      retry_on_statuses: parseCsv(formData.get("retry_on_statuses") || "").map(Number),
+      retry_on_timeout: String(formData.get("retry_on_timeout") || "true") === "true",
+      retry_on_connection_error: String(formData.get("retry_on_connection_error") || "true") === "true",
     },
     alert_thresholds: alertThresholdPayload(formData),
     auth:
-      (type === "http" || type === "auth") && authType !== "none"
+      requestLike && authType !== "none"
         ? {
             type: authType,
             token: formData.get("token") || null,
@@ -5814,6 +6466,16 @@ async function runMonitorTest(kind) {
       method: "POST",
       body: JSON.stringify(payload),
     });
+    if (window.location.pathname === "/monitors/new/basic" && kind !== "auth") {
+      state.basicMonitorBuilder.lastTestResult = result;
+      const preview = document.querySelector(".monitor-builder-preview");
+      if (preview) {
+        preview.outerHTML = basicMonitorBuilderPreviewMarkup(result);
+      }
+      document.querySelectorAll(".builder-section-assertions").forEach((node) => {
+        node.classList.remove("builder-locked");
+      });
+    }
     const prefix = result.success ? "Success" : "Failed";
     setStatus(status, `${prefix}: ${result.message} (${Math.round(Number(result.duration_ms || 0))} ms)`, !result.success);
   } catch (error) {
@@ -5903,7 +6565,14 @@ async function runBrowserMonitorTest() {
       method: "POST",
       body: JSON.stringify(browserMonitorPayload(form)),
     });
-    results.innerHTML = browserTestResultsMarkup(result);
+    state.browserMonitorBuilder.lastTestResult = result;
+    if (results) {
+      results.innerHTML = browserTestResultsMarkup(result);
+    }
+    const preview = document.getElementById("browser-builder-preview");
+    if (preview) {
+      preview.outerHTML = browserMonitorBuilderPreviewMarkup(result);
+    }
     applyNetworkFilters();
     setStatus(
       status,
@@ -5928,7 +6597,14 @@ async function runMonitorRecorderTest() {
       method: "POST",
       body: JSON.stringify(payload),
     });
-    results.innerHTML = browserTestResultsMarkup(result);
+    state.recorder.lastTestResult = result;
+    if (results) {
+      results.innerHTML = browserTestResultsMarkup(result);
+    }
+    const preview = document.getElementById("recorder-builder-preview");
+    if (preview) {
+      preview.outerHTML = recorderBuilderPreviewMarkup();
+    }
     applyNetworkFilters();
     setStatus(
       status,
@@ -6204,6 +6880,9 @@ async function renderRoute() {
   renderSessionChip();
 
   const path = window.location.pathname;
+  if (path !== "/monitors/new/advanced/browser-health-monitor") {
+    state.browserMonitorBuilder.lastTestResult = null;
+  }
   if (path !== "/monitors/new/advanced/monitor-recorder") {
     const hasRecorderDraft =
       Boolean(state.recorder.targetUrl)
@@ -6372,7 +7051,7 @@ async function renderRoute() {
       { label: "Advanced Monitor", href: "/monitors/new/advanced" },
       { label: "Browser Health Monitor" },
     ]);
-    document.getElementById("app-root").innerHTML = browserMonitorMarkup(
+    document.getElementById("app-root").innerHTML = browserMonitorBuilderMarkup(
       {
         name: "",
         type: "browser",
@@ -6395,7 +7074,8 @@ async function renderRoute() {
         },
       },
       "create",
-      cluster
+      cluster,
+      state.browserMonitorBuilder.lastTestResult
     );
     document.querySelectorAll("[data-browser-step]").forEach((row) => updateBrowserStepVisibility(row));
     applyNetworkFilters();
@@ -6406,7 +7086,13 @@ async function renderRoute() {
   }
 
   if (path === "/monitors/new/advanced/real-user-monitoring") {
-    renderAdvancedMonitorSubpage("Real User Monitoring", "Reserved for real user monitoring workflows and telemetry capture.");
+    setWorkspaceHeader("Real User Monitoring", "Plan and shape a future real user monitoring workflow using the same builder narrative as the other advanced monitors.", [
+      { label: "Monitors", href: "/monitors" },
+      { label: "Add Monitor", href: "/monitors/new" },
+      { label: "Advanced Monitor", href: "/monitors/new/advanced" },
+      { label: "Real User Monitoring" },
+    ]);
+    document.getElementById("app-root").innerHTML = realUserMonitoringBuilderMarkup();
     return;
   }
 
@@ -6425,13 +7111,14 @@ async function renderRoute() {
   }
 
   if (path === "/monitors/new/basic") {
+    state.basicMonitorBuilder.lastTestResult = state.basicMonitorBuilder.lastTestResult || null;
     const cluster = await api("/api/cluster");
-    setWorkspaceHeader("Basic Monitor", "Create a new endpoint monitor with its own health rules and authentication.", [
+    setWorkspaceHeader("Basic Monitor", "Use the builder to define the request, test it, add assertions, and create the monitor.", [
       { label: "Monitors", href: "/monitors" },
       { label: "Add Monitor", href: "/monitors/new" },
       { label: "Basic Monitor" },
     ]);
-    document.getElementById("app-root").innerHTML = monitorFormMarkup(
+    document.getElementById("app-root").innerHTML = basicMonitorBuilderMarkup(
       {
         name: "",
         type: "http",
@@ -6440,16 +7127,31 @@ async function renderRoute() {
         placement_mode: "auto",
         assigned_node_id: null,
         timeout_seconds: 10,
+        url: "",
+        host: "",
         port: null,
+        request_method: "GET",
+        request_headers: [],
+        request_body: "",
+        request_body_mode: "none",
         database_name: "",
         database_engine: "mysql",
         expected_statuses: [200],
+        expected_headers: [],
+        max_response_time_ms: null,
+        retry: {
+          attempts: 1,
+          delay_seconds: 0,
+          retry_on_statuses: [],
+          retry_on_timeout: true,
+          retry_on_connection_error: true,
+        },
         content_rules: { contains: [], not_contains: [], regex: "" },
-        status: "unknown",
-        metric_points: [],
+        alert_thresholds: defaultAlertThresholds(),
+        auth: null,
       },
-      "create",
-      cluster
+      cluster,
+      state.basicMonitorBuilder.lastTestResult
     );
     const form = document.getElementById("monitor-form");
     hydrateFormVisibility(form);
@@ -6473,7 +7175,7 @@ async function renderRoute() {
         { label: "Configured Monitors", href: "/configured-monitors" },
         { label: check.name },
       ]);
-      document.getElementById("app-root").innerHTML = browserMonitorMarkup(check, "edit", cluster);
+      document.getElementById("app-root").innerHTML = browserMonitorBuilderMarkup(check, "edit", cluster, state.browserMonitorBuilder.lastTestResult);
       document.querySelectorAll("[data-browser-step]").forEach((row) => updateBrowserStepVisibility(row));
       applyNetworkFilters();
       hydratePlotlyCharts(document.getElementById("app-root"));
@@ -7033,6 +7735,7 @@ async function handleClick(event) {
     state.recorder.targetUrl = url;
     state.recorder.steps = [];
     state.recorder.lastPageUrl = url;
+    state.recorder.lastTestResult = null;
     clearPlaywrightFallback();
     renderRecorderSteps();
     updateRecorderFrame();
@@ -7046,6 +7749,7 @@ async function handleClick(event) {
       setStatus(document.getElementById("monitor-recorder-status"), "Enter a URL before launching Chromium recorder.", true);
       return;
     }
+    state.recorder.lastTestResult = null;
     await launchPlaywrightRecorder(url);
     setStatus(document.getElementById("monitor-recorder-status"), "Chromium recorder launched.");
     return;
@@ -7061,6 +7765,7 @@ async function handleClick(event) {
 
   if (event.target.id === "clear-monitor-recorder-btn") {
     state.recorder.steps = [];
+    state.recorder.lastTestResult = null;
     renderRecorderSteps();
     setStatus(document.getElementById("monitor-recorder-status"), "Recorded steps cleared.");
     return;
@@ -7170,6 +7875,29 @@ async function handleClick(event) {
     return;
   }
 
+  if (event.target.id === "abandon-monitor-builder-btn") {
+    state.basicMonitorBuilder.lastTestResult = null;
+    navigate("/monitors/new");
+    return;
+  }
+
+  if (event.target.id === "abandon-browser-builder-btn") {
+    state.browserMonitorBuilder.lastTestResult = null;
+    navigate("/monitors/new/advanced");
+    return;
+  }
+
+  if (event.target.id === "abandon-rum-builder-btn") {
+    navigate("/monitors/new/advanced");
+    return;
+  }
+
+  if (event.target.id === "abandon-recorder-builder-btn") {
+    await resetRecorderState();
+    navigate("/monitors/new/advanced");
+    return;
+  }
+
   const togglePeer = event.target.closest("[data-toggle-peer]");
   if (togglePeer) {
     if (!hasRole("admin")) return;
@@ -7246,8 +7974,20 @@ function handleChange(event) {
     return;
   }
 
-  if (event.target.matches("select[name='type'], select[name='auth_type'], select[name='alert_threshold_mode'], #monitor-form select[name='placement_mode']")) {
+  if (
+    event.target.matches("select[name='type'], select[name='auth_type'], select[name='alert_threshold_mode'], #monitor-form select[name='placement_mode'], #monitor-form select[name='request_body_mode']")
+  ) {
     hydrateFormVisibility(event.target.closest("form"));
+    if (event.target.closest("#monitor-form") && window.location.pathname === "/monitors/new/basic") {
+      state.basicMonitorBuilder.lastTestResult = null;
+      const preview = document.querySelector(".monitor-builder-preview");
+      if (preview) {
+        preview.outerHTML = basicMonitorBuilderPreviewMarkup(null);
+      }
+      document.querySelectorAll(".builder-section-assertions").forEach((node) => {
+        node.classList.add("builder-locked");
+      });
+    }
     return;
   }
 
@@ -7331,6 +8071,14 @@ function handleInput(event) {
     updateConfiguredMonitorsFilters(event);
     renderRoute().catch((error) => alert(error.message));
     return;
+  }
+
+  if (window.location.pathname === "/monitors/new/basic" && event.target.closest("#monitor-form")) {
+    state.basicMonitorBuilder.lastTestResult = null;
+    const preview = document.querySelector(".monitor-builder-preview");
+    if (preview) {
+      preview.outerHTML = basicMonitorBuilderPreviewMarkup(null);
+    }
   }
 
   if (event.target.id === "monitor-recorder-url") {

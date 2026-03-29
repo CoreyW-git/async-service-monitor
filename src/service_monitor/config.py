@@ -70,6 +70,27 @@ class ContentConfig:
 
 
 @dataclass(slots=True)
+class RequestHeaderConfig:
+    name: str
+    value: str
+
+
+@dataclass(slots=True)
+class HeaderAssertionConfig:
+    name: str
+    expected_value: str
+
+
+@dataclass(slots=True)
+class RetryConfig:
+    attempts: int = 1
+    delay_seconds: float = 0.0
+    retry_on_statuses: list[int] = field(default_factory=list)
+    retry_on_timeout: bool = True
+    retry_on_connection_error: bool = True
+
+
+@dataclass(slots=True)
 class UnauthenticatedProbeConfig:
     enabled: bool = False
     expect_statuses: list[int] = field(default_factory=lambda: [401, 403])
@@ -238,7 +259,7 @@ class PortalAuthConfig:
 @dataclass(slots=True)
 class CheckConfig:
     name: str
-    type: Literal["http", "dns", "auth", "database", "generic", "browser"]
+    type: Literal["http", "dns", "auth", "database", "generic", "browser", "api"]
     interval_seconds: float
     id: str = field(default_factory=lambda: secrets.token_urlsafe(10))
     enabled: bool = True
@@ -250,11 +271,18 @@ class CheckConfig:
     port: int | None = None
     database_name: str | None = None
     database_engine: Literal["mysql", "postgresql"] = "mysql"
+    request_method: Literal["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"] = "GET"
+    request_headers: list[RequestHeaderConfig] = field(default_factory=list)
+    request_body: str | None = None
+    request_body_mode: Literal["none", "json", "text"] = "none"
     expected_statuses: list[int] = field(default_factory=lambda: [200])
+    expected_headers: list[HeaderAssertionConfig] = field(default_factory=list)
+    max_response_time_ms: float | None = None
     expect_authenticated_statuses: list[int] = field(default_factory=lambda: [200])
     auth: AuthConfig | None = None
     content: ContentConfig | None = None
     browser: BrowserConfig | None = None
+    retry: RetryConfig = field(default_factory=RetryConfig)
     alert_thresholds: AlertThresholdsConfig = field(default_factory=AlertThresholdsConfig)
     unauthenticated_probe: UnauthenticatedProbeConfig = field(
         default_factory=UnauthenticatedProbeConfig
@@ -292,6 +320,59 @@ def _parse_content(raw: dict[str, Any] | None) -> ContentConfig | None:
         contains=list(raw.get("contains", [])),
         not_contains=list(raw.get("not_contains", [])),
         regex=raw.get("regex"),
+    )
+
+
+def _parse_request_headers(raw: list[dict[str, Any]] | dict[str, Any] | None) -> list[RequestHeaderConfig]:
+    if not raw:
+        return []
+    if isinstance(raw, dict):
+        return [
+            RequestHeaderConfig(name=str(name), value=str(value))
+            for name, value in raw.items()
+            if str(name).strip()
+        ]
+    parsed: list[RequestHeaderConfig] = []
+    for item in raw:
+        name = str(item.get("name", "")).strip()
+        if not name:
+            continue
+        parsed.append(RequestHeaderConfig(name=name, value=str(item.get("value", ""))))
+    return parsed
+
+
+def _parse_expected_headers(raw: list[dict[str, Any]] | dict[str, Any] | None) -> list[HeaderAssertionConfig]:
+    if not raw:
+        return []
+    if isinstance(raw, dict):
+        return [
+            HeaderAssertionConfig(name=str(name), expected_value=str(value))
+            for name, value in raw.items()
+            if str(name).strip()
+        ]
+    parsed: list[HeaderAssertionConfig] = []
+    for item in raw:
+        name = str(item.get("name", "")).strip()
+        if not name:
+            continue
+        parsed.append(
+            HeaderAssertionConfig(
+                name=name,
+                expected_value=str(item.get("expected_value", "")),
+            )
+        )
+    return parsed
+
+
+def _parse_retry(raw: dict[str, Any] | None) -> RetryConfig:
+    if not raw:
+        return RetryConfig()
+    return RetryConfig(
+        attempts=max(1, int(raw.get("attempts", 1))),
+        delay_seconds=float(raw.get("delay_seconds", 0.0)),
+        retry_on_statuses=list(raw.get("retry_on_statuses", [])),
+        retry_on_timeout=_as_bool(raw.get("retry_on_timeout", True), default=True),
+        retry_on_connection_error=_as_bool(raw.get("retry_on_connection_error", True), default=True),
     )
 
 
@@ -517,11 +598,20 @@ def _parse_check(raw: dict[str, Any]) -> CheckConfig:
         port=int(raw["port"]) if raw.get("port") is not None else None,
         database_name=raw.get("database_name"),
         database_engine=raw.get("database_engine", "mysql"),
+        request_method=str(raw.get("request_method", "GET")).upper(),
+        request_headers=_parse_request_headers(raw.get("request_headers")),
+        request_body=raw.get("request_body"),
+        request_body_mode=raw.get("request_body_mode", "none"),
         expected_statuses=list(raw.get("expected_statuses", [200])),
+        expected_headers=_parse_expected_headers(raw.get("expected_headers")),
+        max_response_time_ms=(
+            float(raw["max_response_time_ms"]) if raw.get("max_response_time_ms") is not None else None
+        ),
         expect_authenticated_statuses=list(raw.get("expect_authenticated_statuses", [200])),
         auth=_parse_auth(raw.get("auth")),
         content=_parse_content(raw.get("content")),
         browser=_parse_browser(raw.get("browser")),
+        retry=_parse_retry(raw.get("retry")),
         alert_thresholds=_parse_alert_thresholds(raw.get("alert_thresholds")),
         unauthenticated_probe=_parse_probe(raw.get("unauthenticated_probe")),
     )
@@ -549,7 +639,7 @@ def validate_config(config: AppConfig) -> None:
                 f"Check '{check.name}' must define assigned_node_id when placement_mode is 'specific'"
             )
 
-        if check.type in {"http", "auth", "browser"} and not check.url:
+        if check.type in {"http", "auth", "browser", "api"} and not check.url:
             raise ValueError(f"Check '{check.name}' requires a url")
 
         if check.type == "dns" and not check.host:
@@ -557,6 +647,18 @@ def validate_config(config: AppConfig) -> None:
 
         if check.type == "auth" and not check.auth:
             raise ValueError(f"Check '{check.name}' requires an auth block")
+
+        if check.request_method not in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}:
+            raise ValueError(f"Check '{check.name}' has unsupported request_method '{check.request_method}'")
+
+        if check.request_body_mode not in {"none", "json", "text"}:
+            raise ValueError(f"Check '{check.name}' has unsupported request_body_mode '{check.request_body_mode}'")
+
+        if check.retry.attempts < 1:
+            raise ValueError(f"Check '{check.name}' retry attempts must be >= 1")
+
+        if check.retry.delay_seconds < 0:
+            raise ValueError(f"Check '{check.name}' retry delay_seconds must be >= 0")
 
         if check.type in {"generic", "database"}:
             if not check.host:

@@ -6,6 +6,8 @@ import json
 import mimetypes
 import os
 import secrets
+import subprocess
+import sys
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -32,10 +34,13 @@ from service_monitor.config import (
     ContentConfig,
     DockerRecoveryConfig,
     EmailConfig,
+    HeaderAssertionConfig,
     OCIAuthConfig,
     PeerConfig,
     PortalAuthConfig,
     PortalUserConfig,
+    RequestHeaderConfig,
+    RetryConfig,
     TelemetryConfig,
     UIScalingConfig,
     UnauthenticatedProbeConfig,
@@ -50,6 +55,24 @@ class ContentPayload(BaseModel):
     contains: list[str] = Field(default_factory=list)
     not_contains: list[str] = Field(default_factory=list)
     regex: str | None = None
+
+
+class RequestHeaderPayload(BaseModel):
+    name: str
+    value: str
+
+
+class HeaderAssertionPayload(BaseModel):
+    name: str
+    expected_value: str
+
+
+class RetryPayload(BaseModel):
+    attempts: int = 1
+    delay_seconds: float = 0.0
+    retry_on_statuses: list[int] = Field(default_factory=list)
+    retry_on_timeout: bool = True
+    retry_on_connection_error: bool = True
 
 
 class AuthPayload(BaseModel):
@@ -105,7 +128,7 @@ class AlertThresholdsPayload(BaseModel):
 class CheckPayload(BaseModel):
     id: str | None = None
     name: str
-    type: Literal["http", "dns", "auth", "database", "generic", "browser"]
+    type: Literal["http", "dns", "auth", "database", "generic", "browser", "api"]
     enabled: bool = True
     interval_seconds: float
     placement_mode: Literal["auto", "specific"] = "auto"
@@ -116,11 +139,18 @@ class CheckPayload(BaseModel):
     port: int | None = None
     database_name: str | None = None
     database_engine: Literal["mysql", "postgresql"] = "mysql"
+    request_method: Literal["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"] = "GET"
+    request_headers: list[RequestHeaderPayload] = Field(default_factory=list)
+    request_body: str | None = None
+    request_body_mode: Literal["none", "json", "text"] = "none"
     expected_statuses: list[int] = Field(default_factory=lambda: [200])
+    expected_headers: list[HeaderAssertionPayload] = Field(default_factory=list)
+    max_response_time_ms: float | None = None
     expect_authenticated_statuses: list[int] = Field(default_factory=lambda: [200])
     auth: AuthPayload | None = None
     content: ContentPayload | None = None
     browser: BrowserPayload | None = None
+    retry: RetryPayload = Field(default_factory=RetryPayload)
     alert_thresholds: AlertThresholdsPayload = Field(default_factory=AlertThresholdsPayload)
 
 
@@ -312,6 +342,30 @@ def _alert_thresholds_from_payload(payload: AlertThresholdsPayload | None) -> Al
     return AlertThresholdsConfig(**payload.model_dump())
 
 
+def _request_headers_from_payload(payload: list[RequestHeaderPayload] | None) -> list[RequestHeaderConfig]:
+    return [
+        RequestHeaderConfig(name=item.name.strip(), value=item.value)
+        for item in (payload or [])
+        if item.name.strip()
+    ]
+
+
+def _expected_headers_from_payload(
+    payload: list[HeaderAssertionPayload] | None,
+) -> list[HeaderAssertionConfig]:
+    return [
+        HeaderAssertionConfig(name=item.name.strip(), expected_value=item.expected_value)
+        for item in (payload or [])
+        if item.name.strip()
+    ]
+
+
+def _retry_from_payload(payload: RetryPayload | None) -> RetryConfig:
+    if payload is None:
+        return RetryConfig()
+    return RetryConfig(**payload.model_dump())
+
+
 def _check_from_payload(payload: CheckPayload) -> CheckConfig:
     return CheckConfig(
         id=payload.id or secrets.token_urlsafe(10),
@@ -327,18 +381,25 @@ def _check_from_payload(payload: CheckPayload) -> CheckConfig:
         port=payload.port,
         database_name=payload.database_name,
         database_engine=payload.database_engine,
+        request_method=payload.request_method,
+        request_headers=_request_headers_from_payload(payload.request_headers),
+        request_body=payload.request_body,
+        request_body_mode=payload.request_body_mode,
         expected_statuses=payload.expected_statuses,
+        expected_headers=_expected_headers_from_payload(payload.expected_headers),
+        max_response_time_ms=payload.max_response_time_ms,
         expect_authenticated_statuses=payload.expect_authenticated_statuses,
         auth=_auth_from_payload(payload.auth),
         content=_content_from_payload(payload.content),
         browser=_browser_from_payload(payload.browser),
+        retry=_retry_from_payload(payload.retry),
         alert_thresholds=_alert_thresholds_from_payload(payload.alert_thresholds),
     )
 
 
 def _auth_test_check_from_payload(payload: CheckPayload) -> CheckConfig:
-    if payload.type not in {"http", "auth"}:
-        raise ValueError("Authentication tests are only available for HTTP and auth monitors")
+    if payload.type not in {"http", "auth", "api"}:
+        raise ValueError("Authentication tests are only available for HTTP, API, and auth monitors")
     check = _check_from_payload(payload)
     check.type = "auth"
     check.expect_authenticated_statuses = (
@@ -413,6 +474,26 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
         "recorder_clients": {},
         "playwright_recorders": {},
     }
+
+    class RecorderHelperStatusPayload(BaseModel):
+        status: str
+        error: str | None = None
+        message: str | None = None
+        browser_open: bool | None = None
+        storage_state: str | None = None
+        storage_state_captured_at: float | None = None
+
+    class RecorderHelperEventPayload(BaseModel):
+        event: str
+        selector: str | None = None
+        value: str | None = None
+        url: str | None = None
+        title: str | None = None
+        textSnippet: str | None = None
+        action: str | None = None
+        method: str | None = None
+        message: str | None = None
+        timestamp: float | None = None
 
     def _get_runner() -> MonitorRunner:
         runner = runtime.get("runner")
@@ -649,6 +730,76 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
             return None, None
         return json.dumps({"cookies": cookies, "origins": []}), time.time()
 
+    def _launch_visible_recorder_browser(playwright, viewport_width: int = 1440, viewport_height: int = 900):
+        launch_args = [
+            "--new-window",
+            f"--window-size={viewport_width},{viewport_height}",
+            "--window-position=72,72",
+            "--disable-popup-blocking",
+        ]
+        launch_errors: list[str] = []
+        browser = None
+        selected_runtime = "chromium"
+        for channel in ("msedge", "chrome", None):
+            try:
+                kwargs: dict[str, Any] = {
+                    "headless": False,
+                    "args": launch_args,
+                }
+                if channel:
+                    kwargs["channel"] = channel
+                browser = playwright.chromium.launch(**kwargs)
+                selected_runtime = channel or "chromium"
+                break
+            except Exception as exc:
+                label = channel or "chromium"
+                launch_errors.append(f"{label}: {exc}")
+        if browser is None:
+            raise RuntimeError(
+                "Could not launch a visible recorder browser window. "
+                + " | ".join(launch_errors)
+            )
+        return browser, selected_runtime
+
+    def _recorder_helper_python_executable() -> str:
+        return str(Path(sys.executable))
+
+    def _spawn_desktop_recorder_helper(session_id: str, target_url: str, token: str) -> int | None:
+        python_exec = _recorder_helper_python_executable()
+        config_dir = Path(runtime["config_path"]).parent
+        helper_script = Path(__file__).with_name("recorder_helper.py")
+        stdout_log = config_dir / "recorder-helper.out.log"
+        stderr_log = config_dir / "recorder-helper.err.log"
+        stdout_log.write_text("", encoding="utf-8")
+        stderr_log.write_text("", encoding="utf-8")
+        command = [
+            python_exec,
+            "-u",
+            str(helper_script),
+            "--session-id",
+            session_id,
+            "--target-url",
+            target_url,
+            "--api-base",
+            "http://127.0.0.1:8000",
+            "--token",
+            token,
+        ]
+        with stdout_log.open("a", encoding="utf-8") as stdout_handle, stderr_log.open(
+            "a", encoding="utf-8"
+        ) as stderr_handle:
+            creation_flags = 0
+            if os.name == "nt":
+                creation_flags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+            process = subprocess.Popen(
+                command,
+                cwd=str(config_dir),
+                stdout=stdout_handle,
+                stderr=stderr_handle,
+                creationflags=creation_flags,
+            )
+        return process.pid
+
     def _launch_playwright_recorder_sync(session_id: str, target_url: str) -> None:
         entry = runtime["playwright_recorders"].get(session_id)
         if not entry:
@@ -798,10 +949,11 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
         try:
             entry["status"] = "launching"
             with sync_playwright() as playwright:
-                browser = playwright.chromium.launch(headless=False)
-                context = browser.new_context(viewport={"width": 1440, "height": 900})
+                browser, runtime_name = _launch_visible_recorder_browser(playwright)
+                context = browser.new_context(no_viewport=True)
                 entry["status"] = "running"
                 entry["browser_open"] = True
+                entry["message"] = f"{runtime_name} recorder window launched"
 
                 def on_binding(source, payload):
                     if isinstance(payload, dict):
@@ -811,6 +963,10 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
                 context.add_init_script(init_script)
 
                 page = context.new_page()
+                try:
+                    page.bring_to_front()
+                except Exception:
+                    pass
 
                 def handle_extra_page(extra_page):
                     if extra_page == page:
@@ -849,6 +1005,10 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
 
                 page.on("framenavigated", on_navigate)
                 page.goto(target_url, wait_until="domcontentloaded")
+                try:
+                    page.bring_to_front()
+                except Exception:
+                    pass
 
                 while not stop_event.is_set():
                     try:
@@ -876,7 +1036,7 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
                     pass
         except Exception as exc:
             entry["status"] = "error"
-            entry["error"] = str(exc)
+            entry["error"] = f"Chromium recorder failed to launch: {exc}"
             entry["browser_open"] = False
             return
 
@@ -986,6 +1146,13 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
                     "port": check.port,
                     "database_name": check.database_name,
                     "database_engine": check.database_engine,
+                    "request_method": check.request_method,
+                    "request_headers": [
+                        {"name": header.name, "value": header.value}
+                        for header in check.request_headers
+                    ],
+                    "request_body": check.request_body,
+                    "request_body_mode": check.request_body_mode,
                     "browser": {
                         "expected_title_contains": check.browser.expected_title_contains,
                         "required_selectors": check.browser.required_selectors,
@@ -1009,7 +1176,19 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
                     if check.browser
                     else None,
                     "expected_statuses": check.expected_statuses,
+                    "expected_headers": [
+                        {"name": header.name, "expected_value": header.expected_value}
+                        for header in check.expected_headers
+                    ],
+                    "max_response_time_ms": check.max_response_time_ms,
                     "expect_authenticated_statuses": check.expect_authenticated_statuses,
+                    "retry": {
+                        "attempts": check.retry.attempts,
+                        "delay_seconds": check.retry.delay_seconds,
+                        "retry_on_statuses": check.retry.retry_on_statuses,
+                        "retry_on_timeout": check.retry.retry_on_timeout,
+                        "retry_on_connection_error": check.retry.retry_on_connection_error,
+                    },
                     "alert_thresholds": {
                         "mode": check.alert_thresholds.mode,
                         "availability_warning": check.alert_thresholds.availability_warning,
@@ -1791,29 +1970,29 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
         current_user: dict[str, str] = Depends(require_read_write),
     ) -> dict[str, object]:
         session_id = secrets.token_urlsafe(18)
-        stop_event = threading.Event()
+        token = secrets.token_urlsafe(24)
         entry = {
             "session_id": session_id,
             "url": url,
             "status": "launching",
             "error": None,
+            "message": "Launching desktop recorder helper...",
             "steps": [],
             "browser_open": False,
-            "stop_event": stop_event,
+            "stop_requested": False,
+            "token": token,
+            "pid": None,
         }
         runtime["playwright_recorders"][session_id] = entry
-        thread = threading.Thread(
-            target=_launch_playwright_recorder_sync,
-            args=(session_id, url),
-            daemon=True,
-            name=f"playwright-recorder-{session_id}",
-        )
-        entry["thread"] = thread
-        thread.start()
+        try:
+            entry["pid"] = _spawn_desktop_recorder_helper(session_id, url, token)
+        except Exception as exc:
+            entry["status"] = "error"
+            entry["error"] = f"Failed to launch desktop recorder helper: {exc}"
         return {
             "session_id": session_id,
             "status": entry["status"],
-            "message": "Chromium recorder launch requested.",
+            "message": entry["message"],
         }
 
     @app.get("/api/recorder/storage-state")
@@ -1856,6 +2035,7 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
             "url": entry["url"],
             "status": entry["status"],
             "error": entry["error"],
+            "message": entry.get("message"),
             "browser_open": entry["browser_open"],
             "has_storage_state": bool(entry.get("storage_state")),
             "storage_state_captured_at": entry.get("storage_state_captured_at"),
@@ -1870,9 +2050,55 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
         entry = runtime["playwright_recorders"].get(recorder_session_id)
         if not entry:
             raise HTTPException(status_code=404, detail="Playwright recorder session was not found")
-        entry["stop_event"].set()
         entry["status"] = "stopping"
+        entry["message"] = "Stopping desktop recorder helper..."
+        entry["stop_requested"] = True
         return {"status": "ok"}
+
+    def _require_recorder_helper(recorder_session_id: str, request: Request) -> dict[str, Any]:
+        entry = runtime["playwright_recorders"].get(recorder_session_id)
+        if not entry:
+            raise HTTPException(status_code=404, detail="Recorder session was not found")
+        provided = request.headers.get("x-recorder-token", "")
+        if not provided or provided != entry.get("token"):
+            raise HTTPException(status_code=403, detail="Recorder helper token was rejected")
+        return entry
+
+    @app.post("/api/internal/recorder/playwright-session/{recorder_session_id}/status")
+    async def update_playwright_recorder_status(
+        recorder_session_id: str,
+        request: Request,
+    ) -> dict[str, object]:
+        payload = RecorderHelperStatusPayload.model_validate(await request.json())
+        entry = _require_recorder_helper(recorder_session_id, request)
+        entry["status"] = payload.status
+        entry["error"] = payload.error
+        entry["message"] = payload.message
+        if payload.browser_open is not None:
+            entry["browser_open"] = payload.browser_open
+        if payload.storage_state is not None:
+            entry["storage_state"] = payload.storage_state
+        if payload.storage_state_captured_at is not None:
+            entry["storage_state_captured_at"] = payload.storage_state_captured_at
+        return {"status": "ok"}
+
+    @app.post("/api/internal/recorder/playwright-session/{recorder_session_id}/event")
+    async def append_playwright_recorder_event(
+        recorder_session_id: str,
+        request: Request,
+    ) -> dict[str, object]:
+        payload = RecorderHelperEventPayload.model_validate(await request.json())
+        _require_recorder_helper(recorder_session_id, request)
+        _append_playwright_step(recorder_session_id, payload.model_dump(exclude_none=True))
+        return {"status": "ok"}
+
+    @app.get("/api/internal/recorder/playwright-session/{recorder_session_id}/control")
+    async def playwright_recorder_control(
+        recorder_session_id: str,
+        request: Request,
+    ) -> dict[str, object]:
+        entry = _require_recorder_helper(recorder_session_id, request)
+        return {"stop_requested": bool(entry.get("stop_requested"))}
 
     @app.post("/api/users")
     async def add_user(
