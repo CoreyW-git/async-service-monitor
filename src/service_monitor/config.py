@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -103,6 +104,19 @@ class BrowserConfig:
     storage_state: str | None = None
     storage_state_captured_at: float | None = None
     steps: list[BrowserStepConfig] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class AlertThresholdsConfig:
+    mode: Literal["auto", "manual"] = "auto"
+    availability_warning: float = 99.5
+    availability_critical: float = 99.0
+    error_rate_warning: float = 2.0
+    error_rate_critical: float = 5.0
+    p95_latency_warning_ms: float = 1500.0
+    p95_latency_critical_ms: float = 3000.0
+    p99_latency_warning_ms: float = 2500.0
+    p99_latency_critical_ms: float = 5000.0
 
 
 @dataclass(slots=True)
@@ -226,6 +240,7 @@ class CheckConfig:
     name: str
     type: Literal["http", "dns", "auth", "database", "generic", "browser"]
     interval_seconds: float
+    id: str = field(default_factory=lambda: secrets.token_urlsafe(10))
     enabled: bool = True
     placement_mode: Literal["auto", "specific"] = "auto"
     assigned_node_id: str | None = None
@@ -240,6 +255,7 @@ class CheckConfig:
     auth: AuthConfig | None = None
     content: ContentConfig | None = None
     browser: BrowserConfig | None = None
+    alert_thresholds: AlertThresholdsConfig = field(default_factory=AlertThresholdsConfig)
     unauthenticated_probe: UnauthenticatedProbeConfig = field(
         default_factory=UnauthenticatedProbeConfig
     )
@@ -313,6 +329,22 @@ def _parse_browser(raw: dict[str, Any] | None) -> BrowserConfig | None:
         storage_state=raw.get("storage_state"),
         storage_state_captured_at=raw.get("storage_state_captured_at"),
         steps=[_parse_browser_step(item) for item in raw.get("steps", [])],
+    )
+
+
+def _parse_alert_thresholds(raw: dict[str, Any] | None) -> AlertThresholdsConfig:
+    if not raw:
+        return AlertThresholdsConfig()
+    return AlertThresholdsConfig(
+        mode=raw.get("mode", "auto"),
+        availability_warning=float(raw.get("availability_warning") or 99.5),
+        availability_critical=float(raw.get("availability_critical") or 99.0),
+        error_rate_warning=float(raw.get("error_rate_warning") or 2.0),
+        error_rate_critical=float(raw.get("error_rate_critical") or 5.0),
+        p95_latency_warning_ms=float(raw.get("p95_latency_warning_ms") or 1500.0),
+        p95_latency_critical_ms=float(raw.get("p95_latency_critical_ms") or 3000.0),
+        p99_latency_warning_ms=float(raw.get("p99_latency_warning_ms") or 2500.0),
+        p99_latency_critical_ms=float(raw.get("p99_latency_critical_ms") or 5000.0),
     )
 
 
@@ -470,6 +502,7 @@ def _parse_portal(raw: dict[str, Any] | None) -> PortalAuthConfig:
 
 def _parse_check(raw: dict[str, Any]) -> CheckConfig:
     return CheckConfig(
+        id=raw.get("id") or secrets.token_urlsafe(10),
         name=raw["name"],
         type=raw["type"],
         enabled=_as_bool(raw.get("enabled", True), default=True),
@@ -489,6 +522,7 @@ def _parse_check(raw: dict[str, Any]) -> CheckConfig:
         auth=_parse_auth(raw.get("auth")),
         content=_parse_content(raw.get("content")),
         browser=_parse_browser(raw.get("browser")),
+        alert_thresholds=_parse_alert_thresholds(raw.get("alert_thresholds")),
         unauthenticated_probe=_parse_probe(raw.get("unauthenticated_probe")),
     )
 

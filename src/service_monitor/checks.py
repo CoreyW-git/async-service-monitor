@@ -21,6 +21,7 @@ class CheckResult:
     success: bool
     message: str
     duration_ms: float
+    check_id: str | None = None
     details: dict[str, object] = field(default_factory=dict)
     timestamp: float = field(default_factory=time.time)
 
@@ -449,6 +450,7 @@ async def run_browser_check(check: CheckConfig, timeout_seconds: float) -> Check
                     "method": request.method,
                     "url": request.url,
                     "resource_type": request.resource_type,
+                    "started_at": time.time(),
                     "request_started_at": time.perf_counter(),
                     "status": None,
                     "ok": None,
@@ -472,6 +474,7 @@ async def run_browser_check(check: CheckConfig, timeout_seconds: float) -> Check
                         "method": entry["method"],
                         "url": entry["url"],
                         "resource_type": entry["resource_type"],
+                        "started_at": entry["started_at"],
                         "status": entry["status"],
                         "ok": entry["ok"],
                         "failure": None,
@@ -502,6 +505,7 @@ async def run_browser_check(check: CheckConfig, timeout_seconds: float) -> Check
                         "method": entry["method"],
                         "url": entry["url"],
                         "resource_type": entry["resource_type"],
+                        "started_at": entry["started_at"],
                         "status": None,
                         "ok": False,
                         "failure": failure_text,

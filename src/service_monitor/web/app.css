@@ -988,7 +988,17 @@ button.danger {
   height: 180px;
 }
 
+.latency-chart {
+  width: 100%;
+  height: 180px;
+}
+
 .history-chart .axis {
+  stroke: rgba(123, 129, 144, 0.35);
+  stroke-width: 1;
+}
+
+.latency-chart .axis {
   stroke: rgba(123, 129, 144, 0.35);
   stroke-width: 1;
 }
@@ -1041,6 +1051,29 @@ button.danger {
   stroke-width: 1.5;
 }
 
+.latency-chart .latency-area {
+  fill: rgba(15, 118, 110, 0.08);
+}
+
+.latency-chart .latency-line {
+  fill: none;
+  stroke: #0f766e;
+  stroke-width: 3;
+}
+
+.latency-chart .latency-dot {
+  stroke: white;
+  stroke-width: 2;
+}
+
+.latency-chart .latency-dot.healthy {
+  fill: var(--green);
+}
+
+.latency-chart .latency-dot.unhealthy {
+  fill: var(--red);
+}
+
 .history-chart.bad .duration-dot {
   fill: rgba(180, 35, 24, 0.18);
   stroke: rgba(180, 35, 24, 0.4);
@@ -1087,6 +1120,65 @@ button.danger {
   display: grid;
   gap: 12px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.dashboard-subpanel {
+  padding: 12px;
+}
+
+.dashboard-span-full {
+  grid-column: 1 / -1;
+}
+
+.slo-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.slo-panel.warning {
+  border-color: rgba(180, 122, 0, 0.24);
+  background: rgba(180, 122, 0, 0.05);
+}
+
+.slo-panel.unhealthy {
+  border-color: rgba(180, 35, 24, 0.22);
+  background: rgba(180, 35, 24, 0.05);
+}
+
+.slo-meter {
+  position: relative;
+  height: 12px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(123, 129, 144, 0.18);
+}
+
+.slo-meter-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: rgba(15, 118, 110, 0.85);
+}
+
+.slo-meter-fill.warning {
+  background: rgba(180, 122, 0, 0.88);
+}
+
+.slo-meter-fill.unhealthy {
+  background: rgba(180, 35, 24, 0.88);
+}
+
+.slo-stats {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.threshold-row.warning {
+  border-color: rgba(180, 122, 0, 0.22);
+  background: rgba(180, 122, 0, 0.06);
+}
+
+.threshold-row.unhealthy {
+  border-color: rgba(180, 35, 24, 0.22);
+  background: rgba(180, 35, 24, 0.06);
 }
 
 .incident-timeline {

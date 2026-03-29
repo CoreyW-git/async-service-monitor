@@ -194,6 +194,7 @@ class TelemetryStore:
                     CREATE TABLE IF NOT EXISTS monitor_telemetry (
                         id BIGSERIAL PRIMARY KEY,
                         captured_at DOUBLE PRECISION NOT NULL,
+                        monitor_id TEXT NULL,
                         monitor_name TEXT NOT NULL,
                         monitor_type VARCHAR(32) NOT NULL,
                         owner_node TEXT NULL,
@@ -207,6 +208,9 @@ class TelemetryStore:
                         monitor_config_object_key TEXT NULL
                     )
                     """
+                )
+                cursor.execute(
+                    "ALTER TABLE monitor_telemetry ADD COLUMN IF NOT EXISTS monitor_id TEXT NULL"
                 )
                 cursor.execute(
                     """
@@ -327,11 +331,11 @@ class TelemetryStore:
     ) -> None:
         captured_at = float(result_payload["timestamp"])
         details_key = (
-            f"telemetry/results/{result_payload['name']}/{int(captured_at)}-"
+            f"telemetry/results/{result_payload.get('check_id') or result_payload['name']}/{int(captured_at)}-"
             f"{secrets.token_hex(8)}.json"
         )
         config_key = (
-            f"telemetry/check-configs/{result_payload['name']}/{int(captured_at)}-"
+            f"telemetry/check-configs/{result_payload.get('check_id') or result_payload['name']}/{int(captured_at)}-"
             f"{secrets.token_hex(8)}.json"
         )
         self._upload_json_object_sync(details_key, result_payload.get("details") or {})
@@ -343,6 +347,7 @@ class TelemetryStore:
                     """
                     INSERT INTO monitor_telemetry (
                         captured_at,
+                        monitor_id,
                         monitor_name,
                         monitor_type,
                         owner_node,
@@ -354,10 +359,11 @@ class TelemetryStore:
                         target_host,
                         result_details_object_key,
                         monitor_config_object_key
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         captured_at,
+                        result_payload.get("check_id"),
                         result_payload["name"],
                         check_payload["type"],
                         owner,
@@ -387,6 +393,7 @@ class TelemetryStore:
         if row.get("status_code") is not None and "status_code" not in details:
             details["status_code"] = row.get("status_code")
         return {
+            "check_id": row.get("monitor_id"),
             "name": row.get("monitor_name"),
             "check_type": row.get("monitor_type"),
             "success": bool(row.get("success")),
@@ -403,7 +410,7 @@ class TelemetryStore:
                 cursor.execute(
                     """
                     SELECT captured_at, monitor_name, monitor_type, owner_node, success, status_code,
-                           duration_ms, message, result_details_object_key
+                           duration_ms, message, result_details_object_key, monitor_id
                     FROM monitor_telemetry
                     ORDER BY captured_at DESC
                     LIMIT %s
@@ -419,14 +426,14 @@ class TelemetryStore:
                 cursor.execute(
                     """
                     SELECT t.captured_at, t.monitor_name, t.monitor_type, t.owner_node, t.success, t.status_code,
-                           t.duration_ms, t.message, t.result_details_object_key
+                           t.duration_ms, t.message, t.result_details_object_key, t.monitor_id
                     FROM monitor_telemetry t
                     INNER JOIN (
-                        SELECT monitor_name, MAX(captured_at) AS max_captured_at
+                        SELECT COALESCE(monitor_id, monitor_name) AS monitor_key, MAX(captured_at) AS max_captured_at
                         FROM monitor_telemetry
-                        GROUP BY monitor_name
+                        GROUP BY COALESCE(monitor_id, monitor_name)
                     ) latest
-                    ON latest.monitor_name = t.monitor_name AND latest.max_captured_at = t.captured_at
+                    ON latest.monitor_key = COALESCE(t.monitor_id, t.monitor_name) AND latest.max_captured_at = t.captured_at
                     ORDER BY t.monitor_name ASC
                     """
                 )
@@ -439,14 +446,14 @@ class TelemetryStore:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
-                    SELECT monitor_name, captured_at, success, duration_ms
+                    SELECT monitor_id, monitor_name, captured_at, success, duration_ms
                     FROM monitor_telemetry
-                    ORDER BY monitor_name ASC, captured_at ASC
+                    ORDER BY COALESCE(monitor_id, monitor_name) ASC, captured_at ASC
                     """
                 )
                 rows = cursor.fetchall() or []
         for row in rows:
-            history.setdefault(str(row.get("monitor_name")), []).append(
+            history.setdefault(str(row.get("monitor_id") or row.get("monitor_name")), []).append(
                 {
                     "timestamp": row.get("captured_at"),
                     "healthy": bool(row.get("success")),

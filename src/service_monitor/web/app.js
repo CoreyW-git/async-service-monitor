@@ -20,6 +20,7 @@ const state = {
   pollingHandle: null,
   session: null,
   clusterExpanded: false,
+  dashboardRunDiagnostics: {},
   configuredMonitors: {
     query: "",
     type: "all",
@@ -123,6 +124,197 @@ function lastMetricLabel(points) {
   const latest = Array.isArray(points) && points.length ? points[points.length - 1] : null;
   if (!latest) return "No telemetry yet";
   return `Last fired ${fmtTime(latest.timestamp)}`;
+}
+
+function monitorKey(checkOrResult) {
+  return checkOrResult?.id || checkOrResult?.check_id || checkOrResult?.name || "";
+}
+
+function monitorPoints(check, checkMetrics = {}) {
+  return checkMetrics[check?.id] || checkMetrics[check?.name] || [];
+}
+
+function monitorResultMatches(check, result) {
+  if (!check || !result) return false;
+  const checkId = check.id || null;
+  const resultId = result.check_id || result.id || null;
+  if (checkId && resultId && checkId === resultId) return true;
+  return Boolean(check.name && result.name && check.name === result.name);
+}
+
+function monitorResults(check, recentResults = []) {
+  return (Array.isArray(recentResults) ? recentResults : []).filter((result) => monitorResultMatches(check, result));
+}
+
+function averageDuration(points = []) {
+  if (!Array.isArray(points) || !points.length) return null;
+  return points.reduce((sum, point) => sum + Number(point.duration_ms || 0), 0) / points.length;
+}
+
+function percentileDuration(points = [], percentile = 95) {
+  if (!Array.isArray(points) || !points.length) return null;
+  const values = points
+    .map((point) => Number(point.duration_ms || 0))
+    .filter((value) => Number.isFinite(value))
+    .sort((left, right) => left - right);
+  if (!values.length) return null;
+  const index = Math.min(values.length - 1, Math.max(0, Math.ceil((percentile / 100) * values.length) - 1));
+  return values[index];
+}
+
+function availabilityPercent(points = []) {
+  if (!Array.isArray(points) || !points.length) return null;
+  const healthy = points.filter((point) => point.healthy).length;
+  return (healthy / points.length) * 100;
+}
+
+function errorRatePercent(points = []) {
+  if (!Array.isArray(points) || !points.length) return null;
+  const unhealthy = points.filter((point) => !point.healthy).length;
+  return (unhealthy / points.length) * 100;
+}
+
+function formatPercent(value) {
+  if (value == null || Number.isNaN(Number(value))) return "n/a";
+  return `${Number(value).toFixed(1)}%`;
+}
+
+function defaultAlertThresholds() {
+  return {
+    mode: "auto",
+    availability_warning: 99.5,
+    availability_critical: 99.0,
+    error_rate_warning: 2.0,
+    error_rate_critical: 5.0,
+    p95_latency_warning_ms: 1500.0,
+    p95_latency_critical_ms: 3000.0,
+    p99_latency_warning_ms: 2500.0,
+    p99_latency_critical_ms: 5000.0,
+  };
+}
+
+function learnedAlertThresholds(points = []) {
+  const defaults = defaultAlertThresholds();
+  if (!Array.isArray(points) || !points.length) return defaults;
+  const availability = availabilityPercent(points);
+  const errorRate = errorRatePercent(points);
+  const p95Latency = percentileDuration(points, 95);
+  const p99Latency = percentileDuration(points, 99);
+  return {
+    mode: "auto",
+    availability_warning: Math.max(95, Math.min(99.9, Number(availability ?? defaults.availability_warning) - 0.3)),
+    availability_critical: Math.max(90, Math.min(99.5, Number(availability ?? defaults.availability_critical) - 0.8)),
+    error_rate_warning: Math.max(defaults.error_rate_warning, Number(errorRate ?? 0) * 1.5),
+    error_rate_critical: Math.max(defaults.error_rate_critical, Number(errorRate ?? 0) * 2.5),
+    p95_latency_warning_ms: Math.max(defaults.p95_latency_warning_ms, Number(p95Latency ?? 0) * 1.25),
+    p95_latency_critical_ms: Math.max(defaults.p95_latency_critical_ms, Number(p95Latency ?? 0) * 1.75),
+    p99_latency_warning_ms: Math.max(defaults.p99_latency_warning_ms, Number(p99Latency ?? 0) * 1.25),
+    p99_latency_critical_ms: Math.max(defaults.p99_latency_critical_ms, Number(p99Latency ?? 0) * 1.75),
+  };
+}
+
+function effectiveAlertThresholds(check, points = []) {
+  const configured = { ...defaultAlertThresholds(), ...(check?.alert_thresholds || {}) };
+  if (configured.mode === "manual") {
+    return configured;
+  }
+  return learnedAlertThresholds(points);
+}
+
+function runDiagnosticKey(check, result) {
+  return `${monitorKey(check)}::${Number(result?.timestamp || 0)}`;
+}
+
+function downloadJsonFile(filename, payload) {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function browserResultToHar(check, result) {
+  const network = Array.isArray(result?.details?.network) ? result.details.network : [];
+  const pageUrl = result?.details?.final_url || check?.url || "";
+  const startedAt = Number(result?.timestamp || 0) - (Number(result?.duration_ms || 0) / 1000);
+  return {
+    log: {
+      version: "1.2",
+      creator: {
+        name: "Service Health Portal",
+        version: "1.0",
+      },
+      browser: {
+        name: "Chromium",
+        version: "Playwright",
+      },
+      pages: [
+        {
+          startedDateTime: new Date(startedAt * 1000).toISOString(),
+          id: "page_1",
+          title: result?.details?.title || check?.name || "Browser Monitor",
+          pageTimings: {
+            onContentLoad: Number(result?.details?.performance?.domContentLoadedMs ?? -1),
+            onLoad: Number(result?.details?.performance?.loadMs ?? -1),
+          },
+        },
+      ],
+      entries: network.map((entry, index) => {
+        const startedDateTime = new Date(Number(entry.started_at || startedAt) * 1000).toISOString();
+        const totalTime = Number(entry.duration_ms || 0);
+        return {
+          pageref: "page_1",
+          startedDateTime,
+          time: totalTime,
+          request: {
+            method: entry.method || "GET",
+            url: entry.url || pageUrl,
+            httpVersion: "HTTP/1.1",
+            headers: [],
+            queryString: [],
+            cookies: [],
+            headersSize: -1,
+            bodySize: -1,
+          },
+          response: {
+            status: entry.status ?? 0,
+            statusText: entry.failure || "",
+            httpVersion: "HTTP/1.1",
+            headers: [],
+            cookies: [],
+            content: {
+              size: -1,
+              mimeType: entry.resource_type || "application/octet-stream",
+              text: entry.failure || "",
+            },
+            redirectURL: "",
+            headersSize: -1,
+            bodySize: -1,
+          },
+          cache: {},
+          timings: {
+            blocked: 0,
+            dns: -1,
+            connect: -1,
+            send: 0,
+            wait: totalTime,
+            receive: 0,
+            ssl: -1,
+          },
+          _serviceHealthPortal: {
+            ok: entry.ok,
+            failure: entry.failure || null,
+            resourceType: entry.resource_type || null,
+            index,
+          },
+        };
+      }),
+    },
+  };
 }
 
 function sparklineMarkup(points, variant = "good") {
@@ -232,6 +424,146 @@ function outcomeBarsMarkup(points, width = 720, height = 96) {
   `;
 }
 
+function latencyLineChartMarkup(points, width = 720, height = 180) {
+  const normalized = Array.isArray(points) && points.length
+    ? points.map((point) => ({
+        timestamp: Number(point.timestamp || 0),
+        healthy: Boolean(point.healthy),
+        duration: Number(point.duration_ms || 0),
+      }))
+    : [];
+  if (!normalized.length) {
+    return `
+      <div class="empty-chart-state latency-empty-state">
+        <p>No latency samples have been captured yet.</p>
+      </div>
+    `;
+  }
+  const minTime = Math.min(...normalized.map((point) => point.timestamp));
+  const maxTime = Math.max(...normalized.map((point) => point.timestamp));
+  const maxDuration = Math.max(...normalized.map((point) => point.duration), 1);
+  const plotWidth = width - 24;
+  const plotHeight = height - 28;
+  const baseX = 12;
+  const baseY = 8;
+  const coords = normalized.map((point) => {
+    const x = normalized.length === 1
+      ? baseX + plotWidth / 2
+      : baseX + (((point.timestamp - minTime) / Math.max(maxTime - minTime, 1)) * plotWidth);
+    const y = baseY + plotHeight - ((point.duration / maxDuration) * plotHeight);
+    return { x, y, healthy: point.healthy, duration: point.duration, timestamp: point.timestamp };
+  });
+  const line = coords.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`).join(" ");
+  const area = `${line} L ${coords[coords.length - 1].x.toFixed(1)} ${height - 20} L ${coords[0].x.toFixed(1)} ${height - 20} Z`;
+  return `
+    <svg class="latency-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true">
+      <line x1="12" y1="${height - 20}" x2="${width - 12}" y2="${height - 20}" class="axis"></line>
+      <line x1="12" y1="8" x2="12" y2="${height - 20}" class="axis"></line>
+      <path class="latency-area" d="${area}"></path>
+      <path class="latency-line" d="${line}"></path>
+      ${coords.map((point) => {
+        const title = `${point.healthy ? "Healthy" : "Unhealthy"} run | ${fmtTime(point.timestamp)} | ${formatDuration(point.duration)}`;
+        return `
+          <g>
+            <title>${escapeHtml(title)}</title>
+            <circle cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="4" class="latency-dot ${point.healthy ? "healthy" : "unhealthy"}"></circle>
+          </g>
+        `;
+      }).join("")}
+    </svg>
+  `;
+}
+
+function sloBudgetMarkup(points, targetAvailability = 99.0) {
+  const availability = availabilityPercent(points);
+  const errorRate = errorRatePercent(points);
+  if (availability == null) {
+    return `
+      <div class="guide-card slo-panel">
+        <h4>SLO And Error Budget</h4>
+        <p>No telemetry is available yet to calculate an error budget.</p>
+      </div>
+    `;
+  }
+  const allowedErrorRate = Math.max(0, 100 - targetAvailability);
+  const budgetRemaining = allowedErrorRate <= 0
+    ? 0
+    : Math.max(0, ((allowedErrorRate - (errorRate || 0)) / allowedErrorRate) * 100);
+  const budgetConsumed = 100 - budgetRemaining;
+  const burnRate = allowedErrorRate <= 0 ? 0 : (errorRate || 0) / allowedErrorRate;
+  const stateLabel = availability >= targetAvailability
+    ? "Within SLO"
+    : budgetRemaining > 0
+      ? "Budget At Risk"
+      : "Budget Exhausted";
+  const stateClass = availability >= targetAvailability ? "healthy" : budgetRemaining > 0 ? "warning" : "unhealthy";
+  return `
+    <section class="guide-card slo-panel ${stateClass}">
+      <div class="mini-panel-header">
+        <h4>SLO And Error Budget</h4>
+        <span>${stateLabel}</span>
+      </div>
+      <div class="slo-meter">
+        <div class="slo-meter-fill ${stateClass}" style="width: ${Math.max(0, Math.min(100, budgetRemaining)).toFixed(1)}%;"></div>
+      </div>
+      <div class="dashboard-card-stats slo-stats">
+        <div class="compact-card"><h4>SLO Target</h4><p>${formatPercent(targetAvailability)}</p></div>
+        <div class="compact-card"><h4>Error Budget Left</h4><p>${formatPercent(budgetRemaining)}</p></div>
+        <div class="compact-card"><h4>Budget Used</h4><p>${formatPercent(budgetConsumed)}</p></div>
+        <div class="compact-card"><h4>Burn Rate</h4><p>${burnRate.toFixed(2)}x</p></div>
+      </div>
+    </section>
+  `;
+}
+
+function thresholdStatus(value, warningThreshold, criticalThreshold, invert = false) {
+  if (value == null) return "neutral";
+  if (invert) {
+    if (value <= criticalThreshold) return "unhealthy";
+    if (value <= warningThreshold) return "warning";
+    return "healthy";
+  }
+  if (value >= criticalThreshold) return "unhealthy";
+  if (value >= warningThreshold) return "warning";
+  return "healthy";
+}
+
+function alertThresholdsMarkup(check, points) {
+  const thresholdConfig = effectiveAlertThresholds(check, points);
+  const availability = availabilityPercent(points);
+  const errorRate = errorRatePercent(points);
+  const p95Latency = percentileDuration(points, 95);
+  const p99Latency = percentileDuration(points, 99);
+  const thresholdRows = [
+    ["Availability", formatPercent(availability), thresholdStatus(availability, thresholdConfig.availability_warning, thresholdConfig.availability_critical, true), `Warn below ${formatPercent(thresholdConfig.availability_warning)}, critical below ${formatPercent(thresholdConfig.availability_critical)}`],
+    ["Error Rate", formatPercent(errorRate), thresholdStatus(errorRate, thresholdConfig.error_rate_warning, thresholdConfig.error_rate_critical), `Warn above ${formatPercent(thresholdConfig.error_rate_warning)}, critical above ${formatPercent(thresholdConfig.error_rate_critical)}`],
+    ["P95 Latency", formatDuration(p95Latency), thresholdStatus(p95Latency, thresholdConfig.p95_latency_warning_ms, thresholdConfig.p95_latency_critical_ms), `Warn above ${formatDuration(thresholdConfig.p95_latency_warning_ms)}, critical above ${formatDuration(thresholdConfig.p95_latency_critical_ms)}`],
+    ["P99 Latency", formatDuration(p99Latency), thresholdStatus(p99Latency, thresholdConfig.p99_latency_warning_ms, thresholdConfig.p99_latency_critical_ms), `Warn above ${formatDuration(thresholdConfig.p99_latency_warning_ms)}, critical above ${formatDuration(thresholdConfig.p99_latency_critical_ms)}`],
+  ];
+  return `
+    <section class="panel dashboard-subpanel">
+      <div class="panel-head">
+        <h3>Alert Thresholds</h3>
+        <p>${thresholdConfig.mode === "manual" ? "Using manual thresholds configured on this monitor." : "Using adaptive thresholds learned from recent monitor behavior."}</p>
+      </div>
+      <div class="stack">
+        ${thresholdRows.map(([label, value, status, description]) => `
+          <div class="status-row compact threshold-row ${status}">
+            <span class="dot ${status === "warning" ? "unhealthy" : status === "neutral" ? "disabled" : status}"></span>
+            <div>
+              <strong>${escapeHtml(label)}</strong>
+              <div class="status-meta">
+                <span>${escapeHtml(description)}</span>
+              </div>
+            </div>
+            <strong>${escapeHtml(value)}</strong>
+          </div>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
 function incidentTimelineMarkup(failures = []) {
   if (!failures.length) {
     return `<div class="guide-card"><h4>Incident Timeline</h4><p>No failed monitor sessions have been recorded for this monitor.</p></div>`;
@@ -260,7 +592,7 @@ function incidentTimelineMarkup(failures = []) {
 }
 
 function endpointSparkline(check, checkMetrics) {
-  const points = checkMetrics[check.name] || [];
+  const points = monitorPoints(check, checkMetrics);
   const variant = check.status === "unhealthy" ? "bad" : check.status === "disabled" ? "neutral" : "good";
   return sparklineMarkup(points, variant);
 }
@@ -314,7 +646,7 @@ function dashboardMonitorMatches(check) {
 }
 
 function monitorCardMarkup(check, checkMetrics) {
-  const points = checkMetrics[check.name] || [];
+  const points = monitorPoints(check, checkMetrics);
   return `
     <a class="status-row" href="/monitors/${encodeURIComponent(check.name)}" data-link>
       <span class="dot ${statusClass(check.status)}"></span>
@@ -1135,7 +1467,7 @@ function renderDashboard(overview, checks, summaryCounts, checkMetrics, nodeMetr
 }
 
 function renderDashboardsPage(checks, checkMetrics, recentResults = []) {
-  setWorkspaceHeader("Dashboards", "Observability workspaces for monitor outcomes, history, and troubleshooting.", [
+  setWorkspaceHeader("Dashboards", "APM-style workspaces for service availability, latency, errors, and diagnostics.", [
     { label: "Dashboards" },
   ]);
   const root = document.getElementById("app-root");
@@ -1145,11 +1477,13 @@ function renderDashboardsPage(checks, checkMetrics, recentResults = []) {
   });
   const visibleChecks = sortedChecks.filter((check) => dashboardMonitorMatches(check));
   const latestByCheck = Object.fromEntries(
-    checks.map((check) => [check.name, recentResults.find((result) => result.name === check.name) || check.latest_result || null])
+    checks.map((check) => [monitorKey(check), monitorResults(check, recentResults)[0] || check.latest_result || null])
   );
   const unhealthyCount = checks.filter((check) => check.status === "unhealthy").length;
   const healthyCount = checks.filter((check) => check.status === "healthy").length;
   const disabledCount = checks.filter((check) => check.status === "disabled").length;
+  const allVisiblePoints = visibleChecks.flatMap((check) => monitorPoints(check, checkMetrics));
+  const fleetAvailability = availabilityPercent(allVisiblePoints);
   root.innerHTML = `
     <div class="stack">
       <section class="panel dashboards-hero-panel">
@@ -1157,7 +1491,7 @@ function renderDashboardsPage(checks, checkMetrics, recentResults = []) {
           <div>
             <div class="panel-head" style="margin-bottom: 8px;">
               <h3>Monitor Dashboards</h3>
-              <p>Compact observability workspaces for history, output trends, failures, and troubleshooting.</p>
+              <p>Compact APM views for service health, latency trends, incident signals, and diagnostics.</p>
             </div>
             <div class="dashboard-filter-bar">
               <label>
@@ -1194,17 +1528,17 @@ function renderDashboardsPage(checks, checkMetrics, recentResults = []) {
           </div>
           <div class="dashboard-kpi-strip">
             <article class="compact-card dashboard-kpi-card">
-              <h4>Visible Dashboards</h4>
+              <h4>Services</h4>
               <p>${visibleChecks.length}</p>
               <span>${checks.length} total configured</span>
             </article>
             <article class="compact-card dashboard-kpi-card">
-              <h4>Healthy</h4>
-              <p>${healthyCount}</p>
-              <span>${unhealthyCount} unhealthy</span>
+              <h4>Availability</h4>
+              <p>${formatPercent(fleetAvailability)}</p>
+              <span>${healthyCount} healthy · ${unhealthyCount} unhealthy</span>
             </article>
             <article class="compact-card dashboard-kpi-card">
-              <h4>Recent Failures</h4>
+              <h4>Active Incidents</h4>
               <p>${recentResults.filter((result) => !result.success).length}</p>
               <span>${disabledCount} disabled</span>
             </article>
@@ -1215,9 +1549,14 @@ function renderDashboardsPage(checks, checkMetrics, recentResults = []) {
       <section class="panel dashboards-grid-panel">
         <div class="dashboard-card-grid">
           ${visibleChecks.length ? visibleChecks.map((check) => {
-            const points = checkMetrics[check.name] || [];
-            const latest = latestByCheck[check.name];
-            const recentFailures = recentResults.filter((result) => result.name === check.name && !result.success).slice(0, 3);
+            const points = monitorPoints(check, checkMetrics);
+            const latest = latestByCheck[monitorKey(check)];
+            const checkResults = monitorResults(check, recentResults);
+            const recentFailures = checkResults.filter((result) => !result.success).slice(0, 3);
+            const avgLatency = averageDuration(points);
+            const p95Latency = percentileDuration(points, 95);
+            const errorRate = errorRatePercent(points);
+            const availability = availabilityPercent(points);
             const troubleshootingHint =
               check.status === "unhealthy"
                 ? (latest?.message || "Latest run failed. Review auth, content rules, placement, and recent request timing.")
@@ -1248,18 +1587,19 @@ function renderDashboardsPage(checks, checkMetrics, recentResults = []) {
                 </div>
                 <div class="guide-card compact-chart-card">
                   <div class="mini-panel-header">
-                    <h4>Performance</h4>
-                    <span>${recentFailures.length ? `${recentFailures.length} recent failures` : "No recent failures"}</span>
+                    <h4>Latency Profile</h4>
+                    <span>${recentFailures.length ? `${recentFailures.length} recent failures` : "Stable signal"}</span>
                   </div>
                   ${outcomeBarsMarkup(points, 540, 84)}
                 </div>
                 <div class="dashboard-card-stats">
-                  <div class="compact-card"><h4>Last Fired</h4><p>${escapeHtml(lastMetricLabel(points))}</p></div>
-                  <div class="compact-card"><h4>Healthy</h4><p>${points.filter((point) => point.healthy).length}</p></div>
-                  <div class="compact-card"><h4>Failures</h4><p>${recentFailures.length}</p></div>
+                  <div class="compact-card"><h4>Availability</h4><p>${formatPercent(availability)}</p></div>
+                  <div class="compact-card"><h4>Avg Latency</h4><p>${formatDuration(avgLatency)}</p></div>
+                  <div class="compact-card"><h4>Error Rate</h4><p>${formatPercent(errorRate)}</p></div>
+                  <div class="compact-card"><h4>P95 Latency</h4><p>${formatDuration(p95Latency)}</p></div>
                 </div>
                 <div class="guide-card dashboard-card-message">
-                  <h4>Latest Outcome</h4>
+                  <h4>Latest Signal</h4>
                   <p>${escapeHtml(latest?.message || troubleshootingHint)}</p>
                 </div>
                 <div class="button-row">
@@ -1454,17 +1794,24 @@ function monitorTroubleshootingHints(check, latest, failures) {
 }
 
 function renderMonitorDashboardPage(check, checkMetrics, recentResults = [], activeTab = "overview", activeRange = "24h", customStart = null, customEnd = null) {
-  const allPoints = checkMetrics[check.name] || [];
-  const allResults = recentResults.filter((result) => result.name === check.name);
+  const allPoints = monitorPoints(check, checkMetrics);
+  const allResults = monitorResults(check, recentResults);
   const points = filterPointsByRange(allPoints, activeRange, customStart, customEnd);
   const rangeResults = filterResultsByRange(allResults, activeRange, customStart, customEnd);
   const latest = rangeResults[0] || allResults[0] || check.latest_result || null;
   const failures = rangeResults.filter((result) => !result.success);
   const healthyCount = points.filter((point) => point.healthy).length;
   const failureCount = points.filter((point) => !point.healthy).length;
+  const availability = availabilityPercent(points);
+  const errorRate = errorRatePercent(points);
+  const avgLatency = averageDuration(points);
+  const p95Latency = percentileDuration(points, 95);
+  const p99Latency = percentileDuration(points, 99);
   const troubleshootingHints = monitorTroubleshootingHints(check, latest, failures);
   state.dashboardDetailContext = { check, failures, points, recentResults: rangeResults, activeRange, customStart, customEnd };
   const diagnosticsMarkup = recentRunDiagnosticsMarkup(check, rangeResults.length ? rangeResults : allResults);
+  const sloMarkup = sloBudgetMarkup(points);
+  const alertMarkup = alertThresholdsMarkup(check, points);
 
   let tabContent = "";
   if (activeTab === "history") {
@@ -1472,7 +1819,7 @@ function renderMonitorDashboardPage(check, checkMetrics, recentResults = [], act
       <section class="panel">
         <div class="panel-head">
           <h3>History</h3>
-          <p>Recent executions, trend points, and last-fired timing for this monitor in ${dashboardRangeLabel(activeRange, customStart, customEnd).toLowerCase()}.</p>
+          <p>Recent executions, latency, and availability trends for this monitor in ${dashboardRangeLabel(activeRange, customStart, customEnd).toLowerCase()}.</p>
         </div>
         <div class="guide-grid">
           <div class="guide-card compact-card">
@@ -1484,7 +1831,7 @@ function renderMonitorDashboardPage(check, checkMetrics, recentResults = [], act
             <p>${failureCount}</p>
           </div>
           <div class="guide-card compact-card">
-            <h4>Total Points</h4>
+            <h4>Samples</h4>
             <p>${points.length}</p>
           </div>
           <div class="guide-card compact-card">
@@ -1492,6 +1839,7 @@ function renderMonitorDashboardPage(check, checkMetrics, recentResults = [], act
             <p>${escapeHtml(lastMetricLabel(points))}</p>
           </div>
         </div>
+        ${sloMarkup}
         <div class="dashboard-detail-grid" style="margin-top: 12px;">
           <div class="guide-card dashboard-history-chart">
             <div class="mini-panel-header">
@@ -1502,10 +1850,17 @@ function renderMonitorDashboardPage(check, checkMetrics, recentResults = [], act
           </div>
           <div class="guide-card dashboard-history-chart">
             <div class="mini-panel-header">
-              <h4>Monitor Output</h4>
+              <h4>Latency Profile</h4>
               <span>Duration scaled by run</span>
             </div>
             ${outcomeBarsMarkup(points)}
+          </div>
+          <div class="guide-card dashboard-history-chart dashboard-span-full">
+            <div class="mini-panel-header">
+              <h4>Latency Timeline</h4>
+              <span>P95 ${formatDuration(p95Latency)} · P99 ${formatDuration(p99Latency)}</span>
+            </div>
+            ${latencyLineChartMarkup(points)}
           </div>
         </div>
         <div class="stack" style="margin-top: 12px;">
@@ -1530,7 +1885,7 @@ function renderMonitorDashboardPage(check, checkMetrics, recentResults = [], act
       <section class="panel">
         <div class="panel-head">
           <h3>Failures</h3>
-          <p>Recent failed sessions and the latest known context for this monitor in ${dashboardRangeLabel(activeRange, customStart, customEnd).toLowerCase()}.</p>
+          <p>Incident timeline, failure sessions, and degraded latency context for this monitor in ${dashboardRangeLabel(activeRange, customStart, customEnd).toLowerCase()}.</p>
         </div>
         <div class="button-row">
           <button type="button" id="export-incident-timeline-btn" class="secondary">Export Incident Timeline</button>
@@ -1547,7 +1902,7 @@ function renderMonitorDashboardPage(check, checkMetrics, recentResults = [], act
           <div class="guide-card dashboard-history-chart">
             <div class="mini-panel-header">
               <h4>Failure Output</h4>
-              <span>Run severity by duration</span>
+              <span>Latency during degraded runs</span>
             </div>
             ${outcomeBarsMarkup(points)}
           </div>
@@ -1569,7 +1924,7 @@ function renderMonitorDashboardPage(check, checkMetrics, recentResults = [], act
       <section class="panel">
         <div class="panel-head">
           <h3>Troubleshooting</h3>
-          <p>Action-oriented guidance based on the monitor type, latest outcome, and recent failures in ${dashboardRangeLabel(activeRange, customStart, customEnd).toLowerCase()}.</p>
+          <p>Action-oriented diagnostics based on monitor type, latency, availability, and recent failures in ${dashboardRangeLabel(activeRange, customStart, customEnd).toLowerCase()}.</p>
         </div>
         <div class="stack">
           ${troubleshootingHints.map((hint) => `<div class="guide-card"><p>${escapeHtml(hint)}</p></div>`).join("")}
@@ -1586,11 +1941,11 @@ function renderMonitorDashboardPage(check, checkMetrics, recentResults = [], act
     `;
   } else {
     tabContent = `
-      <div class="split-panels">
+      <div class="stack">
         <section class="panel">
           <div class="panel-head">
-            <h3>Overview</h3>
-            <p>Current health, latest outcome, and runtime ownership for ${dashboardRangeLabel(activeRange, customStart, customEnd).toLowerCase()}.</p>
+          <h3>Overview</h3>
+          <p>Golden-signal style health, latency, and execution insights for ${dashboardRangeLabel(activeRange, customStart, customEnd).toLowerCase()}.</p>
           </div>
           <div class="status-row">
             <span class="dot ${statusClass(check.status)}"></span>
@@ -1608,22 +1963,62 @@ function renderMonitorDashboardPage(check, checkMetrics, recentResults = [], act
           </div>
           <div class="guide-grid" style="margin-top: 12px;">
             <div class="guide-card compact-card">
-              <h4>Last Run</h4>
-              <p>${formatDuration(latest?.duration_ms)}</p>
+              <h4>Availability</h4>
+              <p>${formatPercent(availability)}</p>
+            </div>
+            <div class="guide-card compact-card">
+              <h4>Avg Latency</h4>
+              <p>${formatDuration(avgLatency)}</p>
+            </div>
+            <div class="guide-card compact-card">
+              <h4>P95 Latency</h4>
+              <p>${formatDuration(p95Latency)}</p>
+            </div>
+            <div class="guide-card compact-card">
+              <h4>P99 Latency</h4>
+              <p>${formatDuration(p99Latency)}</p>
+            </div>
+            <div class="guide-card compact-card">
+              <h4>Error Rate</h4>
+              <p>${formatPercent(errorRate)}</p>
+            </div>
+            <div class="guide-card compact-card">
+              <h4>Samples</h4>
+              <p>${points.length}</p>
             </div>
             <div class="guide-card compact-card">
               <h4>Last Fired</h4>
               <p>${escapeHtml(lastMetricLabel(points))}</p>
             </div>
-            <div class="guide-card compact-card">
-              <h4>Healthy Points</h4>
-              <p>${healthyCount}</p>
-            </div>
-            <div class="guide-card compact-card">
-              <h4>Failed Points</h4>
-              <p>${failureCount}</p>
-            </div>
           </div>
+          <div class="dashboard-detail-grid" style="margin-top: 12px;">
+            <section class="panel dashboard-subpanel">
+              <div class="panel-head">
+                <h3>Session Diagnostics</h3>
+                <p>The latest monitor session details, current signal, and next best actions.</p>
+              </div>
+              <div class="stack">
+                <div class="guide-card">
+                  <h4>Latest Message</h4>
+                  <p>${escapeHtml(latest?.message || "No session outcome recorded yet.")}</p>
+                </div>
+                <div class="guide-card">
+                  <h4>Recommended Next Step</h4>
+                  <p>${escapeHtml(troubleshootingHints[0] || "Open the monitor and re-run it to gather fresh telemetry.")}</p>
+                </div>
+                <div class="guide-card">
+                  <h4>Open Monitor</h4>
+                  <div class="button-row">
+                    <a class="button-link" href="/monitors/${encodeURIComponent(check.name)}" data-link>Edit Monitor</a>
+                    <a class="button-link secondary" href="/dashboards/${encodeURIComponent(check.name)}?tab=troubleshooting&range=${activeRange}" data-link>Troubleshoot</a>
+                    <a class="button-link secondary" href="/dashboards/${encodeURIComponent(check.name)}?tab=failures&range=${activeRange}" data-link>Open Failures</a>
+                  </div>
+                </div>
+              </div>
+            </section>
+            ${alertMarkup}
+          </div>
+          ${sloMarkup}
           <div class="dashboard-detail-grid" style="margin-top: 12px;">
             <div class="guide-card dashboard-history-chart">
               <div class="mini-panel-header">
@@ -1634,34 +2029,17 @@ function renderMonitorDashboardPage(check, checkMetrics, recentResults = [], act
             </div>
             <div class="guide-card dashboard-history-chart">
               <div class="mini-panel-header">
-                <h4>Monitor Output</h4>
-                <span>Per-run outcome and duration</span>
+                <h4>Latency Trend</h4>
+                <span>Per-run duration and state</span>
               </div>
               ${outcomeBarsMarkup(points)}
             </div>
-          </div>
-        </section>
-        <section class="panel">
-          <div class="panel-head">
-            <h3>Session Outcome</h3>
-            <p>The latest monitor session details and next best actions.</p>
-          </div>
-          <div class="stack">
-            <div class="guide-card">
-              <h4>Latest Message</h4>
-              <p>${escapeHtml(latest?.message || "No session outcome recorded yet.")}</p>
-            </div>
-            <div class="guide-card">
-              <h4>Recommended Next Step</h4>
-              <p>${escapeHtml(troubleshootingHints[0] || "Open the monitor and re-run it to gather fresh telemetry.")}</p>
-            </div>
-            <div class="guide-card">
-              <h4>Open Monitor</h4>
-              <div class="button-row">
-                <a class="button-link" href="/monitors/${encodeURIComponent(check.name)}" data-link>Edit Monitor</a>
-                <a class="button-link secondary" href="/dashboards/${encodeURIComponent(check.name)}?tab=troubleshooting&range=${activeRange}" data-link>Troubleshoot</a>
-                <a class="button-link secondary" href="/dashboards/${encodeURIComponent(check.name)}?tab=failures&range=${activeRange}" data-link>Open Failures</a>
+            <div class="guide-card dashboard-history-chart dashboard-span-full">
+              <div class="mini-panel-header">
+                <h4>Latency Timeline</h4>
+                <span>Avg ${formatDuration(avgLatency)} · P95 ${formatDuration(p95Latency)}</span>
               </div>
+              ${latencyLineChartMarkup(points)}
             </div>
           </div>
         </section>
@@ -1722,6 +2100,49 @@ function assignableNodeOptions(cluster) {
     }
     return list.findIndex((item) => item.node_id === node.node_id) === index;
   });
+}
+
+function alertThresholdFieldsMarkup(check, editable) {
+  const thresholds = { ...defaultAlertThresholds(), ...(check.alert_thresholds || {}) };
+  const readonlyAttr = editable ? "" : "disabled";
+  const manual = thresholds.mode === "manual";
+  return `
+    <details class="accordion-item" ${check?.name ? "open" : ""}>
+      <summary class="accordion-summary">
+        <div>
+          <strong>Alert Thresholds</strong>
+          <div class="status-meta">
+            <span>${thresholds.mode === "manual" ? "Manual thresholds" : "Auto learned thresholds"}</span>
+          </div>
+        </div>
+      </summary>
+      <div class="accordion-body">
+        <label>
+          <span>Threshold Mode</span>
+          <select name="alert_threshold_mode" ${readonlyAttr}>
+            <option value="auto" ${thresholds.mode !== "manual" ? "selected" : ""}>Auto learn from monitor behavior</option>
+            <option value="manual" ${thresholds.mode === "manual" ? "selected" : ""}>Manual thresholds</option>
+          </select>
+        </label>
+        <div class="guide-card">
+          <h4>Threshold Strategy</h4>
+          <p>${thresholds.mode === "manual" ? "Manual mode lets you set explicit warning and critical levels for this monitor." : "Auto mode derives thresholds from recent behavior so the dashboard can adapt to the monitor's normal baseline."}</p>
+        </div>
+        <div class="threshold-manual-fields ${manual ? "" : "hidden"}">
+          <div class="guide-grid">
+            <label><span>Availability Warning %</span><input name="availability_warning" type="number" step="0.1" value="${escapeHtml(thresholds.availability_warning)}" ${readonlyAttr} /></label>
+            <label><span>Availability Critical %</span><input name="availability_critical" type="number" step="0.1" value="${escapeHtml(thresholds.availability_critical)}" ${readonlyAttr} /></label>
+            <label><span>Error Rate Warning %</span><input name="error_rate_warning" type="number" step="0.1" value="${escapeHtml(thresholds.error_rate_warning)}" ${readonlyAttr} /></label>
+            <label><span>Error Rate Critical %</span><input name="error_rate_critical" type="number" step="0.1" value="${escapeHtml(thresholds.error_rate_critical)}" ${readonlyAttr} /></label>
+            <label><span>P95 Warning ms</span><input name="p95_latency_warning_ms" type="number" step="1" value="${escapeHtml(thresholds.p95_latency_warning_ms)}" ${readonlyAttr} /></label>
+            <label><span>P95 Critical ms</span><input name="p95_latency_critical_ms" type="number" step="1" value="${escapeHtml(thresholds.p95_latency_critical_ms)}" ${readonlyAttr} /></label>
+            <label><span>P99 Warning ms</span><input name="p99_latency_warning_ms" type="number" step="1" value="${escapeHtml(thresholds.p99_latency_warning_ms)}" ${readonlyAttr} /></label>
+            <label><span>P99 Critical ms</span><input name="p99_latency_critical_ms" type="number" step="1" value="${escapeHtml(thresholds.p99_latency_critical_ms)}" ${readonlyAttr} /></label>
+          </div>
+        </div>
+      </div>
+    </details>
+  `;
 }
 
 function disableForm(form, disabled) {
@@ -1794,7 +2215,7 @@ function monitorFormMarkup(check, mode, cluster = { node_id: "monitor-1", peers:
           <h3>${isNew ? "Add Monitor" : `Edit ${escapeHtml(check.name)}`}</h3>
           <p>${isNew ? "Create a new endpoint monitor." : managed ? "This monitor is generated from service configuration and is read-only here." : "Save changes and the monitor will re-run immediately."}</p>
         </div>
-        <form class="check-form" id="monitor-form" data-original-name="${escapeHtml(check.name || "")}">
+        <form class="check-form" id="monitor-form" data-original-name="${escapeHtml(check.name || "")}" data-original-id="${escapeHtml(check.id || "")}">
           <div class="accordion">
             <details class="accordion-item" ${isNew ? "" : "open"}>
               <summary class="accordion-summary">
@@ -1950,6 +2371,8 @@ function monitorFormMarkup(check, mode, cluster = { node_id: "monitor-1", peers:
                 <label class="database-only ${check.type !== "database" ? "hidden" : ""}"><span>Database Password</span><input name="database_password" type="password" value="${escapeHtml(auth.password || "")}" ${readonlyAttr} /></label>
               </div>
             </details>
+
+            ${alertThresholdFieldsMarkup(check, editable)}
           </div>
           <div class="button-row ${editable ? "" : "hidden"}">
             <button type="button" class="secondary" id="test-monitor-btn">Test Monitor</button>
@@ -2203,7 +2626,7 @@ function browserDiagnosticsMarkup(result, options = {}) {
           </div>
         </div>
         <div class="accordion browser-diagnostics-accordion">
-          <details class="accordion-item" ${failedNetwork.length ? "open" : ""}>
+          <details class="accordion-item">
             <summary class="accordion-summary">
               <div>
                 <strong>Network Log</strong>
@@ -2256,7 +2679,7 @@ function browserDiagnosticsMarkup(result, options = {}) {
             </div>
           </details>
 
-          <details class="accordion-item" ${pageErrors.length ? "open" : ""}>
+          <details class="accordion-item">
             <summary class="accordion-summary">
               <div>
                 <strong>Script And Page Errors</strong>
@@ -2428,8 +2851,8 @@ function recentRunDiagnosticsMarkup(check, results = []) {
         <p>Monitor-specific output for recent runs in this dashboard window.</p>
       </div>
       <div class="accordion">
-        ${results.slice(0, 5).map((result, index) => `
-          <details class="accordion-item" ${index === 0 ? "open" : ""}>
+        ${results.slice(0, 5).map((result) => `
+          <details class="accordion-item" data-run-diagnostic-key="${escapeHtml(runDiagnosticKey(check, result))}" ${state.dashboardRunDiagnostics[runDiagnosticKey(check, result)] ? "open" : ""}>
             <summary class="accordion-summary">
               <div>
                 <strong>${escapeHtml(result.message || "Run result")}</strong>
@@ -2442,6 +2865,11 @@ function recentRunDiagnosticsMarkup(check, results = []) {
               ${statusPill(result.success ? "healthy" : "unhealthy")}
             </summary>
             <div class="accordion-body">
+              ${check.type === "browser" ? `
+                <div class="button-row" style="margin-bottom: 10px;">
+                  <button type="button" class="secondary" data-download-har="${escapeHtml(runDiagnosticKey(check, result))}">Download HAR</button>
+                </div>
+              ` : ""}
               ${monitorRunBreakdownMarkup(check, result)}
             </div>
           </details>
@@ -2500,7 +2928,7 @@ function browserMonitorMarkup(check, mode, cluster = { node_id: "monitor-1", pee
           <h3>${isNew ? "Browser Health Monitor" : `Edit ${escapeHtml(check.name)}`}</h3>
           <p>Build a synthetic browser journey, validate every step, and inspect the request log from the same page.</p>
         </div>
-        <form class="check-form" id="browser-monitor-form" data-original-name="${escapeHtml(check.name || "")}">
+        <form class="check-form" id="browser-monitor-form" data-original-name="${escapeHtml(check.name || "")}" data-original-id="${escapeHtml(check.id || "")}">
           <div class="accordion">
             <details class="accordion-item" ${isNew ? "" : "open"}>
               <summary class="accordion-summary"><div><strong>Basics</strong><div class="status-meta"><span>Name, schedule, and monitor state</span></div></div></summary>
@@ -2568,6 +2996,8 @@ function browserMonitorMarkup(check, mode, cluster = { node_id: "monitor-1", pee
                 </div>
               </div>
             </details>
+
+            ${alertThresholdFieldsMarkup(check, canWrite)}
           </div>
 
           <div class="button-row">
@@ -2632,6 +3062,7 @@ function recorderMonitorPayload(form) {
   const formData = new FormData(form);
   const placementMode = String(formData.get("placement_mode") || "auto");
   return {
+    id: form.dataset.originalId || null,
     name: String(formData.get("name") || "Recorded Browser Monitor"),
     type: "browser",
     enabled: String(formData.get("enabled")) === "true",
@@ -3903,6 +4334,22 @@ function hydrateFormVisibility(form) {
   form.querySelectorAll("[data-auth-field='username'], [data-auth-field='password']").forEach((node) => node.classList.toggle("hidden", !showAuth || authType !== "basic"));
   form.querySelectorAll("[data-auth-field='header_name'], [data-auth-field='header_value']").forEach((node) => node.classList.toggle("hidden", !showAuth || authType !== "header"));
   form.querySelectorAll(".field-assigned-node").forEach((node) => node.classList.toggle("hidden", placementMode !== "specific"));
+  const thresholdMode = form.querySelector("select[name='alert_threshold_mode']")?.value || "auto";
+  form.querySelectorAll(".threshold-manual-fields").forEach((node) => node.classList.toggle("hidden", thresholdMode !== "manual"));
+}
+
+function alertThresholdPayload(formData) {
+  return {
+    mode: String(formData.get("alert_threshold_mode") || "auto"),
+    availability_warning: Number(formData.get("availability_warning") || 99.5),
+    availability_critical: Number(formData.get("availability_critical") || 99.0),
+    error_rate_warning: Number(formData.get("error_rate_warning") || 2.0),
+    error_rate_critical: Number(formData.get("error_rate_critical") || 5.0),
+    p95_latency_warning_ms: Number(formData.get("p95_latency_warning_ms") || 1500.0),
+    p95_latency_critical_ms: Number(formData.get("p95_latency_critical_ms") || 3000.0),
+    p99_latency_warning_ms: Number(formData.get("p99_latency_warning_ms") || 2500.0),
+    p99_latency_critical_ms: Number(formData.get("p99_latency_critical_ms") || 5000.0),
+  };
 }
 
 function monitorFormPayload(form) {
@@ -3914,6 +4361,7 @@ function monitorFormPayload(form) {
   const databaseUsername = String(formData.get("database_username") || "").trim();
   const databasePassword = String(formData.get("database_password") || "");
   return {
+    id: form.dataset.originalId || null,
     name: String(formData.get("name")),
     type,
     enabled: String(formData.get("enabled")) === "true",
@@ -3933,6 +4381,7 @@ function monitorFormPayload(form) {
       not_contains: type === "http" || type === "auth" ? parseCsv(formData.get("not_contains")) : [],
       regex: type === "http" || type === "auth" ? String(formData.get("regex") || "") || null : null,
     },
+    alert_thresholds: alertThresholdPayload(formData),
     auth:
       (type === "http" || type === "auth") && authType !== "none"
         ? {
@@ -3970,6 +4419,7 @@ function browserMonitorPayload(form) {
       : null,
   }));
   return {
+    id: form.dataset.originalId || null,
     name: String(formData.get("name")),
     type: "browser",
     enabled: String(formData.get("enabled")) === "true",
@@ -3986,6 +4436,7 @@ function browserMonitorPayload(form) {
     expect_authenticated_statuses: [200],
     auth: null,
     content: { contains: [], not_contains: [], regex: null },
+    alert_thresholds: alertThresholdPayload(formData),
     browser: {
       expected_title_contains: String(formData.get("browser_expected_title_contains") || "").trim() || null,
       required_selectors: parseCsv(formData.get("browser_required_selectors") || ""),
@@ -4482,7 +4933,7 @@ async function renderRoute() {
   if (path === "/monitors") {
     const checkMetrics = await api("/api/metrics/checks");
     checks.forEach((check) => {
-      check.metric_points = checkMetrics[check.name] || [];
+      check.metric_points = monitorPoints(check, checkMetrics);
     });
     renderMonitorsHomePage(checks);
     return;
@@ -4638,7 +5089,7 @@ async function renderRoute() {
       api("/api/metrics/checks"),
       api("/api/cluster"),
     ]);
-    check.metric_points = checkMetrics[check.name] || [];
+    check.metric_points = monitorPoints(check, checkMetrics);
     if (check.type === "browser") {
       setWorkspaceHeader(check.name, "Dedicated browser monitor page for editing synthetic steps and replaying network diagnostics.", [
         { label: "Monitors", href: "/monitors" },
@@ -4702,6 +5153,11 @@ function navigate(url) {
 }
 
 function handleToggle(event) {
+  const runDiagnosticPanel = event.target.closest("[data-run-diagnostic-key]");
+  if (runDiagnosticPanel) {
+    state.dashboardRunDiagnostics[runDiagnosticPanel.dataset.runDiagnosticKey] = runDiagnosticPanel.open;
+    return;
+  }
   const panel = event.target.closest("[data-dashboard-panel]");
   if (!panel) {
     return;
@@ -5148,6 +5604,20 @@ async function handleClick(event) {
     return;
   }
 
+  const harDownload = event.target.closest("[data-download-har]");
+  if (harDownload) {
+    const context = state.dashboardDetailContext;
+    const check = context?.check;
+    const results = context?.recentResults || [];
+    const result = results.find((item) => runDiagnosticKey(check, item) === harDownload.dataset.downloadHar);
+    if (!check || !result || check.type !== "browser") return;
+    downloadJsonFile(
+      `${check.name.replace(/[^a-z0-9_-]+/gi, "-").toLowerCase()}-${Math.floor(Number(result.timestamp || Date.now() / 1000))}.har`,
+      browserResultToHar(check, result)
+    );
+    return;
+  }
+
   if (event.target.id === "update-browser-session-btn") {
     await updateBrowserSessionState(false);
     return;
@@ -5380,7 +5850,7 @@ function handleChange(event) {
     return;
   }
 
-  if (event.target.matches("select[name='type'], select[name='auth_type']")) {
+  if (event.target.matches("select[name='type'], select[name='auth_type'], select[name='alert_threshold_mode'], #monitor-form select[name='placement_mode']")) {
     hydrateFormVisibility(event.target.closest("form"));
     return;
   }

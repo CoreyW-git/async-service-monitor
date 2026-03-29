@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 
 from service_monitor.auth import AuthManager
 from service_monitor.config import (
+    AlertThresholdsConfig,
     AppConfig,
     AuthConfig,
     BrowserConfig,
@@ -88,7 +89,20 @@ class BrowserPayload(BaseModel):
     steps: list[BrowserStepPayload] = Field(default_factory=list)
 
 
+class AlertThresholdsPayload(BaseModel):
+    mode: Literal["auto", "manual"] = "auto"
+    availability_warning: float = 99.5
+    availability_critical: float = 99.0
+    error_rate_warning: float = 2.0
+    error_rate_critical: float = 5.0
+    p95_latency_warning_ms: float = 1500.0
+    p95_latency_critical_ms: float = 3000.0
+    p99_latency_warning_ms: float = 2500.0
+    p99_latency_critical_ms: float = 5000.0
+
+
 class CheckPayload(BaseModel):
+    id: str | None = None
     name: str
     type: Literal["http", "dns", "auth", "database", "generic", "browser"]
     enabled: bool = True
@@ -106,6 +120,7 @@ class CheckPayload(BaseModel):
     auth: AuthPayload | None = None
     content: ContentPayload | None = None
     browser: BrowserPayload | None = None
+    alert_thresholds: AlertThresholdsPayload = Field(default_factory=AlertThresholdsPayload)
 
 
 class CheckStatePayload(BaseModel):
@@ -290,8 +305,15 @@ def _browser_from_payload(payload: BrowserPayload | None) -> BrowserConfig | Non
     )
 
 
+def _alert_thresholds_from_payload(payload: AlertThresholdsPayload | None) -> AlertThresholdsConfig:
+    if payload is None:
+        return AlertThresholdsConfig()
+    return AlertThresholdsConfig(**payload.model_dump())
+
+
 def _check_from_payload(payload: CheckPayload) -> CheckConfig:
     return CheckConfig(
+        id=payload.id or secrets.token_urlsafe(10),
         name=payload.name,
         type=payload.type,  # type: ignore[arg-type]
         enabled=payload.enabled,
@@ -309,6 +331,7 @@ def _check_from_payload(payload: CheckPayload) -> CheckConfig:
         auth=_auth_from_payload(payload.auth),
         content=_content_from_payload(payload.content),
         browser=_browser_from_payload(payload.browser),
+        alert_thresholds=_alert_thresholds_from_payload(payload.alert_thresholds),
     )
 
 
@@ -934,7 +957,7 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
 
     async def _describe_checks(config: AppConfig) -> list[dict[str, object]]:
         latest_map = {
-            str(item.get("name")): item
+            str(item.get("check_id") or item.get("name")): item
             for item in await _latest_results()
             if item.get("name")
         }
@@ -942,9 +965,10 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
         assignable_nodes = cluster.get("assignable_nodes") or [config.cluster.node_id]
         described: list[dict[str, object]] = []
         for check in config.checks:
-            latest = latest_map.get(check.name)
+            latest = latest_map.get(check.id) or latest_map.get(check.name)
             described.append(
                 {
+                    "id": check.id,
                     "name": check.name,
                     "type": check.type,
                     "generated": check.name
@@ -983,6 +1007,17 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
                     else None,
                     "expected_statuses": check.expected_statuses,
                     "expect_authenticated_statuses": check.expect_authenticated_statuses,
+                    "alert_thresholds": {
+                        "mode": check.alert_thresholds.mode,
+                        "availability_warning": check.alert_thresholds.availability_warning,
+                        "availability_critical": check.alert_thresholds.availability_critical,
+                        "error_rate_warning": check.alert_thresholds.error_rate_warning,
+                        "error_rate_critical": check.alert_thresholds.error_rate_critical,
+                        "p95_latency_warning_ms": check.alert_thresholds.p95_latency_warning_ms,
+                        "p95_latency_critical_ms": check.alert_thresholds.p95_latency_critical_ms,
+                        "p99_latency_warning_ms": check.alert_thresholds.p99_latency_warning_ms,
+                        "p99_latency_critical_ms": check.alert_thresholds.p99_latency_critical_ms,
+                    },
                     "has_auth": check.auth is not None,
                     "auth": {
                         "type": check.auth.type,
@@ -1350,6 +1385,8 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
             raise HTTPException(status_code=400, detail="This generated monitor is managed by service configuration")
         check = _check_from_payload(payload)
         existing = next((item for item in store.load().checks if item.name == check_name), None)
+        if existing is not None:
+            check.id = existing.id
         if existing and check.type == "browser" and check.browser:
             if check.browser.persist_auth_session:
                 if not check.browser.storage_state and existing.browser and existing.browser.storage_state:

@@ -31,11 +31,12 @@ class MonitorState:
         payload = asdict(result)
         if owner is not None:
             payload["owner"] = owner
+        history_key = str(result.check_id or result.name)
         async with self._lock:
             self._results.appendleft(payload)
-            self._latest_by_check[result.name] = payload
+            self._latest_by_check[history_key] = payload
             history = self._check_history.setdefault(
-                result.name, deque(maxlen=self.metrics_history_limit)
+                history_key, deque(maxlen=self.metrics_history_limit)
             )
             history.append(
                 {
@@ -65,9 +66,9 @@ class MonitorState:
         async with self._lock:
             return list(self._latest_by_check.values())
 
-    async def latest_result_for(self, check_name: str) -> dict[str, object] | None:
+    async def latest_result_for(self, check_key: str) -> dict[str, object] | None:
         async with self._lock:
-            return self._latest_by_check.get(check_name)
+            return self._latest_by_check.get(check_key)
 
     async def summary(self) -> dict[str, object]:
         latest = await self.latest_results()

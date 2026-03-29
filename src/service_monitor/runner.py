@@ -180,6 +180,7 @@ class MonitorRunner:
 
             if check.enabled and self.cluster.should_run_check(check.name):
                 result = await self._execute_check(client, check)
+                result.check_id = check.id
                 await self.state.record_result(result, owner=self.cluster.owner_for_check(check.name))
                 self._emit_result(result)
 
@@ -346,8 +347,13 @@ class MonitorRunner:
         await self.telemetry.record_node_health(node_id, healthy, timestamp)
 
     def describe_check(self, check: CheckConfig) -> dict[str, object]:
-        latest = self.state._latest_by_check.get(check.name) if hasattr(self.state, "_latest_by_check") else None
+        latest = None
+        if hasattr(self.state, "_latest_by_check"):
+            latest = self.state._latest_by_check.get(check.id) or self.state._latest_by_check.get(
+                check.name
+            )
         return {
+            "id": check.id,
             "name": check.name,
             "type": check.type,
             "generated": check.name
