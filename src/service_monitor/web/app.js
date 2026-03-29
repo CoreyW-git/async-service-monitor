@@ -13,6 +13,7 @@ function createRecorderState() {
     playwrightError: "",
     playwrightBrowserOpen: false,
     playwrightPollHandle: null,
+    playwrightLaunchInFlight: false,
     lastTestResult: null,
   };
 }
@@ -4645,20 +4646,36 @@ function stopPlaywrightRecorderPolling() {
 }
 
 async function teardownPlaywrightRecorder(stopRemote = false) {
+  const priorSessionId = state.recorder.playwrightSessionId;
   stopPlaywrightRecorderPolling();
-  if (stopRemote && state.recorder.playwrightSessionId) {
+  if (stopRemote && priorSessionId) {
     try {
-      await api(`/api/recorder/playwright-session/${encodeURIComponent(state.recorder.playwrightSessionId)}/stop`, {
+      await api(`/api/recorder/playwright-session/${encodeURIComponent(priorSessionId)}/stop`, {
         method: "POST",
       });
     } catch (_) {
       // Best-effort cleanup only.
     }
   }
+  if (stopRemote && priorSessionId) {
+    const deadline = Date.now() + 7000;
+    while (Date.now() < deadline) {
+      try {
+        const status = await api(`/api/recorder/playwright-session/${encodeURIComponent(priorSessionId)}`);
+        if (status.status === "stopped" || status.status === "error" || !status.browser_open) {
+          break;
+        }
+      } catch (_) {
+        break;
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 350));
+    }
+  }
   state.recorder.playwrightSessionId = null;
   state.recorder.playwrightStatus = "";
   state.recorder.playwrightError = "";
   state.recorder.playwrightBrowserOpen = false;
+  state.recorder.playwrightLaunchInFlight = false;
   if (state.recorder.mode === "playwright") {
     state.recorder.mode = "in_app";
   }
@@ -4756,6 +4773,9 @@ async function pollPlaywrightRecorderStatus() {
   state.recorder.playwrightStatus = status.status || "";
   state.recorder.playwrightError = status.error || "";
   state.recorder.playwrightBrowserOpen = Boolean(status.browser_open);
+  if (status.status === "running" || status.status === "stopped" || status.status === "error") {
+    state.recorder.playwrightLaunchInFlight = false;
+  }
   state.recorder.steps = Array.isArray(status.steps) ? status.steps : [];
   renderRecorderSteps();
   refreshRecorderUi();
@@ -4779,22 +4799,34 @@ function startPlaywrightRecorderPolling() {
 }
 
 async function launchPlaywrightRecorder(url) {
+  if (state.recorder.playwrightLaunchInFlight) {
+    return;
+  }
+  state.recorder.playwrightLaunchInFlight = true;
   const status = document.getElementById("monitor-recorder-status");
   setStatus(status, "Launching Chromium recorder...");
-  const session = await api(`/api/recorder/playwright-session?url=${encodeURIComponent(url)}`, { method: "POST" });
-  state.recorder.mode = "playwright";
-  state.recorder.playwrightSessionId = session.session_id;
-  state.recorder.playwrightStatus = session.message || session.status || "Chromium recorder launch requested.";
-  state.recorder.playwrightError = "";
-  state.recorder.playwrightBrowserOpen = false;
-  state.recorder.steps = [];
-  state.recorder.targetUrl = url;
-  state.recorder.lastPageUrl = url;
-  clearPlaywrightFallback();
-  renderRecorderSteps();
-  refreshRecorderUi();
-  await pollPlaywrightRecorderStatus();
-  startPlaywrightRecorderPolling();
+  try {
+    if (state.recorder.playwrightSessionId) {
+      await teardownPlaywrightRecorder(true);
+    }
+    const session = await api(`/api/recorder/playwright-session?url=${encodeURIComponent(url)}`, { method: "POST" });
+    state.recorder.mode = "playwright";
+    state.recorder.playwrightSessionId = session.session_id;
+    state.recorder.playwrightStatus = session.message || session.status || "Chromium recorder launch requested.";
+    state.recorder.playwrightError = "";
+    state.recorder.playwrightBrowserOpen = false;
+    state.recorder.steps = [];
+    state.recorder.targetUrl = url;
+    state.recorder.lastPageUrl = url;
+    clearPlaywrightFallback();
+    renderRecorderSteps();
+    refreshRecorderUi();
+    await pollPlaywrightRecorderStatus();
+    startPlaywrightRecorderPolling();
+  } catch (error) {
+    state.recorder.playwrightLaunchInFlight = false;
+    throw error;
+  }
 }
 
 function renderRecorderSteps() {

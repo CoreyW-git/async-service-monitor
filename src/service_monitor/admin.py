@@ -6,6 +6,7 @@ import json
 import mimetypes
 import os
 import secrets
+import signal
 import subprocess
 import sys
 import threading
@@ -799,6 +800,59 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
                 creationflags=creation_flags,
             )
         return process.pid
+
+    def _playwright_recorder_active(entry: dict[str, Any] | None) -> bool:
+        if not entry:
+            return False
+        return str(entry.get("status") or "") in {"launching", "running", "stopping"} or bool(
+            entry.get("browser_open")
+        )
+
+    def _playwright_recorder_process_running(pid: int | None) -> bool:
+        if not pid:
+            return False
+        try:
+            os.kill(int(pid), 0)
+        except OSError:
+            return False
+        return True
+
+    def _terminate_playwright_recorder(entry: dict[str, Any], reason: str = "Recorder helper terminated.") -> None:
+        pid = entry.get("pid")
+        if pid and _playwright_recorder_process_running(int(pid)):
+            try:
+                os.kill(int(pid), signal.SIGTERM)
+            except OSError:
+                pass
+        entry["browser_open"] = False
+        entry["stop_requested"] = False
+        entry["status"] = "stopped"
+        entry["message"] = reason
+
+    def _retire_existing_playwright_recorders() -> None:
+        now = time.time()
+        for entry in runtime["playwright_recorders"].values():
+            if not _playwright_recorder_active(entry):
+                continue
+            entry["stop_requested"] = True
+            entry["status"] = "stopping"
+            entry["message"] = "A new Chromium recorder session is replacing this one."
+            stop_requested_at = entry.get("stop_requested_at")
+            if stop_requested_at is None:
+                entry["stop_requested_at"] = now
+                stop_requested_at = now
+            last_seen_at = float(entry.get("last_seen_at") or 0.0)
+            if _playwright_recorder_process_running(entry.get("pid")):
+                _terminate_playwright_recorder(
+                    entry,
+                    "Previous recorder session was terminated so a new one could start cleanly.",
+                )
+                continue
+            if last_seen_at and now - last_seen_at > 4:
+                _terminate_playwright_recorder(
+                    entry,
+                    "Previous recorder session was marked stale and retired before launching a new one.",
+                )
 
     def _launch_playwright_recorder_sync(session_id: str, target_url: str) -> None:
         entry = runtime["playwright_recorders"].get(session_id)
@@ -1969,6 +2023,7 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
         url: str = Query(...),
         current_user: dict[str, str] = Depends(require_read_write),
     ) -> dict[str, object]:
+        _retire_existing_playwright_recorders()
         session_id = secrets.token_urlsafe(18)
         token = secrets.token_urlsafe(24)
         entry = {
@@ -1980,8 +2035,11 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
             "steps": [],
             "browser_open": False,
             "stop_requested": False,
+            "stop_requested_at": None,
             "token": token,
             "pid": None,
+            "started_at": time.time(),
+            "last_seen_at": time.time(),
         }
         runtime["playwright_recorders"][session_id] = entry
         try:
@@ -2053,6 +2111,7 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
         entry["status"] = "stopping"
         entry["message"] = "Stopping desktop recorder helper..."
         entry["stop_requested"] = True
+        entry["stop_requested_at"] = time.time()
         return {"status": "ok"}
 
     def _require_recorder_helper(recorder_session_id: str, request: Request) -> dict[str, Any]:
@@ -2071,6 +2130,7 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
     ) -> dict[str, object]:
         payload = RecorderHelperStatusPayload.model_validate(await request.json())
         entry = _require_recorder_helper(recorder_session_id, request)
+        entry["last_seen_at"] = time.time()
         entry["status"] = payload.status
         entry["error"] = payload.error
         entry["message"] = payload.message
@@ -2080,6 +2140,8 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
             entry["storage_state"] = payload.storage_state
         if payload.storage_state_captured_at is not None:
             entry["storage_state_captured_at"] = payload.storage_state_captured_at
+        if payload.status in {"stopped", "error"}:
+            entry["stop_requested"] = False
         return {"status": "ok"}
 
     @app.post("/api/internal/recorder/playwright-session/{recorder_session_id}/event")
@@ -2088,7 +2150,8 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
         request: Request,
     ) -> dict[str, object]:
         payload = RecorderHelperEventPayload.model_validate(await request.json())
-        _require_recorder_helper(recorder_session_id, request)
+        entry = _require_recorder_helper(recorder_session_id, request)
+        entry["last_seen_at"] = time.time()
         _append_playwright_step(recorder_session_id, payload.model_dump(exclude_none=True))
         return {"status": "ok"}
 
