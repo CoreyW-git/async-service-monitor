@@ -1,3 +1,21 @@
+function createRecorderState() {
+  return {
+    sessionId: null,
+    mode: "in_app",
+    targetUrl: "",
+    steps: [],
+    lastPageUrl: "",
+    status: "",
+    fallbackSuggested: false,
+    fallbackReason: "",
+    playwrightSessionId: null,
+    playwrightStatus: "",
+    playwrightError: "",
+    playwrightBrowserOpen: false,
+    playwrightPollHandle: null,
+  };
+}
+
 const state = {
   pollingHandle: null,
   session: null,
@@ -18,21 +36,7 @@ const state = {
     type: "all",
   },
   dashboardDetailContext: null,
-  recorder: {
-    sessionId: null,
-    mode: "in_app",
-    targetUrl: "",
-    steps: [],
-    lastPageUrl: "",
-    status: "",
-    fallbackSuggested: false,
-    fallbackReason: "",
-    playwrightSessionId: null,
-    playwrightStatus: "",
-    playwrightError: "",
-    playwrightBrowserOpen: false,
-    playwrightPollHandle: null,
-  },
+  recorder: createRecorderState(),
 };
 
 const ROLE_LEVELS = {
@@ -1966,39 +1970,68 @@ function monitorFormMarkup(check, mode, cluster = { node_id: "monitor-1", peers:
 
 function browserStepRowMarkup(step = {}, index = 0) {
   const action = step.action || "wait_for_selector";
+  const title = step.name || `Step ${index + 1}`;
+  const selectorSummary = step.selector || "No selector";
+  const valueSummary = step.value || "No value";
   return `
-    <div class="browser-step-row" data-browser-step>
-      <label><span>Step Name</span><input name="browser_step_name" value="${escapeHtml(step.name || `Step ${index + 1}`)}" /></label>
-      <label>
-        <span>Action</span>
-        <select name="browser_step_action">
-          <option value="wait_for_selector" ${action === "wait_for_selector" ? "selected" : ""}>Wait For Selector</option>
-          <option value="click" ${action === "click" ? "selected" : ""}>Click</option>
-          <option value="fill" ${action === "fill" ? "selected" : ""}>Fill</option>
-          <option value="press" ${action === "press" ? "selected" : ""}>Press Key</option>
-          <option value="assert_text" ${action === "assert_text" ? "selected" : ""}>Assert Text</option>
-          <option value="assert_url_contains" ${action === "assert_url_contains" ? "selected" : ""}>Assert URL Contains</option>
-          <option value="wait_for_timeout" ${action === "wait_for_timeout" ? "selected" : ""}>Wait For Timeout</option>
-          <option value="navigate" ${action === "navigate" ? "selected" : ""}>Navigate</option>
-        </select>
-      </label>
-      <label class="browser-step-selector ${["wait_for_selector", "click", "fill", "assert_text"].includes(action) ? "" : "hidden"}">
-        <span>Selector</span>
-        <input name="browser_step_selector" value="${escapeHtml(step.selector || "")}" placeholder="#app .login-button" />
-      </label>
-      <label class="browser-step-value ${["fill", "press", "assert_text", "assert_url_contains", "wait_for_timeout", "navigate"].includes(action) ? "" : "hidden"}">
-        <span>Value</span>
-        <input name="browser_step_value" value="${escapeHtml(step.value || "")}" placeholder="Text, key, URL fragment, or timeout ms" />
-      </label>
-      <label>
-        <span>Timeout Seconds</span>
-        <input name="browser_step_timeout_seconds" type="number" min="1" value="${escapeHtml(step.timeout_seconds || "")}" />
-      </label>
-      <div class="button-row">
-        <button type="button" class="secondary" data-remove-browser-step="true">Remove Step</button>
+    <details class="browser-step-row" data-browser-step>
+      <summary class="accordion-summary browser-step-summary">
+        <div>
+          <strong>${escapeHtml(title)}</strong>
+          <div class="status-meta">
+            <span>${escapeHtml(browserStepActionLabel(action))}</span>
+            <span>${escapeHtml(selectorSummary)}</span>
+            <span>${escapeHtml(String(valueSummary).slice(0, 48))}</span>
+          </div>
+        </div>
+      </summary>
+      <div class="accordion-body">
+        <label><span>Step Name</span><input name="browser_step_name" value="${escapeHtml(title)}" /></label>
+        <label>
+          <span>Action</span>
+          <select name="browser_step_action">
+            <option value="wait_for_selector" ${action === "wait_for_selector" ? "selected" : ""}>Wait For Selector</option>
+            <option value="click" ${action === "click" ? "selected" : ""}>Click</option>
+            <option value="fill" ${action === "fill" ? "selected" : ""}>Fill</option>
+            <option value="press" ${action === "press" ? "selected" : ""}>Press Key</option>
+            <option value="assert_text" ${action === "assert_text" ? "selected" : ""}>Assert Text</option>
+            <option value="assert_url_contains" ${action === "assert_url_contains" ? "selected" : ""}>Assert URL Contains</option>
+            <option value="wait_for_timeout" ${action === "wait_for_timeout" ? "selected" : ""}>Wait For Timeout</option>
+            <option value="navigate" ${action === "navigate" ? "selected" : ""}>Navigate</option>
+          </select>
+        </label>
+        <label class="browser-step-selector ${["wait_for_selector", "click", "fill", "assert_text"].includes(action) ? "" : "hidden"}">
+          <span>Selector</span>
+          <input name="browser_step_selector" value="${escapeHtml(step.selector || "")}" placeholder="#app .login-button" />
+        </label>
+        <label class="browser-step-value ${["fill", "press", "assert_text", "assert_url_contains", "wait_for_timeout", "navigate"].includes(action) ? "" : "hidden"}">
+          <span>Value</span>
+          <input name="browser_step_value" value="${escapeHtml(step.value || "")}" placeholder="Text, key, URL fragment, or timeout ms" />
+        </label>
+        <label>
+          <span>Timeout Seconds</span>
+          <input name="browser_step_timeout_seconds" type="number" min="1" value="${escapeHtml(step.timeout_seconds || "")}" />
+        </label>
+        <div class="button-row">
+          <button type="button" class="secondary" data-remove-browser-step="true">Remove Step</button>
+        </div>
       </div>
-    </div>
+    </details>
   `;
+}
+
+function browserStepActionLabel(action) {
+  const labels = {
+    wait_for_selector: "Wait For Selector",
+    click: "Click",
+    fill: "Fill",
+    press: "Press Key",
+    assert_text: "Assert Text",
+    assert_url_contains: "Assert URL Contains",
+    wait_for_timeout: "Wait For Timeout",
+    navigate: "Navigate",
+  };
+  return labels[action] || action;
 }
 
 function networkCellValue(value) {
@@ -2487,6 +2520,24 @@ function browserMonitorMarkup(check, mode, cluster = { node_id: "monitor-1", pee
                 <label><span>Wait Until</span><select name="browser_wait_until" ${canWrite ? "" : "disabled"}><option value="networkidle" ${browser.wait_until === "networkidle" || !browser.wait_until ? "selected" : ""}>Network Idle</option><option value="load" ${browser.wait_until === "load" ? "selected" : ""}>Load</option><option value="domcontentloaded" ${browser.wait_until === "domcontentloaded" ? "selected" : ""}>DOMContentLoaded</option></select></label>
                 <label><span>Viewport Width</span><input name="browser_viewport_width" type="number" min="320" value="${escapeHtml(browser.viewport_width || 1440)}" ${canWrite ? "" : "disabled"} /></label>
                 <label><span>Viewport Height</span><input name="browser_viewport_height" type="number" min="320" value="${escapeHtml(browser.viewport_height || 900)}" ${canWrite ? "" : "disabled"} /></label>
+                <label class="checkbox-field"><input name="browser_persist_auth_session" type="checkbox" ${browser.persist_auth_session ? "checked" : ""} ${canWrite ? "" : "disabled"} /><span>Reuse a captured authenticated browser session during scheduled runs</span></label>
+                <div class="guide-card compact-card session-state-card">
+                  <h4>Stored Browser Session</h4>
+                  <p>${browser.has_storage_state ? "A recorded browser session is stored for this monitor." : "No recorded browser session is stored yet."}</p>
+                  <div class="status-meta">
+                    <span>${browser.persist_auth_session ? "Session replay enabled" : "Session replay disabled"}</span>
+                    <span>${browser.storage_state_captured_at ? `Captured ${fmtTime(browser.storage_state_captured_at)}` : "No capture timestamp"}</span>
+                  </div>
+                </div>
+                ${!isNew ? `
+                  <label><span>Manual Browser Session Update</span><textarea name="browser_storage_state" rows="8" placeholder='Paste Playwright storage_state JSON here if you need to update the authenticated browser session manually.' ${canWrite ? "" : "disabled"}></textarea></label>
+                  <div class="button-row ${canWrite ? "" : "hidden"}">
+                    <button type="button" class="secondary" id="update-browser-session-btn">Update Stored Session</button>
+                    <button type="button" class="ghost danger" id="clear-browser-session-btn">Clear Stored Session</button>
+                  </div>
+                  <p class="form-note">This lets you rotate the stored authenticated browser session without recreating the monitor. Paste valid Playwright <code>storage_state</code> JSON.</p>
+                  <p class="form-status" id="browser-session-status"></p>
+                ` : ""}
               </div>
             </details>
 
@@ -2603,9 +2654,36 @@ function recorderMonitorPayload(form) {
       wait_until: String(formData.get("wait_until") || "networkidle"),
       viewport_width: Number(formData.get("viewport_width") || 1440),
       viewport_height: Number(formData.get("viewport_height") || 900),
+      persist_auth_session: String(formData.get("persist_auth_session")) === "true" || formData.get("persist_auth_session") === "on",
+      storage_state: null,
+      storage_state_captured_at: null,
       steps: state.recorder.steps.map(recorderStepToBrowserStep),
     },
   };
+}
+
+async function hydrateRecorderStorageState(payload) {
+  if (!payload?.browser?.persist_auth_session) {
+    payload.browser.storage_state = null;
+    payload.browser.storage_state_captured_at = null;
+    return payload;
+  }
+  const mode = state.recorder.mode === "playwright" ? "playwright" : "in_app";
+  const activeSessionId = mode === "playwright" ? state.recorder.playwrightSessionId : state.recorder.sessionId;
+  if (!activeSessionId || !payload.url) {
+    throw new Error("Record an authenticated browser session first so it can be reused by this monitor.");
+  }
+  const query = new URLSearchParams({ mode, session_id: activeSessionId });
+  if (mode === "in_app") {
+    query.set("url", payload.url);
+  }
+  const sessionState = await api(`/api/recorder/storage-state?${query.toString()}`);
+  if (!sessionState.available || !sessionState.storage_state) {
+    throw new Error("No authenticated browser session has been captured yet. Log in through the recorder first, then save the monitor.");
+  }
+  payload.browser.storage_state = sessionState.storage_state;
+  payload.browser.storage_state_captured_at = sessionState.captured_at || null;
+  return payload;
 }
 
 function recorderStepMarkup(step, index) {
@@ -2677,6 +2755,12 @@ async function teardownPlaywrightRecorder(stopRemote = false) {
   if (state.recorder.mode === "playwright") {
     state.recorder.mode = "in_app";
   }
+}
+
+async function resetRecorderState() {
+  await teardownPlaywrightRecorder(true);
+  const next = createRecorderState();
+  Object.assign(state.recorder, next);
 }
 
 function refreshRecorderUi() {
@@ -2891,6 +2975,7 @@ function renderMonitorRecorderPage(cluster = { node_id: "monitor-1", peers: [], 
                 <label><span>Viewport Height</span><input name="viewport_height" type="number" min="320" value="900" /></label>
                 <label><span>Expected Title Contains</span><input name="expected_title_contains" placeholder="Optional title assertion" /></label>
                 <label><span>Required Selectors</span><input name="required_selectors" placeholder="#app, nav a.login" /></label>
+                <label class="checkbox-field"><input name="persist_auth_session" type="checkbox" /><span>Keep the authenticated browser session and reuse it when this monitor runs continuously</span></label>
                 <div class="button-row">
                   <button type="button" id="start-monitor-recorder-btn">Start Embedded Recorder</button>
                   <button type="button" class="secondary" id="use-playwright-recorder-btn">Use Chromium Recorder</button>
@@ -2903,6 +2988,7 @@ function renderMonitorRecorderPage(cluster = { node_id: "monitor-1", peers: [], 
                   <p id="recorder-fallback-text"></p>
                   <p class="subtle">Switch to Chromium recorder and continue capturing the same journey in a real browser window.</p>
                 </div>
+                <p class="form-note">If you want this to become a continuously authenticated browser monitor, sign in during the recorder session and enable the session reuse option before saving.</p>
               </div>
             </details>
           </div>
@@ -3906,6 +3992,9 @@ function browserMonitorPayload(form) {
       wait_until: String(formData.get("browser_wait_until") || "networkidle"),
       viewport_width: Number(formData.get("browser_viewport_width") || 1440),
       viewport_height: Number(formData.get("browser_viewport_height") || 900),
+      persist_auth_session: String(formData.get("browser_persist_auth_session")) === "true" || formData.get("browser_persist_auth_session") === "on",
+      storage_state: null,
+      storage_state_captured_at: null,
       steps,
     },
   };
@@ -3949,6 +4038,9 @@ function appendBrowserStep(step = {}) {
   wrapper.innerHTML = browserStepRowMarkup(step, list.querySelectorAll("[data-browser-step]").length);
   const row = wrapper.firstElementChild;
   list.appendChild(row);
+  if (row instanceof HTMLDetailsElement) {
+    row.open = true;
+  }
   updateBrowserStepVisibility(row);
 }
 
@@ -4030,9 +4122,10 @@ async function runMonitorRecorderTest() {
   const results = document.getElementById("browser-test-results");
   try {
     setStatus(status, "Testing recorded browser monitor...");
+    const payload = await hydrateRecorderStorageState(recorderMonitorPayload(form));
     const result = await api("/api/checks/test", {
       method: "POST",
-      body: JSON.stringify(recorderMonitorPayload(form)),
+      body: JSON.stringify(payload),
     });
     results.innerHTML = browserTestResultsMarkup(result);
     applyNetworkFilters();
@@ -4041,6 +4134,31 @@ async function runMonitorRecorderTest() {
       `${result.success ? "Success" : "Failed"}: ${result.message} (${Math.round(Number(result.duration_ms || 0))} ms)`,
       !result.success
     );
+  } catch (error) {
+    setStatus(status, error.message, true);
+  }
+}
+
+async function updateBrowserSessionState(clear = false) {
+  if (!hasRole("read_write")) return;
+  const form = document.getElementById("browser-monitor-form");
+  if (!form || !form.dataset.originalName) return;
+  const status = document.getElementById("browser-session-status");
+  const textarea = form.querySelector("textarea[name='browser_storage_state']");
+  try {
+    setStatus(status, clear ? "Clearing stored browser session..." : "Updating stored browser session...");
+    const result = await api(`/api/checks/${encodeURIComponent(form.dataset.originalName)}/browser-session`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        clear,
+        storage_state: clear ? null : String(textarea?.value || "").trim() || null,
+      }),
+    });
+    if (textarea && clear) {
+      textarea.value = "";
+    }
+    setStatus(status, clear ? "Stored browser session cleared." : "Stored browser session updated.");
+    await renderRoute();
   } catch (error) {
     setStatus(status, error.message, true);
   }
@@ -4286,7 +4404,16 @@ async function renderRoute() {
 
   const path = window.location.pathname;
   if (path !== "/monitors/new/advanced/monitor-recorder") {
-    stopPlaywrightRecorderPolling();
+    const hasRecorderDraft =
+      Boolean(state.recorder.targetUrl)
+      || Boolean(state.recorder.steps.length)
+      || Boolean(state.recorder.playwrightSessionId)
+      || Boolean(state.recorder.fallbackSuggested);
+    if (hasRecorderDraft) {
+      await resetRecorderState();
+    } else {
+      stopPlaywrightRecorderPolling();
+    }
   }
   if (path.startsWith("/cluster") || path === "/containers") {
     state.clusterExpanded = true;
@@ -4963,11 +5090,12 @@ async function handleSubmit(event) {
     const status = document.getElementById("monitor-recorder-form-status");
     try {
       setStatus(status, "Saving recorded browser monitor...");
+      const payload = await hydrateRecorderStorageState(recorderMonitorPayload(form));
       await api("/api/checks", {
         method: "POST",
-        body: JSON.stringify(recorderMonitorPayload(form)),
+        body: JSON.stringify(payload),
       });
-      state.recorder.steps = [];
+      await resetRecorderState();
       await renderRoute();
     } catch (error) {
       setStatus(status, error.message, true);
@@ -5017,6 +5145,16 @@ async function handleClick(event) {
 
   if (event.target.id === "test-browser-monitor-btn") {
     await runBrowserMonitorTest();
+    return;
+  }
+
+  if (event.target.id === "update-browser-session-btn") {
+    await updateBrowserSessionState(false);
+    return;
+  }
+
+  if (event.target.id === "clear-browser-session-btn") {
+    await updateBrowserSessionState(true);
     return;
   }
 

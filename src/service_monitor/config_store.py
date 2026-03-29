@@ -89,6 +89,24 @@ class ConfigStore:
                 return config
         raise ValueError(f"Check '{check_name}' was not found")
 
+    def update_browser_storage_state(
+        self,
+        check_name: str,
+        storage_state: str | None,
+        captured_at: float | None,
+    ) -> AppConfig:
+        config = self.load()
+        for check in config.checks:
+            if check.name != check_name:
+                continue
+            if check.type != "browser" or check.browser is None:
+                raise ValueError(f"Check '{check_name}' is not a browser monitor")
+            check.browser.storage_state = storage_state
+            check.browser.storage_state_captured_at = captured_at
+            self.save(config)
+            return config
+        raise ValueError(f"Check '{check_name}' was not found")
+
     def add_peer(self, peer: PeerConfig) -> AppConfig:
         config = self.load()
         if any(existing.node_id == peer.node_id for existing in config.cluster.peers):

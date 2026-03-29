@@ -12,7 +12,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 from typing import Literal
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import docker
 import httpx
@@ -82,6 +82,9 @@ class BrowserPayload(BaseModel):
     wait_until: Literal["load", "domcontentloaded", "networkidle"] = "networkidle"
     viewport_width: int = 1440
     viewport_height: int = 900
+    persist_auth_session: bool = False
+    storage_state: str | None = None
+    storage_state_captured_at: float | None = None
     steps: list[BrowserStepPayload] = Field(default_factory=list)
 
 
@@ -107,6 +110,11 @@ class CheckPayload(BaseModel):
 
 class CheckStatePayload(BaseModel):
     enabled: bool
+
+
+class BrowserSessionStatePayload(BaseModel):
+    storage_state: str | None = None
+    clear: bool = False
 
 
 class BulkCheckSelectionPayload(BaseModel):
@@ -266,6 +274,9 @@ def _browser_from_payload(payload: BrowserPayload | None) -> BrowserConfig | Non
         wait_until=payload.wait_until,
         viewport_width=payload.viewport_width,
         viewport_height=payload.viewport_height,
+        persist_auth_session=payload.persist_auth_session,
+        storage_state=payload.storage_state,
+        storage_state_captured_at=payload.storage_state_captured_at,
         steps=[
             BrowserStepConfig(
                 name=step.name,
@@ -429,16 +440,27 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
 
   function selectorFor(element) {{
     if (!element || element === document.body) return "body";
+    const form = element.closest("form");
+    let prefix = "";
+    if (form) {{
+      if (form.id) {{
+        prefix = "form#" + CSS.escape(form.id) + " ";
+      }} else if (form.getAttribute("name")) {{
+        prefix = "form[name=\"" + form.getAttribute("name") + "\"] ";
+      }}
+    }}
     if (element.id) return "#" + CSS.escape(element.id);
     const testId = element.getAttribute("data-testid") || element.getAttribute("data-test");
-    if (testId) return '[data-testid="' + testId + '"]';
+    if (testId) return prefix + '[data-testid="' + testId + '"]';
     const name = element.getAttribute("name");
-    if (name && element.tagName) return element.tagName.toLowerCase() + '[name="' + name + '"]';
+    if (name && element.tagName) return prefix + element.tagName.toLowerCase() + '[name="' + name + '"]';
     const aria = element.getAttribute("aria-label");
-    if (aria && element.tagName) return element.tagName.toLowerCase() + '[aria-label="' + aria + '"]';
+    if (aria && element.tagName) return prefix + element.tagName.toLowerCase() + '[aria-label="' + aria + '"]';
+    const placeholder = element.getAttribute("placeholder");
+    if (placeholder && element.tagName) return prefix + element.tagName.toLowerCase() + '[placeholder="' + placeholder + '"]';
     const classes = Array.from(element.classList || []).filter(Boolean).slice(0, 2);
-    if (classes.length && element.tagName) return element.tagName.toLowerCase() + "." + classes.map((item) => CSS.escape(item)).join(".");
-    if (element.tagName) return element.tagName.toLowerCase();
+    if (classes.length && element.tagName) return prefix + element.tagName.toLowerCase() + "." + classes.map((item) => CSS.escape(item)).join(".");
+    if (element.tagName) return prefix + element.tagName.toLowerCase();
     return "body";
   }}
 
@@ -571,6 +593,36 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
                 return
         steps.append(payload)
 
+    def _embedded_recorder_storage_state(session_id: str, target_url: str) -> tuple[str | None, float | None]:
+        client = runtime["recorder_clients"].get(session_id)
+        if client is None:
+            return None, None
+        parsed = urlparse(target_url)
+        host = parsed.hostname or ""
+        jar = getattr(client.cookies, "jar", None)
+        if jar is None:
+            return None, None
+        cookies: list[dict[str, Any]] = []
+        for cookie in jar:
+            domain = cookie.domain or host
+            if not domain:
+                continue
+            cookies.append(
+                {
+                    "name": cookie.name,
+                    "value": cookie.value,
+                    "domain": domain,
+                    "path": cookie.path or "/",
+                    "expires": cookie.expires,
+                    "httpOnly": False,
+                    "secure": bool(cookie.secure),
+                    "sameSite": "Lax",
+                }
+            )
+        if not cookies:
+            return None, None
+        return json.dumps({"cookies": cookies, "origins": []}), time.time()
+
     def _launch_playwright_recorder_sync(session_id: str, target_url: str) -> None:
         entry = runtime["playwright_recorders"].get(session_id)
         if not entry:
@@ -587,18 +639,67 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
 
         init_script = """
 (() => {
+  const originalOpen = window.open ? window.open.bind(window) : null;
+  window.open = function(url, target) {
+    if (url && typeof url === "string") {
+      try {
+        window.location.assign(url);
+      } catch (_) {
+        window.location.href = url;
+      }
+    }
+    return window;
+  };
+
+  function normalizeNewWindowTargets(root) {
+    const scope = root && root.querySelectorAll ? root : document;
+    scope.querySelectorAll('a[target], form[target]').forEach((node) => {
+      const target = (node.getAttribute('target') || '').toLowerCase();
+      if (target === '_blank' || target === '_new') {
+        node.setAttribute('target', '_self');
+      }
+    });
+  }
+
+  function wireMutationObserver() {
+    const observer = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        for (const node of mutation.addedNodes || []) {
+          if (node && node.nodeType === Node.ELEMENT_NODE) {
+            normalizeNewWindowTargets(node);
+          }
+        }
+      }
+    });
+    observer.observe(document.documentElement || document.body, {
+      childList: true,
+      subtree: true
+    });
+  }
+
   function selectorFor(element) {
     if (!element || element === document.body) return "body";
+    const form = element.closest("form");
+    let prefix = "";
+    if (form) {
+      if (form.id) {
+        prefix = "form#" + CSS.escape(form.id) + " ";
+      } else if (form.getAttribute("name")) {
+        prefix = "form[name=\"" + form.getAttribute("name") + "\"] ";
+      }
+    }
     if (element.id) return "#" + CSS.escape(element.id);
     const testId = element.getAttribute("data-testid") || element.getAttribute("data-test");
-    if (testId) return '[data-testid="' + testId + '"]';
+    if (testId) return prefix + '[data-testid="' + testId + '"]';
     const name = element.getAttribute("name");
-    if (name && element.tagName) return element.tagName.toLowerCase() + '[name="' + name + '"]';
+    if (name && element.tagName) return prefix + element.tagName.toLowerCase() + '[name="' + name + '"]';
     const aria = element.getAttribute("aria-label");
-    if (aria && element.tagName) return element.tagName.toLowerCase() + '[aria-label="' + aria + '"]';
+    if (aria && element.tagName) return prefix + element.tagName.toLowerCase() + '[aria-label="' + aria + '"]';
+    const placeholder = element.getAttribute("placeholder");
+    if (placeholder && element.tagName) return prefix + element.tagName.toLowerCase() + '[placeholder="' + placeholder + '"]';
     const classes = Array.from(element.classList || []).filter(Boolean).slice(0, 2);
-    if (classes.length && element.tagName) return element.tagName.toLowerCase() + "." + classes.map((item) => CSS.escape(item)).join(".");
-    return element.tagName ? element.tagName.toLowerCase() : "body";
+    if (classes.length && element.tagName) return prefix + element.tagName.toLowerCase() + "." + classes.map((item) => CSS.escape(item)).join(".");
+    return element.tagName ? prefix + element.tagName.toLowerCase() : "body";
   }
 
   function send(payload) {
@@ -610,11 +711,22 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
   document.addEventListener("click", (event) => {
     const target = event.target.closest("a, button, input, [role='button']");
     if (!target) return;
+    const link = target.closest("a");
+    if (link) {
+      const targetName = (link.getAttribute("target") || "").toLowerCase();
+      if (targetName === "_blank" || targetName === "_new") {
+        event.preventDefault();
+        const href = link.href;
+        if (href) {
+          window.location.assign(href);
+        }
+      }
+    }
     send({
       event: "click",
       selector: selectorFor(target),
       text: (target.innerText || target.value || target.getAttribute("aria-label") || "").trim().slice(0, 120),
-      href: target.closest("a") ? target.closest("a").href : null
+      href: link ? link.href : null
     });
   }, true);
 
@@ -632,6 +744,10 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
   document.addEventListener("submit", (event) => {
     const form = event.target;
     if (!(form instanceof HTMLFormElement)) return;
+    const targetName = (form.getAttribute("target") || "").toLowerCase();
+    if (targetName === "_blank" || targetName === "_new") {
+      form.setAttribute("target", "_self");
+    }
     send({
       event: "submit",
       selector: selectorFor(form),
@@ -641,6 +757,8 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
   }, true);
 
   window.addEventListener("load", () => {
+    normalizeNewWindowTargets(document);
+    wireMutationObserver();
     send({
       event: "page_ready",
       url: window.location.href,
@@ -668,6 +786,30 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
 
                 page = context.new_page()
 
+                def handle_extra_page(extra_page):
+                    if extra_page == page:
+                        return
+                    try:
+                        popup_url = extra_page.url or "about:blank"
+                    except Exception:
+                        popup_url = "about:blank"
+                    _append_playwright_step(
+                        session_id,
+                        {
+                            "event": "popup_blocked",
+                            "url": popup_url,
+                            "title": "Blocked secondary tab",
+                            "message": "A secondary tab or popup was blocked so the recorder can stay focused on one controlled browser page.",
+                        },
+                    )
+                    try:
+                        extra_page.close()
+                    except Exception:
+                        pass
+
+                context.on("page", handle_extra_page)
+                page.on("popup", handle_extra_page)
+
                 def on_navigate(frame):
                     if frame == page.main_frame:
                         _append_playwright_step(
@@ -683,9 +825,20 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
                 page.goto(target_url, wait_until="domcontentloaded")
 
                 while not stop_event.is_set():
+                    try:
+                        entry["storage_state"] = json.dumps(context.storage_state())
+                        entry["storage_state_captured_at"] = time.time()
+                    except Exception:
+                        pass
                     if page.is_closed():
                         break
                     time.sleep(0.4)
+
+                try:
+                    entry["storage_state"] = json.dumps(context.storage_state())
+                    entry["storage_state_captured_at"] = time.time()
+                except Exception:
+                    pass
 
                 try:
                     context.close()
@@ -812,6 +965,9 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
                         "wait_until": check.browser.wait_until,
                         "viewport_width": check.browser.viewport_width,
                         "viewport_height": check.browser.viewport_height,
+                        "persist_auth_session": check.browser.persist_auth_session,
+                        "has_storage_state": bool(check.browser.storage_state),
+                        "storage_state_captured_at": check.browser.storage_state_captured_at,
                         "steps": [
                             {
                                 "name": step.name,
@@ -1193,6 +1349,15 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
         if check_name in generated_check_names:
             raise HTTPException(status_code=400, detail="This generated monitor is managed by service configuration")
         check = _check_from_payload(payload)
+        existing = next((item for item in store.load().checks if item.name == check_name), None)
+        if existing and check.type == "browser" and check.browser:
+            if check.browser.persist_auth_session:
+                if not check.browser.storage_state and existing.browser and existing.browser.storage_state:
+                    check.browser.storage_state = existing.browser.storage_state
+                    check.browser.storage_state_captured_at = existing.browser.storage_state_captured_at
+            else:
+                check.browser.storage_state = None
+                check.browser.storage_state_captured_at = None
         try:
             store.update_check(check_name, check)
         except ValueError as exc:
@@ -1218,6 +1383,40 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
         runner = _get_runner()
         await runner.apply_config(store.load())
         return {"status": "ok"}
+
+    @app.patch("/api/checks/{check_name}/browser-session")
+    async def update_browser_session_state(
+        check_name: str,
+        payload: BrowserSessionStatePayload,
+        current_user: dict[str, str] = Depends(require_read_write),
+    ) -> dict[str, object]:
+        if check_name in generated_check_names:
+            raise HTTPException(status_code=400, detail="This generated monitor is managed by service configuration")
+        config = store.load()
+        check = next((item for item in config.checks if item.name == check_name), None)
+        if check is None:
+            raise HTTPException(status_code=404, detail=f"Check '{check_name}' was not found")
+        if check.type != "browser" or check.browser is None:
+            raise HTTPException(status_code=400, detail="Only browser monitors support stored browser sessions")
+
+        if payload.clear:
+            store.update_browser_storage_state(check_name, None, None)
+        else:
+            raw = (payload.storage_state or "").strip()
+            if not raw:
+                raise HTTPException(status_code=400, detail="Provide a browser session payload or choose clear")
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise HTTPException(status_code=400, detail=f"Browser session payload must be valid JSON: {exc.msg}") from exc
+            if not isinstance(parsed, dict) or not isinstance(parsed.get("cookies", []), list):
+                raise HTTPException(status_code=400, detail="Browser session payload must look like Playwright storage_state JSON")
+            store.update_browser_storage_state(check_name, json.dumps(parsed), time.time())
+
+        runner = _get_runner()
+        await runner.apply_config(store.load())
+        updated = next((item for item in await _describe_checks(_get_runtime_config()) if item["name"] == check_name), None)
+        return {"status": "ok", "check": updated}
 
     @app.delete("/api/checks/{check_name}")
     async def delete_check(
@@ -1470,6 +1669,33 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
             "message": "Chromium recorder launch requested.",
         }
 
+    @app.get("/api/recorder/storage-state")
+    async def recorder_storage_state(
+        mode: Literal["in_app", "playwright"] = Query("in_app"),
+        session_id: str = Query(...),
+        url: str | None = Query(default=None),
+        current_user: dict[str, str] = Depends(require_read_write),
+    ) -> dict[str, object]:
+        if mode == "playwright":
+            entry = runtime["playwright_recorders"].get(session_id)
+            if not entry:
+                raise HTTPException(status_code=404, detail="Playwright recorder session was not found")
+            return {
+                "available": bool(entry.get("storage_state")),
+                "storage_state": entry.get("storage_state"),
+                "captured_at": entry.get("storage_state_captured_at"),
+                "source": "playwright",
+            }
+        if not url:
+            raise HTTPException(status_code=400, detail="url is required for embedded recorder session capture")
+        storage_state, captured_at = await asyncio.to_thread(_embedded_recorder_storage_state, session_id, url)
+        return {
+            "available": bool(storage_state),
+            "storage_state": storage_state,
+            "captured_at": captured_at,
+            "source": "in_app",
+        }
+
     @app.get("/api/recorder/playwright-session/{recorder_session_id}")
     async def playwright_recorder_status(
         recorder_session_id: str,
@@ -1484,6 +1710,8 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
             "status": entry["status"],
             "error": entry["error"],
             "browser_open": entry["browser_open"],
+            "has_storage_state": bool(entry.get("storage_state")),
+            "storage_state_captured_at": entry.get("storage_state_captured_at"),
             "steps": entry["steps"],
         }
 

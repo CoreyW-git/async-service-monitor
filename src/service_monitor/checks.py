@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import socket
 import time
@@ -414,15 +415,21 @@ async def run_browser_check(check: CheckConfig, timeout_seconds: float) -> Check
         if expected not in current:
             raise ValueError(f"url '{current}' does not contain '{expected}'")
 
+    def _step_locator(page, selector: str):
+        return page.locator(selector).first
+
     try:
         async with async_playwright() as playwright:
             browser = await playwright.chromium.launch(headless=True)
-            context = await browser.new_context(
-                viewport={
+            context_kwargs: dict[str, Any] = {
+                "viewport": {
                     "width": browser_config.viewport_width,
                     "height": browser_config.viewport_height,
                 }
-            )
+            }
+            if browser_config.persist_auth_session and browser_config.storage_state:
+                context_kwargs["storage_state"] = json.loads(browser_config.storage_state)
+            context = await browser.new_context(**context_kwargs)
             page = await context.new_page()
 
             page.on(
@@ -552,19 +559,19 @@ async def run_browser_check(check: CheckConfig, timeout_seconds: float) -> Check
                     await record_step(
                         step.name,
                         step.action,
-                        page.locator(step.selector or "").click(timeout=step_timeout_ms),
+                        _step_locator(page, step.selector or "").click(timeout=step_timeout_ms),
                     )
                 elif step.action == "fill":
                     await record_step(
                         step.name,
                         step.action,
-                        page.locator(step.selector or "").fill(step.value or "", timeout=step_timeout_ms),
+                        _step_locator(page, step.selector or "").fill(step.value or "", timeout=step_timeout_ms),
                     )
                 elif step.action == "press":
                     await record_step(
                         step.name,
                         step.action,
-                        page.locator(step.selector or "body").press(step.value or "", timeout=step_timeout_ms),
+                        _step_locator(page, step.selector or "body").press(step.value or "", timeout=step_timeout_ms),
                     )
                 elif step.action == "assert_text":
                     await record_step(

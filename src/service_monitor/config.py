@@ -99,6 +99,9 @@ class BrowserConfig:
     wait_until: Literal["load", "domcontentloaded", "networkidle"] = "networkidle"
     viewport_width: int = 1440
     viewport_height: int = 900
+    persist_auth_session: bool = False
+    storage_state: str | None = None
+    storage_state_captured_at: float | None = None
     steps: list[BrowserStepConfig] = field(default_factory=list)
 
 
@@ -306,6 +309,9 @@ def _parse_browser(raw: dict[str, Any] | None) -> BrowserConfig | None:
         wait_until=raw.get("wait_until", "networkidle"),
         viewport_width=int(raw.get("viewport_width") or 1440),
         viewport_height=int(raw.get("viewport_height") or 900),
+        persist_auth_session=_as_bool(raw.get("persist_auth_session", False)),
+        storage_state=raw.get("storage_state"),
+        storage_state_captured_at=raw.get("storage_state_captured_at"),
         steps=[_parse_browser_step(item) for item in raw.get("steps", [])],
     )
 

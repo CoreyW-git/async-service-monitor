@@ -738,13 +738,25 @@ button.danger {
 }
 
 .browser-step-row {
-  display: grid;
-  gap: 8px;
-  padding: 12px;
   border-radius: 14px;
   border: 1px solid var(--line);
   background: var(--surface-alt);
   min-width: 0;
+  overflow: hidden;
+}
+
+.browser-step-row .accordion-body {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+}
+
+.browser-step-summary {
+  padding: 12px;
+}
+
+.browser-step-summary .status-meta {
+  flex-wrap: wrap;
 }
 
 .browser-session-panel,
@@ -1223,6 +1235,22 @@ button.danger {
 
 .recorder-mode-card p {
   margin: 0;
+}
+
+.checkbox-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.checkbox-field input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
+.session-state-card p {
+  margin: 0 0 6px;
 }
 
 .recorder-help {

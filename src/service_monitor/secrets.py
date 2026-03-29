@@ -29,6 +29,7 @@ _SENSITIVE_PATHS: tuple[tuple[str, ...], ...] = (
     ("checks", _WILDCARD, "auth", "password"),
     ("checks", _WILDCARD, "auth", "token"),
     ("checks", _WILDCARD, "auth", "header_value"),
+    ("checks", _WILDCARD, "browser", "storage_state"),
 )
 
 
