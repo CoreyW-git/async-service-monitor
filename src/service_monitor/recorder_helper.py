@@ -171,12 +171,13 @@ def _get(client: httpx.Client, url: str) -> dict[str, Any]:
 def _launch_browser(playwright):
     launch_args = [
         "--new-window",
+        "--start-maximized",
         "--window-size=1440,900",
         "--window-position=72,72",
         "--disable-popup-blocking",
     ]
     errors: list[str] = []
-    for channel in ("msedge", "chrome", None):
+    for channel in (None, "chrome", "msedge"):
         try:
             kwargs: dict[str, Any] = {
                 "headless": False,

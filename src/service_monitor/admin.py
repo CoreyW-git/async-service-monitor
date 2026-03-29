@@ -734,6 +734,7 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
     def _launch_visible_recorder_browser(playwright, viewport_width: int = 1440, viewport_height: int = 900):
         launch_args = [
             "--new-window",
+            "--start-maximized",
             f"--window-size={viewport_width},{viewport_height}",
             "--window-position=72,72",
             "--disable-popup-blocking",
@@ -741,7 +742,7 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
         launch_errors: list[str] = []
         browser = None
         selected_runtime = "chromium"
-        for channel in ("msedge", "chrome", None):
+        for channel in (None, "chrome", "msedge"):
             try:
                 kwargs: dict[str, Any] = {
                     "headless": False,
@@ -777,14 +778,10 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
             python_exec,
             "-u",
             str(helper_script),
-            "--session-id",
-            session_id,
-            "--target-url",
-            target_url,
-            "--api-base",
-            "http://127.0.0.1:8000",
-            "--token",
-            token,
+            f"--session-id={session_id}",
+            f"--target-url={target_url}",
+            "--api-base=http://127.0.0.1:8000",
+            f"--token={token}",
         ]
         with stdout_log.open("a", encoding="utf-8") as stdout_handle, stderr_log.open(
             "a", encoding="utf-8"
