@@ -6889,6 +6889,9 @@ function setStatus(element, text, isError = false) {
 }
 
 function isInteractiveRoute(path = window.location.pathname) {
+  if (state.session?.setup_required || state.session?.authenticated === false) {
+    return true;
+  }
   return (
     path === "/monitors" ||
     path === "/configured-monitors" ||

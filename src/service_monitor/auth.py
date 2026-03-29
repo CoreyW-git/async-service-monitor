@@ -177,6 +177,11 @@ class AuthManager:
         existing = self.store.find_user(username)
         if existing is None:
             raise HTTPException(status_code=404, detail=f"User '{username}' was not found")
+        if existing.role == "admin":
+            raise HTTPException(
+                status_code=403,
+                detail="Admin passwords cannot be changed through the public reset flow. Sign in and update the admin password from the profile page instead.",
+            )
         updated = PortalUserConfig(
             username=existing.username,
             password=password,
