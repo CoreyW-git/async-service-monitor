@@ -31,13 +31,15 @@ try {
     & $PythonExe -m playwright install chromium
 
     docker pull mcr.microsoft.com/playwright/python:v1.53.0-jammy
-    docker pull mysql:8.4
+    docker pull postgres:17-alpine
+    docker pull minio/minio:RELEASE.2025-02-28T09-55-16Z
     docker pull axllent/mailpit:latest
 
     docker build -f Dockerfile.offline -t $AppImageName .
 
     docker save -o (Join-Path $ImageOutputDir "playwright-python-v1.53.0-jammy.tar") mcr.microsoft.com/playwright/python:v1.53.0-jammy
-    docker save -o (Join-Path $ImageOutputDir "mysql-8.4.tar") mysql:8.4
+    docker save -o (Join-Path $ImageOutputDir "postgres-17-alpine.tar") postgres:17-alpine
+    docker save -o (Join-Path $ImageOutputDir "minio-release-2025-02-28.tar") minio/minio:RELEASE.2025-02-28T09-55-16Z
     docker save -o (Join-Path $ImageOutputDir "mailpit-latest.tar") axllent/mailpit:latest
     docker save -o (Join-Path $ImageOutputDir "async-service-monitor-offline.tar") $AppImageName
 

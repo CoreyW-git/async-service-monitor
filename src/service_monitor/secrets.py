@@ -19,8 +19,10 @@ _WILDCARD = "*"
 _SENSITIVE_PATHS: tuple[tuple[str, ...], ...] = (
     ("notifications", "email", "username"),
     ("notifications", "email", "password"),
-    ("telemetry", "username"),
-    ("telemetry", "password"),
+    ("telemetry", "timeseries_username"),
+    ("telemetry", "timeseries_password"),
+    ("telemetry", "object_access_key"),
+    ("telemetry", "object_secret_key"),
     ("portal", "users", _WILDCARD, "username"),
     ("portal", "users", _WILDCARD, "password"),
     ("checks", _WILDCARD, "auth", "username"),

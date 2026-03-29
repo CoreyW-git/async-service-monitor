@@ -1,0 +1,50 @@
+services:
+  control-plane:
+    build: .
+    container_name: asm-control-plane
+    environment:
+      MONITOR_NODE_ID: monitor-1
+      SERVICE_MONITOR_APP_MODE: all
+      EMAIL_ENABLED: "false"
+      SMTP_PORT: "587"
+    volumes:
+      - ./config.yaml:/app/config.yaml
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  dashboard-1:
+    build: .
+    container_name: asm-dashboard-1
+    environment:
+      MONITOR_NODE_ID: dashboard-1
+      SERVICE_MONITOR_APP_MODE: dashboard
+      EMAIL_ENABLED: "false"
+      SMTP_PORT: "587"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+    depends_on:
+      - control-plane
+
+  dashboard-2:
+    build: .
+    container_name: asm-dashboard-2
+    environment:
+      MONITOR_NODE_ID: dashboard-2
+      SERVICE_MONITOR_APP_MODE: dashboard
+      EMAIL_ENABLED: "false"
+      SMTP_PORT: "587"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+    depends_on:
+      - control-plane
+
+  portal-proxy:
+    image: nginx:1.27-alpine
+    container_name: asm-portal-proxy
+    depends_on:
+      - control-plane
+      - dashboard-1
+      - dashboard-2
+    volumes:
+      - ./docker/nginx.scaled.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "8000:8080"

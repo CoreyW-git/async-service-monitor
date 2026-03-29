@@ -6,6 +6,8 @@ import os
 import secrets
 import signal
 from dataclasses import asdict
+from pathlib import Path
+from urllib.parse import urlparse
 
 import docker
 import httpx
@@ -210,33 +212,73 @@ class MonitorRunner:
         if self.monitor_scope == "peer_only":
             return []
         checks = list(self.config.checks)
-        telemetry_db = self._telemetry_database_check()
+        telemetry_db = self._telemetry_timeseries_check()
         if telemetry_db is not None:
             checks.append(telemetry_db)
+        telemetry_object = self._telemetry_object_storage_check()
+        if telemetry_object is not None:
+            checks.append(telemetry_object)
         email_service = self._email_service_check()
         if email_service is not None:
             checks.append(email_service)
         return checks
 
-    def _telemetry_database_check(self) -> CheckConfig | None:
+    def _telemetry_timeseries_check(self) -> CheckConfig | None:
         telemetry = self.config.telemetry
-        if not telemetry.enabled or not telemetry.host or not telemetry.port:
+        if (
+            not telemetry.enabled
+            or not telemetry.timeseries_host
+            or not telemetry.timeseries_port
+        ):
             return None
         return CheckConfig(
-            name="telemetry-database",
+            name="telemetry-timeseries",
             type="database",
             interval_seconds=max(30.0, self.config.defaults.peer_poll_interval_seconds),
             enabled=True,
             timeout_seconds=self.config.defaults.timeout_seconds,
-            host=telemetry.host,
-            port=telemetry.port,
-            database_name=telemetry.database,
-            database_engine="mysql",
+            host=telemetry.timeseries_host,
+            port=telemetry.timeseries_port,
+            database_name=telemetry.timeseries_database,
+            database_engine="postgresql",
             auth=(
                 None
-                if not telemetry.username
-                else self._telemetry_auth(telemetry.username, telemetry.password)
+                if not telemetry.timeseries_username
+                else self._telemetry_auth(
+                    telemetry.timeseries_username,
+                    telemetry.timeseries_password,
+                )
             ),
+        )
+
+    def _telemetry_object_storage_check(self) -> CheckConfig | None:
+        telemetry = self.config.telemetry
+        if not telemetry.enabled or not telemetry.object_endpoint:
+            return None
+        parsed = urlparse(telemetry.object_endpoint)
+        if parsed.scheme in {"http", "https"} and parsed.netloc:
+            health_url = telemetry.object_endpoint.rstrip("/")
+            if telemetry.object_provider == "local_minio":
+                health_url = f"{health_url}/minio/health/live"
+            return CheckConfig(
+                name="telemetry-object-storage",
+                type="http",
+                interval_seconds=max(30.0, self.config.defaults.peer_poll_interval_seconds),
+                enabled=True,
+                timeout_seconds=self.config.defaults.timeout_seconds,
+                url=health_url,
+                expected_statuses=[200, 204, 403],
+            )
+        host = parsed.hostname or parsed.path or telemetry.object_endpoint
+        port = parsed.port or (443 if telemetry.object_use_ssl else 80)
+        return CheckConfig(
+            name="telemetry-object-storage",
+            type="generic",
+            interval_seconds=max(30.0, self.config.defaults.peer_poll_interval_seconds),
+            enabled=True,
+            timeout_seconds=self.config.defaults.timeout_seconds,
+            host=host,
+            port=port,
         )
 
     def _email_service_check(self) -> CheckConfig | None:
@@ -308,7 +350,8 @@ class MonitorRunner:
         return {
             "name": check.name,
             "type": check.type,
-            "generated": check.name in {"telemetry-database", "notification-email-service"},
+            "generated": check.name
+            in {"telemetry-timeseries", "telemetry-object-storage", "notification-email-service"},
             "enabled": check.enabled,
             "placement_mode": check.placement_mode,
             "assigned_node_id": check.assigned_node_id,
@@ -444,8 +487,16 @@ class MonitorRunner:
             if peer.container_name is not None
         }
         monitor_names.add(self.config.cluster.node_id)
-        if self.config.telemetry.provider == "local_mysql" and self.config.telemetry.local_container_name:
-            monitor_names.add(self.config.telemetry.local_container_name)
+        if (
+            self.config.telemetry.timeseries_provider == "local_postgresql"
+            and self.config.telemetry.timeseries_local_container_name
+        ):
+            monitor_names.add(self.config.telemetry.timeseries_local_container_name)
+        if (
+            self.config.telemetry.object_provider == "local_minio"
+            and self.config.telemetry.object_local_container_name
+        ):
+            monitor_names.add(self.config.telemetry.object_local_container_name)
         if (
             self.config.notifications.email.auto_provision_local
             and self.config.notifications.email.local_container_name
@@ -510,15 +561,25 @@ class MonitorRunner:
             raise ValueError("Docker is not available to the monitor service")
         return await asyncio.to_thread(self._plan_container_creation_sync, payload)
 
-    async def provision_local_mysql(self, telemetry_config) -> dict[str, object]:
+    async def provision_local_postgresql(self, telemetry_config) -> dict[str, object]:
         if self.docker_client is None:
-            raise ValueError("Docker is not available to provision local MySQL")
-        return await asyncio.to_thread(self._provision_local_mysql_sync, telemetry_config)
+            raise ValueError("Docker is not available to provision local PostgreSQL")
+        return await asyncio.to_thread(self._provision_local_postgresql_sync, telemetry_config)
+
+    async def provision_local_minio(self, telemetry_config) -> dict[str, object]:
+        if self.docker_client is None:
+            raise ValueError("Docker is not available to provision local MinIO")
+        return await asyncio.to_thread(self._provision_local_minio_sync, telemetry_config)
 
     async def provision_local_email_service(self, email_config) -> dict[str, object]:
         if self.docker_client is None:
             raise ValueError("Docker is not available to provision a local email service")
         return await asyncio.to_thread(self._provision_local_email_service_sync, email_config)
+
+    async def reconcile_ui_scaling(self, config_path: str | os.PathLike[str]) -> dict[str, object]:
+        if self.docker_client is None:
+            raise ValueError("Docker is not available to manage scaled UI services")
+        return await asyncio.to_thread(self._reconcile_ui_scaling_sync, str(config_path))
 
     def _create_monitor_container_sync(self, payload: dict[str, object]) -> dict[str, object]:
         if self.docker_client is None:
@@ -644,15 +705,18 @@ class MonitorRunner:
             break
         return {"image": image, "network": network}
 
-    def _provision_local_mysql_sync(self, telemetry_config) -> dict[str, object]:
+    def _provision_local_postgresql_sync(self, telemetry_config) -> dict[str, object]:
         if self.docker_client is None:
-            raise ValueError("Docker is not available to provision local MySQL")
+            raise ValueError("Docker is not available to provision local PostgreSQL")
 
-        container_name = telemetry_config.local_container_name or "async-service-monitor-mysql"
-        port = int(telemetry_config.port or 3306)
-        database = telemetry_config.database or "async_service_monitor"
-        username = telemetry_config.username or "asm_telemetry"
-        password = telemetry_config.password or secrets.token_urlsafe(18)
+        container_name = (
+            telemetry_config.timeseries_local_container_name
+            or "async-service-monitor-postgres"
+        )
+        port = int(telemetry_config.timeseries_port or 5432)
+        database = telemetry_config.timeseries_database or "async_service_monitor"
+        username = telemetry_config.timeseries_username or "asm_telemetry"
+        password = telemetry_config.timeseries_password or secrets.token_urlsafe(18)
 
         try:
             container = self.docker_client.containers.get(container_name)
@@ -661,22 +725,21 @@ class MonitorRunner:
             container.reload()
         except docker.errors.NotFound:
             container = self.docker_client.containers.run(
-                "mysql:8.4",
+                "postgres:17-alpine",
                 name=container_name,
                 detach=True,
                 environment={
-                    "MYSQL_DATABASE": database,
-                    "MYSQL_USER": username,
-                    "MYSQL_PASSWORD": password,
-                    "MYSQL_ROOT_PASSWORD": password,
+                    "POSTGRES_DB": database,
+                    "POSTGRES_USER": username,
+                    "POSTGRES_PASSWORD": password,
                 },
-                ports={"3306/tcp": port},
+                ports={"5432/tcp": port},
             )
             container.reload()
 
         host_port = port
         ports = container.attrs.get("NetworkSettings", {}).get("Ports", {}) if hasattr(container, "attrs") else {}
-        bindings = ports.get("3306/tcp") or []
+        bindings = ports.get("5432/tcp") or []
         if bindings and bindings[0].get("HostPort"):
             host_port = int(bindings[0]["HostPort"])
 
@@ -687,6 +750,59 @@ class MonitorRunner:
             "database": database,
             "username": username,
             "password": password,
+        }
+
+    def _provision_local_minio_sync(self, telemetry_config) -> dict[str, object]:
+        if self.docker_client is None:
+            raise ValueError("Docker is not available to provision local MinIO")
+
+        container_name = (
+            telemetry_config.object_local_container_name
+            or "async-service-monitor-minio"
+        )
+        parsed = urlparse(telemetry_config.object_endpoint or "")
+        endpoint_port = parsed.port or (443 if telemetry_config.object_use_ssl else 9000)
+        console_port = int(telemetry_config.object_console_port or 9001)
+        access_key = telemetry_config.object_access_key or "asm_minio"
+        secret_key = telemetry_config.object_secret_key or secrets.token_urlsafe(24)
+        bucket = telemetry_config.object_bucket or "async-service-monitor"
+
+        try:
+            container = self.docker_client.containers.get(container_name)
+            if container.status != "running":
+                container.start()
+            container.reload()
+        except docker.errors.NotFound:
+            container = self.docker_client.containers.run(
+                "minio/minio:RELEASE.2025-02-28T09-55-16Z",
+                name=container_name,
+                detach=True,
+                environment={
+                    "MINIO_ROOT_USER": access_key,
+                    "MINIO_ROOT_PASSWORD": secret_key,
+                },
+                command=["server", "/data", "--console-address", ":9001"],
+                ports={"9000/tcp": endpoint_port, "9001/tcp": console_port},
+            )
+            container.reload()
+
+        ports = container.attrs.get("NetworkSettings", {}).get("Ports", {}) if hasattr(container, "attrs") else {}
+        api_bindings = ports.get("9000/tcp") or []
+        console_bindings = ports.get("9001/tcp") or []
+        host_api_port = endpoint_port
+        host_console_port = console_port
+        if api_bindings and api_bindings[0].get("HostPort"):
+            host_api_port = int(api_bindings[0]["HostPort"])
+        if console_bindings and console_bindings[0].get("HostPort"):
+            host_console_port = int(console_bindings[0]["HostPort"])
+
+        return {
+            "container_name": container.name,
+            "endpoint": f"http://127.0.0.1:{host_api_port}",
+            "console_port": host_console_port,
+            "access_key": access_key,
+            "secret_key": secret_key,
+            "bucket": bucket,
         }
 
     def _provision_local_email_service_sync(self, email_config) -> dict[str, object]:
@@ -731,6 +847,207 @@ class MonitorRunner:
             "port": host_smtp_port,
             "ui_port": host_ui_port,
         }
+
+    def _reconcile_ui_scaling_sync(self, config_path: str) -> dict[str, object]:
+        if self.docker_client is None:
+            raise ValueError("Docker is not available to manage scaled UI services")
+        scaling = self.config.ui_scaling
+        defaults = self._container_creation_defaults_sync()
+        image = str(defaults["image"])
+        network = defaults.get("network")
+        host_config_path = os.getenv("ASM_CONFIG_BIND_SOURCE") or config_path
+        if str(config_path) == "/app/config.yaml" and not os.getenv("ASM_CONFIG_BIND_SOURCE"):
+            raise ValueError(
+                "Scaled UI management from a Dockerized admin requires ASM_CONFIG_BIND_SOURCE to point at the host path of the shared config file."
+            )
+
+        if not scaling.enabled:
+            for container_name in [scaling.proxy_container_name, *self._find_scaled_dashboard_containers_sync(scaling.dashboard_container_prefix)]:
+                self._remove_container_if_exists_sync(container_name)
+            return {
+                "enabled": False,
+                "dashboard_replicas": 0,
+                "proxy_container_name": scaling.proxy_container_name,
+                "containers": [],
+            }
+
+        if not self.config.telemetry.enabled:
+            raise ValueError("UI scaling requires telemetry storage to be enabled")
+
+        desired_names = [
+            f"{scaling.dashboard_container_prefix}-{index}"
+            for index in range(1, scaling.dashboard_replicas + 1)
+        ]
+        for container_name in desired_names:
+            self._ensure_dashboard_container_sync(container_name, image, network, host_config_path)
+
+        for container_name in self._find_scaled_dashboard_containers_sync(scaling.dashboard_container_prefix):
+            if container_name not in desired_names:
+                self._remove_container_if_exists_sync(container_name)
+
+        proxy_conf_path = self._write_scaled_proxy_config_sync(
+            dashboard_names=desired_names,
+            sticky_sessions=scaling.sticky_sessions or scaling.session_strategy == "sticky_proxy",
+        )
+        self._ensure_proxy_container_sync(
+            container_name=scaling.proxy_container_name,
+            image="nginx:1.27-alpine",
+            network=network,
+            proxy_conf_path=proxy_conf_path,
+            host_port=int(scaling.proxy_port or 8000),
+        )
+        return {
+            "enabled": True,
+            "dashboard_replicas": len(desired_names),
+            "proxy_container_name": scaling.proxy_container_name,
+            "containers": desired_names,
+            "proxy_port": scaling.proxy_port,
+            "session_strategy": scaling.session_strategy,
+            "sticky_sessions": scaling.sticky_sessions,
+        }
+
+    def _find_scaled_dashboard_containers_sync(self, prefix: str) -> list[str]:
+        if self.docker_client is None:
+            return []
+        return sorted(
+            container.name
+            for container in self.docker_client.containers.list(all=True)
+            if container.name.startswith(f"{prefix}-")
+        )
+
+    def _remove_container_if_exists_sync(self, container_name: str) -> None:
+        if self.docker_client is None:
+            return
+        try:
+            container = self.docker_client.containers.get(container_name)
+        except docker.errors.NotFound:
+            return
+        container.remove(force=True)
+
+    def _ensure_dashboard_container_sync(
+        self,
+        container_name: str,
+        image: str,
+        network: str | None,
+        host_config_path: str,
+    ) -> None:
+        if self.docker_client is None:
+            raise ValueError("Docker is not available to provision dashboard replicas")
+        command = [
+            "python",
+            "-m",
+            "service_monitor",
+            "--config",
+            "config.yaml",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8000",
+        ]
+        environment = {
+            "MONITOR_NODE_ID": container_name,
+            "SERVICE_MONITOR_APP_MODE": "dashboard",
+        }
+        recreate = False
+        try:
+            container = self.docker_client.containers.get(container_name)
+            attrs = container.attrs if hasattr(container, "attrs") else {}
+            current_image = container.image.tags[0] if container.image.tags else None
+            current_networks = sorted((attrs.get("NetworkSettings", {}).get("Networks") or {}).keys())
+            expected_networks = [network] if network else []
+            if current_image != image or current_networks != expected_networks:
+                recreate = True
+            elif container.status != "running":
+                container.start()
+                return
+            else:
+                return
+        except docker.errors.NotFound:
+            recreate = True
+        if recreate:
+            self._remove_container_if_exists_sync(container_name)
+            kwargs: dict[str, object] = {
+                "name": container_name,
+                "detach": True,
+                "environment": environment,
+                "command": command,
+                "volumes": {
+                    str(host_config_path): {"bind": "/app/config.yaml", "mode": "ro"},
+                },
+            }
+            if network:
+                kwargs["network"] = network
+            self.docker_client.containers.run(image, **kwargs)
+
+    def _write_scaled_proxy_config_sync(self, dashboard_names: list[str], sticky_sessions: bool) -> str:
+        proxy_dir = Path(__file__).resolve().parents[2] / "docker" / "generated"
+        proxy_dir.mkdir(parents=True, exist_ok=True)
+        proxy_conf_path = proxy_dir / "nginx.scaled.runtime.conf"
+        sticky_block = "    ip_hash;\n" if sticky_sessions else ""
+        dashboard_servers = "\n".join(f"    server {name}:8000;" for name in dashboard_names)
+        proxy_conf_path.write_text(
+            (
+                "upstream control_plane {\n"
+                f"    server {self.config.cluster.node_id}:8000;\n"
+                "}\n\n"
+                "upstream dashboard_pool {\n"
+                f"{sticky_block}"
+                f"{dashboard_servers}\n"
+                "}\n\n"
+                "map $request_method $checks_backend {\n"
+                "    default http://control_plane;\n"
+                "    GET http://dashboard_pool;\n"
+                "    HEAD http://dashboard_pool;\n"
+                "}\n\n"
+                "server {\n"
+                "    listen 8080;\n"
+                "    server_name _;\n"
+                "    proxy_http_version 1.1;\n"
+                "    proxy_set_header Host $host;\n"
+                "    proxy_set_header X-Real-IP $remote_addr;\n"
+                "    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n"
+                "    proxy_set_header X-Forwarded-Proto $scheme;\n"
+                "    proxy_set_header Upgrade $http_upgrade;\n"
+                "    proxy_set_header Connection \"upgrade\";\n"
+                "    location = / { proxy_pass http://dashboard_pool; }\n"
+                "    location /dashboards { proxy_pass http://dashboard_pool; }\n"
+                "    location /app.js { proxy_pass http://dashboard_pool; }\n"
+                "    location /app.css { proxy_pass http://dashboard_pool; }\n"
+                "    location = /api/overview { proxy_pass http://dashboard_pool; }\n"
+                "    location = /api/results { proxy_pass http://dashboard_pool; }\n"
+                "    location /api/metrics/ { proxy_pass http://dashboard_pool; }\n"
+                "    location = /api/checks { proxy_pass $checks_backend; }\n"
+                "    location ~ ^/api/checks/[^/]+$ { proxy_pass $checks_backend; }\n"
+                "    location /api/ { proxy_pass http://control_plane; }\n"
+                "    location / { proxy_pass http://control_plane; }\n"
+                "}\n"
+            ),
+            encoding="utf-8",
+        )
+        return str(proxy_conf_path)
+
+    def _ensure_proxy_container_sync(
+        self,
+        container_name: str,
+        image: str,
+        network: str | None,
+        proxy_conf_path: str,
+        host_port: int,
+    ) -> None:
+        if self.docker_client is None:
+            raise ValueError("Docker is not available to provision the scaled UI proxy")
+        self._remove_container_if_exists_sync(container_name)
+        kwargs: dict[str, object] = {
+            "name": container_name,
+            "detach": True,
+            "ports": {"8080/tcp": int(host_port)},
+            "volumes": {
+                str(proxy_conf_path): {"bind": "/etc/nginx/conf.d/default.conf", "mode": "ro"},
+            },
+        }
+        if network:
+            kwargs["network"] = network
+        self.docker_client.containers.run(image, **kwargs)
 
     async def manage_container(self, container_name: str, action: str) -> dict[str, object]:
         if self.docker_client is None:

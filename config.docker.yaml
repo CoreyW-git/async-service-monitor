@@ -22,12 +22,18 @@ notifications:
 
 telemetry:
   enabled: false
-  provider: local_mysql
-  port: 3306
+  timeseries_provider: local_postgresql
+  timeseries_port: 5432
+  timeseries_local_container_name: async-service-monitor-postgres
+  object_provider: local_minio
+  object_bucket: async-service-monitor
+  object_console_port: 9001
+  object_local_container_name: async-service-monitor-minio
   retention_hours: 2
-  use_ssl: false
-  auto_provision_local: false
-  local_container_name: async-service-monitor-mysql
+  timeseries_use_ssl: false
+  object_use_ssl: false
+  auto_provision_timeseries_local: false
+  auto_provision_object_local: false
 
 portal:
   enabled: true

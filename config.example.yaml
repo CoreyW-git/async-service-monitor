@@ -44,6 +44,29 @@ notifications:
     use_tls: true
     use_ssl: false
 
+telemetry:
+  enabled: false
+  timeseries_provider: local_postgresql
+  timeseries_host: ${TELEMETRY_POSTGRES_HOST}
+  timeseries_port: ${TELEMETRY_POSTGRES_PORT}
+  timeseries_database: ${TELEMETRY_POSTGRES_DATABASE}
+  timeseries_username: ${TELEMETRY_POSTGRES_USERNAME}
+  timeseries_password: ${TELEMETRY_POSTGRES_PASSWORD}
+  timeseries_use_ssl: false
+  auto_provision_timeseries_local: false
+  timeseries_local_container_name: async-service-monitor-postgres
+  object_provider: local_minio
+  object_endpoint: ${TELEMETRY_OBJECT_ENDPOINT}
+  object_access_key: ${TELEMETRY_OBJECT_ACCESS_KEY}
+  object_secret_key: ${TELEMETRY_OBJECT_SECRET_KEY}
+  object_bucket: async-service-monitor
+  object_region: ${TELEMETRY_OBJECT_REGION}
+  object_use_ssl: false
+  auto_provision_object_local: false
+  object_local_container_name: async-service-monitor-minio
+  object_console_port: 9001
+  retention_hours: 2
+
 checks:
   - name: yahoo-http
     type: http

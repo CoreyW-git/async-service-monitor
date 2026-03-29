@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
 import secrets
 import time
 from dataclasses import asdict
@@ -19,7 +23,6 @@ class AuthManager:
     def __init__(self, config_getter, store: ConfigStore) -> None:
         self.config_getter = config_getter
         self.store = store
-        self.sessions: dict[str, str] = {}
 
     def authenticate_optional(self, session_id: str | None = Cookie(default=None, alias=SESSION_COOKIE)) -> dict[str, object]:
         config: AppConfig = self.config_getter()
@@ -62,7 +65,7 @@ class AuthManager:
                 "setup_required": False,
             }
 
-        username = self.sessions.get(session_id)
+        username = self._read_session_username(config, session_id)
         if not username:
             return {
                 "authenticated": False,
@@ -73,7 +76,6 @@ class AuthManager:
 
         user = self._find_user(config, username)
         if user is None or not user.enabled:
-            self.sessions.pop(session_id, None)
             return {
                 "authenticated": False,
                 "provider": config.portal.provider,
@@ -122,13 +124,12 @@ class AuthManager:
                 detail="Invalid username or password",
             )
 
-        session_id = secrets.token_urlsafe(32)
-        self.sessions[session_id] = user.username
+        config = self._ensure_session_secret(config)
         updated_config = self.store.set_user_last_login(user.username, time.time())
         updated_user = self._find_user(updated_config, user.username) or user
         response.set_cookie(
             key=SESSION_COOKIE,
-            value=session_id,
+            value=self._build_session_cookie(self._ensure_session_secret(updated_config), user.username),
             httponly=True,
             samesite="lax",
             secure=False,
@@ -137,8 +138,6 @@ class AuthManager:
         return self._user_payload(updated_user, provider=config.portal.provider)
 
     def logout(self, response: Response, session_id: str | None) -> None:
-        if session_id:
-            self.sessions.pop(session_id, None)
         response.delete_cookie(SESSION_COOKIE, path="/")
 
     def register(
@@ -216,11 +215,10 @@ class AuthManager:
             last_login_at=time.time(),
         )
         self.store.add_user(user)
-        session_id = secrets.token_urlsafe(32)
-        self.sessions[session_id] = user.username
+        config = self._ensure_session_secret(self.config_getter())
         response.set_cookie(
             key=SESSION_COOKIE,
-            value=session_id,
+            value=self._build_session_cookie(config, user.username),
             httponly=True,
             samesite="lax",
             secure=False,
@@ -262,6 +260,46 @@ class AuthManager:
             if secrets.compare_digest(user.username, username):
                 return user
         return None
+
+    @staticmethod
+    def _session_secret(config: AppConfig) -> str | None:
+        return config.portal.session_secret
+
+    def _ensure_session_secret(self, config: AppConfig) -> AppConfig:
+        if config.portal.session_secret:
+            return config
+        portal = config.portal
+        portal.session_secret = secrets.token_urlsafe(48)
+        return self.store.update_portal_settings(portal)
+
+    def _build_session_cookie(self, config: AppConfig, username: str) -> str:
+        secret = self._session_secret(config)
+        if not secret:
+            raise HTTPException(status_code=500, detail="Portal session secret is not configured")
+        payload = {
+            "u": username,
+            "iat": int(time.time()),
+        }
+        encoded = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode("utf-8")).decode("ascii")
+        signature = hmac.new(secret.encode("utf-8"), encoded.encode("ascii"), hashlib.sha256).hexdigest()
+        return f"{encoded}.{signature}"
+
+    def _read_session_username(self, config: AppConfig, session_id: str | None) -> str | None:
+        if not session_id:
+            return None
+        secret = self._session_secret(config)
+        if not secret or "." not in session_id:
+            return None
+        encoded, signature = session_id.rsplit(".", 1)
+        expected = hmac.new(secret.encode("utf-8"), encoded.encode("ascii"), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(signature, expected):
+            return None
+        try:
+            payload = json.loads(base64.urlsafe_b64decode(encoded.encode("ascii")).decode("utf-8"))
+        except Exception:
+            return None
+        username = payload.get("u")
+        return str(username) if username else None
 
     @staticmethod
     def _user_payload(user: PortalUserConfig, provider: str) -> dict[str, object]:

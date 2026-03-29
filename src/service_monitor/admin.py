@@ -1,16 +1,22 @@
 from __future__ import annotations
 
 import asyncio
+import html
+import json
+import os
 import secrets
+import threading
 import time
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 from typing import Literal
+from urllib.parse import quote
 
 import docker
-from fastapi import Cookie, Depends, FastAPI, HTTPException, Response
+import httpx
+from fastapi import Cookie, Depends, FastAPI, Form, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
@@ -29,11 +35,13 @@ from service_monitor.config import (
     PortalAuthConfig,
     PortalUserConfig,
     TelemetryConfig,
+    UIScalingConfig,
     UnauthenticatedProbeConfig,
 )
 from service_monitor.config_store import ConfigStore
 from service_monitor.runner import MonitorRunner
 from service_monitor.state import MonitorState
+from service_monitor.telemetry import TelemetryStore
 
 
 class ContentPayload(BaseModel):
@@ -89,7 +97,7 @@ class CheckPayload(BaseModel):
     host: str | None = None
     port: int | None = None
     database_name: str | None = None
-    database_engine: Literal["mysql"] = "mysql"
+    database_engine: Literal["mysql", "postgresql"] = "mysql"
     expected_statuses: list[int] = Field(default_factory=lambda: [200])
     expect_authenticated_statuses: list[int] = Field(default_factory=lambda: [200])
     auth: AuthPayload | None = None
@@ -177,16 +185,26 @@ class ProfilePayload(BaseModel):
 
 class TelemetryPayload(BaseModel):
     enabled: bool = False
-    provider: Literal["local_mysql", "oci_mysql"] = "local_mysql"
-    host: str | None = None
-    port: int = 3306
-    database: str | None = None
-    username: str | None = None
-    password: str | None = None
+    timeseries_provider: Literal["local_postgresql", "oci_postgresql"] = "local_postgresql"
+    timeseries_host: str | None = None
+    timeseries_port: int = 5432
+    timeseries_database: str | None = None
+    timeseries_username: str | None = None
+    timeseries_password: str | None = None
+    timeseries_use_ssl: bool = False
+    auto_provision_timeseries_local: bool = False
+    timeseries_local_container_name: str = "async-service-monitor-postgres"
+    object_provider: Literal["local_minio", "oci_object_storage"] = "local_minio"
+    object_endpoint: str | None = None
+    object_access_key: str | None = None
+    object_secret_key: str | None = None
+    object_bucket: str = "async-service-monitor"
+    object_region: str | None = None
+    object_use_ssl: bool = False
+    auto_provision_object_local: bool = False
+    object_local_container_name: str = "async-service-monitor-minio"
+    object_console_port: int = 9001
     retention_hours: int = 2
-    use_ssl: bool = False
-    auto_provision_local: bool = False
-    local_container_name: str = "async-service-monitor-mysql"
 
 
 class PortalSettingsPayload(BaseModel):
@@ -215,6 +233,16 @@ class EmailSettingsPayload(BaseModel):
     auto_provision_local: bool = False
     local_container_name: str = "async-service-monitor-mailpit"
     local_ui_port: int = 8025
+
+
+class UIScalingPayload(BaseModel):
+    enabled: bool = False
+    dashboard_replicas: int = 2
+    session_strategy: Literal["shared_cookie", "sticky_proxy"] = "shared_cookie"
+    sticky_sessions: bool = False
+    proxy_container_name: str = "async-service-monitor-proxy"
+    dashboard_container_prefix: str = "async-service-monitor-dashboard"
+    proxy_port: int = 8000
 
 
 def _auth_from_payload(payload: AuthPayload | None) -> AuthConfig | None:
@@ -334,37 +362,531 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
     store = ConfigStore(config_path)
     initial_config = store.load()
     state = MonitorState(metrics_history_limit=initial_config.defaults.metrics_history_limit)
+    app_mode = os.getenv("SERVICE_MONITOR_APP_MODE", "all").strip().lower()
+    dashboard_mode = app_mode == "dashboard"
+    telemetry = TelemetryStore(initial_config)
     runtime: dict[str, Any] = {
         "runner": None,
         "runner_task": None,
         "state": state,
         "store": store,
         "config_path": str(config_path),
+        "telemetry": telemetry,
+        "app_mode": app_mode,
+        "recorder_clients": {},
+        "playwright_recorders": {},
     }
 
     def _get_runner() -> MonitorRunner:
         runner = runtime.get("runner")
         if runner is None:
+            if dashboard_mode:
+                raise HTTPException(status_code=503, detail="This endpoint is only available on the control-plane service")
             raise HTTPException(status_code=503, detail="Monitor runtime is still starting")
         return runner
 
     def _get_runtime_config() -> AppConfig:
         return store.load()
 
+    def _telemetry_reads_enabled(config: AppConfig) -> bool:
+        return dashboard_mode and config.telemetry.enabled
+
+    def _status_from_result(latest: dict[str, object] | None, enabled: bool) -> str:
+        if not enabled:
+            return "disabled"
+        if latest is None:
+            return "unknown"
+        return "healthy" if latest.get("success") else "unhealthy"
+
+    def _get_recorder_client(session_id: str) -> httpx.Client:
+        clients = runtime["recorder_clients"]
+        client = clients.get(session_id)
+        if client is None:
+            client = httpx.Client(
+                follow_redirects=True,
+                headers={"User-Agent": initial_config.defaults.user_agent},
+                timeout=30.0,
+            )
+            clients[session_id] = client
+        return client
+
+    def _inject_recorder_script(html_body: str, target_url: str, session_id: str) -> str:
+        target_json = json.dumps(target_url)
+        session_json = json.dumps(session_id)
+        script = f"""
+<script>
+(function() {{
+  const ASM_TARGET_URL = {target_json};
+  const ASM_SESSION_ID = {session_json};
+
+  function post(payload) {{
+    try {{
+      window.parent.postMessage({{ source: "asm-recorder", ...payload }}, "*");
+    }} catch (error) {{
+      console.error(error);
+    }}
+  }}
+
+  function selectorFor(element) {{
+    if (!element || element === document.body) return "body";
+    if (element.id) return "#" + CSS.escape(element.id);
+    const testId = element.getAttribute("data-testid") || element.getAttribute("data-test");
+    if (testId) return '[data-testid="' + testId + '"]';
+    const name = element.getAttribute("name");
+    if (name && element.tagName) return element.tagName.toLowerCase() + '[name="' + name + '"]';
+    const aria = element.getAttribute("aria-label");
+    if (aria && element.tagName) return element.tagName.toLowerCase() + '[aria-label="' + aria + '"]';
+    const classes = Array.from(element.classList || []).filter(Boolean).slice(0, 2);
+    if (classes.length && element.tagName) return element.tagName.toLowerCase() + "." + classes.map((item) => CSS.escape(item)).join(".");
+    if (element.tagName) return element.tagName.toLowerCase();
+    return "body";
+  }}
+
+  function notifyNavigate(kind) {{
+    post({{
+      event: "navigate",
+      kind,
+      url: window.location.href,
+      title: document.title
+    }});
+  }}
+
+  document.addEventListener("click", function(event) {{
+    const target = event.target.closest("a, button, input, [role='button']");
+    if (!target) return;
+    post({{
+      event: "click",
+      selector: selectorFor(target),
+      text: (target.innerText || target.value || target.getAttribute("aria-label") || "").trim().slice(0, 120),
+      href: target.closest("a") ? target.closest("a").href : null
+    }});
+  }}, true);
+
+  document.addEventListener("change", function(event) {{
+    const target = event.target;
+    if (!target || !target.tagName) return;
+    if (!["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
+    post({{
+      event: "fill",
+      selector: selectorFor(target),
+      value: target.value || ""
+    }});
+  }}, true);
+
+  document.addEventListener("submit", function(event) {{
+    const form = event.target;
+    if (!(form instanceof HTMLFormElement)) return;
+    event.preventDefault();
+    const action = form.action || window.location.href;
+    const method = (form.method || "POST").toUpperCase();
+    post({{
+      event: "submit",
+      selector: selectorFor(form),
+      action,
+      method
+    }});
+    const body = new FormData(form);
+    fetch("/api/recorder/proxy?url=" + encodeURIComponent(action) + "&session_id=" + encodeURIComponent(ASM_SESSION_ID), {{
+      method,
+      body
+    }}).then((response) => response.text()).then((nextHtml) => {{
+      document.open();
+      document.write(nextHtml);
+      document.close();
+    }}).catch((error) => {{
+      post({{ event: "proxy_error", message: String(error) }});
+    }});
+  }}, true);
+
+  const wrapHistory = function(methodName) {{
+    const original = history[methodName];
+    history[methodName] = function() {{
+      const result = original.apply(this, arguments);
+      notifyNavigate(methodName);
+      return result;
+    }};
+  }};
+  wrapHistory("pushState");
+  wrapHistory("replaceState");
+  window.addEventListener("hashchange", function() {{ notifyNavigate("hashchange"); }});
+  window.addEventListener("load", function() {{
+    notifyNavigate("load");
+    post({{
+      event: "page_ready",
+      url: window.location.href,
+      title: document.title,
+      textSnippet: (document.body && document.body.innerText ? document.body.innerText.slice(0, 280) : "")
+    }});
+  }});
+}})();
+</script>
+"""
+        base_tag = f'<base href="{html.escape(target_url, quote=True)}">'
+        if "<head" in html_body.lower():
+            lower = html_body.lower()
+            head_close = lower.find(">", lower.find("<head"))
+            if head_close != -1:
+                html_body = html_body[: head_close + 1] + base_tag + html_body[head_close + 1 :]
+        if "</body>" in html_body.lower():
+            idx = html_body.lower().rfind("</body>")
+            return html_body[:idx] + script + html_body[idx:]
+        return html_body + script
+
+    def _proxy_recorder_request_sync(
+        target_url: str,
+        session_id: str,
+        method: str,
+        headers: dict[str, str],
+        form_data: list[tuple[str, str]],
+    ) -> tuple[bytes, str]:
+        client = _get_recorder_client(session_id)
+        safe_headers = {
+            "Accept": headers.get("accept", "*/*"),
+            "Accept-Language": headers.get("accept-language", "en-US,en;q=0.9"),
+        }
+        response = client.request(
+            method.upper(),
+            target_url,
+            headers=safe_headers,
+            data=form_data if method.upper() != "GET" else None,
+        )
+        content_type = response.headers.get("content-type", "text/plain")
+        if "text/html" in content_type:
+            body = response.text
+            body = _inject_recorder_script(body, str(response.url), session_id)
+            return body.encode("utf-8"), "text/html; charset=utf-8"
+        return response.content, content_type
+
+    def _append_playwright_step(session_id: str, payload: dict[str, Any]) -> None:
+        entry = runtime["playwright_recorders"].get(session_id)
+        if not entry:
+            return
+        payload = dict(payload)
+        payload.setdefault("timestamp", time.time())
+        steps = entry.setdefault("steps", [])
+        if steps:
+            previous = steps[-1]
+            dedupe_keys = ("event", "selector", "value", "url", "title")
+            if all(previous.get(key) == payload.get(key) for key in dedupe_keys):
+                return
+        steps.append(payload)
+
+    def _launch_playwright_recorder_sync(session_id: str, target_url: str) -> None:
+        entry = runtime["playwright_recorders"].get(session_id)
+        if not entry:
+            return
+        stop_event: threading.Event = entry["stop_event"]
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError as exc:
+            entry["status"] = "error"
+            entry["error"] = (
+                "Playwright is not installed. Install project dependencies and Chromium to use the Chromium recorder."
+            )
+            return
+
+        init_script = """
+(() => {
+  function selectorFor(element) {
+    if (!element || element === document.body) return "body";
+    if (element.id) return "#" + CSS.escape(element.id);
+    const testId = element.getAttribute("data-testid") || element.getAttribute("data-test");
+    if (testId) return '[data-testid="' + testId + '"]';
+    const name = element.getAttribute("name");
+    if (name && element.tagName) return element.tagName.toLowerCase() + '[name="' + name + '"]';
+    const aria = element.getAttribute("aria-label");
+    if (aria && element.tagName) return element.tagName.toLowerCase() + '[aria-label="' + aria + '"]';
+    const classes = Array.from(element.classList || []).filter(Boolean).slice(0, 2);
+    if (classes.length && element.tagName) return element.tagName.toLowerCase() + "." + classes.map((item) => CSS.escape(item)).join(".");
+    return element.tagName ? element.tagName.toLowerCase() : "body";
+  }
+
+  function send(payload) {
+    if (window.asmRecordEvent) {
+      window.asmRecordEvent(payload);
+    }
+  }
+
+  document.addEventListener("click", (event) => {
+    const target = event.target.closest("a, button, input, [role='button']");
+    if (!target) return;
+    send({
+      event: "click",
+      selector: selectorFor(target),
+      text: (target.innerText || target.value || target.getAttribute("aria-label") || "").trim().slice(0, 120),
+      href: target.closest("a") ? target.closest("a").href : null
+    });
+  }, true);
+
+  document.addEventListener("change", (event) => {
+    const target = event.target;
+    if (!target || !target.tagName) return;
+    if (!["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
+    send({
+      event: "fill",
+      selector: selectorFor(target),
+      value: target.value || ""
+    });
+  }, true);
+
+  document.addEventListener("submit", (event) => {
+    const form = event.target;
+    if (!(form instanceof HTMLFormElement)) return;
+    send({
+      event: "submit",
+      selector: selectorFor(form),
+      action: form.action || window.location.href,
+      method: (form.method || "POST").toUpperCase()
+    });
+  }, true);
+
+  window.addEventListener("load", () => {
+    send({
+      event: "page_ready",
+      url: window.location.href,
+      title: document.title,
+      textSnippet: (document.body && document.body.innerText ? document.body.innerText.slice(0, 280) : "")
+    });
+  });
+})();
+"""
+
+        try:
+            entry["status"] = "launching"
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.launch(headless=False)
+                context = browser.new_context(viewport={"width": 1440, "height": 900})
+                entry["status"] = "running"
+                entry["browser_open"] = True
+
+                def on_binding(source, payload):
+                    if isinstance(payload, dict):
+                        _append_playwright_step(session_id, payload)
+
+                context.expose_function("asmRecordEvent", lambda payload: on_binding(None, payload))
+                context.add_init_script(init_script)
+
+                page = context.new_page()
+
+                def on_navigate(frame):
+                    if frame == page.main_frame:
+                        _append_playwright_step(
+                            session_id,
+                            {
+                                "event": "navigate",
+                                "url": frame.url,
+                                "title": page.title() if page.url else "",
+                            },
+                        )
+
+                page.on("framenavigated", on_navigate)
+                page.goto(target_url, wait_until="domcontentloaded")
+
+                while not stop_event.is_set():
+                    if page.is_closed():
+                        break
+                    time.sleep(0.4)
+
+                try:
+                    context.close()
+                except Exception:
+                    pass
+                try:
+                    browser.close()
+                except Exception:
+                    pass
+        except Exception as exc:
+            entry["status"] = "error"
+            entry["error"] = str(exc)
+            entry["browser_open"] = False
+            return
+
+        entry["browser_open"] = False
+        if entry.get("status") != "error":
+            entry["status"] = "stopped"
+
+    async def _latest_results() -> list[dict[str, object]]:
+        config = _get_runtime_config()
+        if _telemetry_reads_enabled(config):
+            return await telemetry.latest_check_results()
+        return await state.latest_results()
+
+    async def _recent_results(limit: int) -> list[dict[str, object]]:
+        config = _get_runtime_config()
+        if _telemetry_reads_enabled(config):
+            return await telemetry.recent_check_results(limit)
+        return await state.recent_results(limit=limit)
+
+    async def _check_history() -> dict[str, list[dict[str, object]]]:
+        config = _get_runtime_config()
+        if _telemetry_reads_enabled(config):
+            return await telemetry.check_history()
+        return await state.check_history()
+
+    async def _node_history() -> dict[str, list[dict[str, object]]]:
+        config = _get_runtime_config()
+        if _telemetry_reads_enabled(config):
+            return await telemetry.node_history()
+        return await state.node_history()
+
+    async def _cluster_summary(config: AppConfig) -> dict[str, object]:
+        if not dashboard_mode:
+            runner = _get_runner()
+            return await runner.cluster_status()
+
+        node_history = await _node_history()
+        peers = []
+        healthy_nodes: list[str] = []
+        local_history = node_history.get(config.cluster.node_id, [])
+        if local_history and local_history[-1].get("healthy"):
+            healthy_nodes.append(config.cluster.node_id)
+        for peer in config.cluster.peers:
+            peer_history = node_history.get(peer.node_id, [])
+            peer_healthy = bool(peer_history and peer_history[-1].get("healthy"))
+            if peer_healthy:
+                healthy_nodes.append(peer.node_id)
+            peers.append(
+                {
+                    "node_id": peer.node_id,
+                    "base_url": peer.base_url,
+                    "container_name": peer.container_name,
+                    "enabled": peer.enabled,
+                    "monitor_scope": peer.monitor_scope,
+                    "healthy": peer_healthy,
+                    "last_ok_at": peer_history[-1]["timestamp"] if peer_healthy and peer_history else None,
+                    "last_error": None,
+                    "assigned_checks": [],
+                }
+            )
+
+        assignable_nodes = [config.cluster.node_id] + [
+            peer.node_id for peer in config.cluster.peers if peer.monitor_scope != "peer_only"
+        ]
+        checks = config.checks
+        local_assigned = [
+            check.name
+            for check in checks
+            if (check.assigned_node_id or config.cluster.node_id) == config.cluster.node_id
+        ]
+        return {
+            "enabled": config.cluster.enabled,
+            "node_id": config.cluster.node_id,
+            "local_monitor_scope": "full",
+            "healthy_nodes": healthy_nodes,
+            "assignable_nodes": assignable_nodes,
+            "assignment_plan": {},
+            "peers": peers,
+            "local_assigned_checks": local_assigned,
+        }
+
+    async def _describe_checks(config: AppConfig) -> list[dict[str, object]]:
+        latest_map = {
+            str(item.get("name")): item
+            for item in await _latest_results()
+            if item.get("name")
+        }
+        cluster = await _cluster_summary(config)
+        assignable_nodes = cluster.get("assignable_nodes") or [config.cluster.node_id]
+        described: list[dict[str, object]] = []
+        for check in config.checks:
+            latest = latest_map.get(check.name)
+            described.append(
+                {
+                    "name": check.name,
+                    "type": check.type,
+                    "generated": check.name
+                    in {"telemetry-timeseries", "telemetry-object-storage", "notification-email-service"},
+                    "enabled": check.enabled,
+                    "placement_mode": check.placement_mode,
+                    "assigned_node_id": check.assigned_node_id,
+                    "interval_seconds": check.interval_seconds,
+                    "timeout_seconds": check.timeout_seconds,
+                    "url": check.url,
+                    "host": check.host,
+                    "port": check.port,
+                    "database_name": check.database_name,
+                    "database_engine": check.database_engine,
+                    "browser": {
+                        "expected_title_contains": check.browser.expected_title_contains,
+                        "required_selectors": check.browser.required_selectors,
+                        "wait_until": check.browser.wait_until,
+                        "viewport_width": check.browser.viewport_width,
+                        "viewport_height": check.browser.viewport_height,
+                        "steps": [
+                            {
+                                "name": step.name,
+                                "action": step.action,
+                                "selector": step.selector,
+                                "value": step.value,
+                                "timeout_seconds": step.timeout_seconds,
+                            }
+                            for step in check.browser.steps
+                        ],
+                    }
+                    if check.browser
+                    else None,
+                    "expected_statuses": check.expected_statuses,
+                    "expect_authenticated_statuses": check.expect_authenticated_statuses,
+                    "has_auth": check.auth is not None,
+                    "auth": {
+                        "type": check.auth.type,
+                        "username": check.auth.username,
+                        "password": check.auth.password,
+                        "token": check.auth.token,
+                        "header_name": check.auth.header_name,
+                        "header_value": check.auth.header_value,
+                    }
+                    if check.auth
+                    else None,
+                    "status": _status_from_result(latest, check.enabled),
+                    "latest_result": latest,
+                    "content_rules": {
+                        "contains": check.content.contains if check.content else [],
+                        "not_contains": check.content.not_contains if check.content else [],
+                        "regex": check.content.regex if check.content else None,
+                    },
+                    "owner": (latest or {}).get("owner")
+                    or check.assigned_node_id
+                    or config.cluster.node_id,
+                    "assignable_nodes": assignable_nodes,
+                }
+            )
+        return described
+
     auth_manager = AuthManager(_get_runtime_config, store)
     require_read_only = auth_manager.require_role("read_only")
     require_read_write = auth_manager.require_role("read_write")
     require_admin = auth_manager.require_role("admin")
-    generated_check_names = {"telemetry-database", "notification-email-service"}
+    generated_check_names = {
+        "telemetry-timeseries",
+        "telemetry-object-storage",
+        "notification-email-service",
+    }
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         config = store.load()
+        if dashboard_mode:
+            if not config.telemetry.enabled:
+                raise RuntimeError(
+                    "Dashboard mode requires telemetry storage to be enabled so replicas can serve shared dashboard data."
+                )
+            if config.telemetry.enabled:
+                await telemetry.ensure_ready()
+            runtime["runner"] = None
+            runtime["runner_task"] = None
+            yield
+            return
         runner = MonitorRunner(config, state=state)
         task = asyncio.create_task(runner.run(), name="monitor-runner")
         runtime["runner"] = runner
         runtime["runner_task"] = task
         yield
+        for client in runtime["recorder_clients"].values():
+            try:
+                client.close()
+            except Exception:
+                pass
         runner.stop()
         await asyncio.gather(task, return_exceptions=True)
 
@@ -549,21 +1071,26 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
 
     @app.get("/api/overview")
     async def overview(current_user: dict[str, str] = Depends(require_read_only)) -> dict[str, object]:
-        runner = _get_runner()
-        config: AppConfig = runner.config
-        summary = await state.summary()
+        config = _get_runtime_config()
+        latest = await _latest_results()
+        healthy = sum(1 for item in latest if item.get("success"))
+        summary = {
+            "started_at": state.started_at,
+            "checks_seen": len(latest),
+            "healthy_checks": healthy,
+            "unhealthy_checks": len(latest) - healthy,
+        }
         return {
             "config_path": runtime["config_path"],
             "node_id": config.cluster.node_id,
             "cluster_enabled": config.cluster.enabled,
-            "total_checks": len(runner.runtime_checks()),
+            "total_checks": len(config.checks),
             "summary": summary,
         }
 
     @app.get("/api/checks")
     async def checks(current_user: dict[str, str] = Depends(require_read_only)) -> list[dict[str, object]]:
-        runner = _get_runner()
-        return [runner.describe_check(check) for check in runner.runtime_checks()]
+        return await _describe_checks(_get_runtime_config())
 
     @app.post("/api/checks/test")
     async def test_check(
@@ -638,8 +1165,7 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
     async def check_detail(
         check_name: str, current_user: dict[str, str] = Depends(require_read_only)
     ) -> dict[str, object]:
-        runner = _get_runner()
-        check = runner.get_check_detail(check_name)
+        check = next((item for item in await _describe_checks(_get_runtime_config()) if item["name"] == check_name), None)
         if check is None:
             raise HTTPException(status_code=404, detail=f"Check '{check_name}' was not found")
         return check
@@ -712,24 +1238,23 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
     async def results(
         limit: int = 100, current_user: dict[str, str] = Depends(require_read_only)
     ) -> list[dict[str, object]]:
-        return await state.recent_results(limit=limit)
+        return await _recent_results(limit)
 
     @app.get("/api/metrics/checks")
     async def check_metrics(
         current_user: dict[str, str] = Depends(require_read_only),
     ) -> dict[str, list[dict[str, object]]]:
-        return await state.check_history()
+        return await _check_history()
 
     @app.get("/api/metrics/nodes")
     async def node_metrics(
         current_user: dict[str, str] = Depends(require_read_only),
     ) -> dict[str, list[dict[str, object]]]:
-        return await state.node_history()
+        return await _node_history()
 
     @app.get("/api/cluster")
     async def cluster(current_user: dict[str, str] = Depends(require_read_only)) -> dict[str, object]:
-        runner = _get_runner()
-        return await runner.cluster_status()
+        return await _cluster_summary(_get_runtime_config())
 
     @app.get("/api/peers")
     async def peers(current_user: dict[str, str] = Depends(require_admin)) -> list[dict[str, object]]:
@@ -885,6 +1410,95 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
             for user in config.portal.users
         ]
 
+    @app.post("/api/recorder/session")
+    async def create_recorder_session(
+        current_user: dict[str, str] = Depends(require_read_write),
+    ) -> dict[str, str]:
+        session_id = secrets.token_urlsafe(18)
+        await asyncio.to_thread(_get_recorder_client, session_id)
+        return {"session_id": session_id}
+
+    @app.api_route("/api/recorder/proxy", methods=["GET", "POST"])
+    async def recorder_proxy(
+        request: Request,
+        url: str = Query(...),
+        session_id: str = Query(...),
+        current_user: dict[str, str] = Depends(require_read_write),
+    ) -> Response:
+        form_data: list[tuple[str, str]] = []
+        if request.method != "GET":
+            submitted = await request.form()
+            form_data = [(str(key), str(value)) for key, value in submitted.multi_items()]
+        body, content_type = await asyncio.to_thread(
+            _proxy_recorder_request_sync,
+            url,
+            session_id,
+            request.method,
+            dict(request.headers),
+            form_data,
+        )
+        return Response(content=body, media_type=content_type, headers=_no_cache_headers())
+
+    @app.post("/api/recorder/playwright-session")
+    async def launch_playwright_recorder(
+        url: str = Query(...),
+        current_user: dict[str, str] = Depends(require_read_write),
+    ) -> dict[str, object]:
+        session_id = secrets.token_urlsafe(18)
+        stop_event = threading.Event()
+        entry = {
+            "session_id": session_id,
+            "url": url,
+            "status": "launching",
+            "error": None,
+            "steps": [],
+            "browser_open": False,
+            "stop_event": stop_event,
+        }
+        runtime["playwright_recorders"][session_id] = entry
+        thread = threading.Thread(
+            target=_launch_playwright_recorder_sync,
+            args=(session_id, url),
+            daemon=True,
+            name=f"playwright-recorder-{session_id}",
+        )
+        entry["thread"] = thread
+        thread.start()
+        return {
+            "session_id": session_id,
+            "status": entry["status"],
+            "message": "Chromium recorder launch requested.",
+        }
+
+    @app.get("/api/recorder/playwright-session/{recorder_session_id}")
+    async def playwright_recorder_status(
+        recorder_session_id: str,
+        current_user: dict[str, str] = Depends(require_read_write),
+    ) -> dict[str, object]:
+        entry = runtime["playwright_recorders"].get(recorder_session_id)
+        if not entry:
+            raise HTTPException(status_code=404, detail="Playwright recorder session was not found")
+        return {
+            "session_id": entry["session_id"],
+            "url": entry["url"],
+            "status": entry["status"],
+            "error": entry["error"],
+            "browser_open": entry["browser_open"],
+            "steps": entry["steps"],
+        }
+
+    @app.post("/api/recorder/playwright-session/{recorder_session_id}/stop")
+    async def stop_playwright_recorder(
+        recorder_session_id: str,
+        current_user: dict[str, str] = Depends(require_read_write),
+    ) -> dict[str, object]:
+        entry = runtime["playwright_recorders"].get(recorder_session_id)
+        if not entry:
+            raise HTTPException(status_code=404, detail="Playwright recorder session was not found")
+        entry["stop_event"].set()
+        entry["status"] = "stopping"
+        return {"status": "ok"}
+
     @app.post("/api/users")
     async def add_user(
         payload: PortalUserPayload, current_user: dict[str, str] = Depends(require_admin)
@@ -933,16 +1547,43 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
         telemetry = _get_runtime_config().telemetry
         return {
             "enabled": telemetry.enabled,
-            "provider": telemetry.provider,
-            "host": telemetry.host,
-            "port": telemetry.port,
-            "database": telemetry.database,
-            "username": telemetry.username,
-            "password": telemetry.password,
+            "timeseries_provider": telemetry.timeseries_provider,
+            "timeseries_host": telemetry.timeseries_host,
+            "timeseries_port": telemetry.timeseries_port,
+            "timeseries_database": telemetry.timeseries_database,
+            "timeseries_username": telemetry.timeseries_username,
+            "timeseries_password": telemetry.timeseries_password,
+            "timeseries_use_ssl": telemetry.timeseries_use_ssl,
+            "auto_provision_timeseries_local": telemetry.auto_provision_timeseries_local,
+            "timeseries_local_container_name": telemetry.timeseries_local_container_name,
+            "object_provider": telemetry.object_provider,
+            "object_endpoint": telemetry.object_endpoint,
+            "object_access_key": telemetry.object_access_key,
+            "object_secret_key": telemetry.object_secret_key,
+            "object_bucket": telemetry.object_bucket,
+            "object_region": telemetry.object_region,
+            "object_use_ssl": telemetry.object_use_ssl,
+            "auto_provision_object_local": telemetry.auto_provision_object_local,
+            "object_local_container_name": telemetry.object_local_container_name,
+            "object_console_port": telemetry.object_console_port,
             "retention_hours": telemetry.retention_hours,
-            "use_ssl": telemetry.use_ssl,
-            "auto_provision_local": telemetry.auto_provision_local,
-            "local_container_name": telemetry.local_container_name,
+        }
+
+    @app.get("/api/settings/ui-scaling")
+    async def ui_scaling_settings(
+        current_user: dict[str, object] = Depends(require_admin),
+    ) -> dict[str, object]:
+        config = _get_runtime_config()
+        scaling = config.ui_scaling
+        return {
+            "enabled": scaling.enabled,
+            "dashboard_replicas": scaling.dashboard_replicas,
+            "session_strategy": scaling.session_strategy,
+            "sticky_sessions": scaling.sticky_sessions,
+            "proxy_container_name": scaling.proxy_container_name,
+            "dashboard_container_prefix": scaling.dashboard_container_prefix,
+            "proxy_port": scaling.proxy_port,
+            "session_secret_configured": bool(config.portal.session_secret),
         }
 
     @app.put("/api/settings/telemetry")
@@ -953,26 +1594,81 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
         telemetry = TelemetryConfig(**payload.model_dump())
         message = "Telemetry settings saved."
         runner = _get_runner()
-        if telemetry.enabled and telemetry.provider == "local_mysql" and telemetry.auto_provision_local:
-            if not telemetry.database:
-                telemetry.database = "async_service_monitor"
-            if not telemetry.username:
-                telemetry.username = "asm_telemetry"
-            if not telemetry.password:
-                telemetry.password = secrets.token_urlsafe(18)
-            if not telemetry.host:
-                telemetry.host = "127.0.0.1"
-            provisioned = await runner.provision_local_mysql(telemetry)
-            telemetry.host = str(provisioned["host"])
-            telemetry.port = int(provisioned["port"])
-            telemetry.local_container_name = str(provisioned["container_name"])
-            message = f"Telemetry settings saved and local MySQL is available in container '{telemetry.local_container_name}'."
+        if (
+            telemetry.enabled
+            and telemetry.timeseries_provider == "local_postgresql"
+            and telemetry.auto_provision_timeseries_local
+        ):
+            if not telemetry.timeseries_database:
+                telemetry.timeseries_database = "async_service_monitor"
+            if not telemetry.timeseries_username:
+                telemetry.timeseries_username = "asm_telemetry"
+            if not telemetry.timeseries_password:
+                telemetry.timeseries_password = secrets.token_urlsafe(18)
+            if not telemetry.timeseries_host:
+                telemetry.timeseries_host = "127.0.0.1"
+            provisioned_pg = await runner.provision_local_postgresql(telemetry)
+            telemetry.timeseries_host = str(provisioned_pg["host"])
+            telemetry.timeseries_port = int(provisioned_pg["port"])
+            telemetry.timeseries_local_container_name = str(provisioned_pg["container_name"])
+            message = (
+                "Telemetry settings saved and local PostgreSQL is available in "
+                f"container '{telemetry.timeseries_local_container_name}'."
+            )
+        if (
+            telemetry.enabled
+            and telemetry.object_provider == "local_minio"
+            and telemetry.auto_provision_object_local
+        ):
+            if not telemetry.object_access_key:
+                telemetry.object_access_key = "asm_minio"
+            if not telemetry.object_secret_key:
+                telemetry.object_secret_key = secrets.token_urlsafe(24)
+            minio_provisioned = await runner.provision_local_minio(telemetry)
+            telemetry.object_endpoint = str(minio_provisioned["endpoint"])
+            telemetry.object_console_port = int(minio_provisioned["console_port"])
+            telemetry.object_local_container_name = str(minio_provisioned["container_name"])
+            telemetry.object_access_key = str(minio_provisioned["access_key"])
+            telemetry.object_secret_key = str(minio_provisioned["secret_key"])
+            telemetry.object_bucket = str(minio_provisioned["bucket"])
+            message = (
+                f"{message.rstrip('.')} and local MinIO is available in container "
+                f"'{telemetry.object_local_container_name}'."
+            )
         try:
             store.update_telemetry(telemetry)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         await runner.apply_config(store.load())
         return {"status": "ok", "message": message}
+
+    @app.put("/api/settings/ui-scaling")
+    async def update_ui_scaling_settings(
+        payload: UIScalingPayload,
+        current_user: dict[str, object] = Depends(require_admin),
+    ) -> dict[str, object]:
+        runner = _get_runner()
+        config = store.load()
+        ui_scaling = UIScalingConfig(**payload.model_dump())
+        if ui_scaling.enabled and not config.portal.session_secret:
+            config.portal.session_secret = secrets.token_urlsafe(48)
+            store.update_portal_settings(config.portal)
+            config = store.load()
+        store.update_ui_scaling(ui_scaling)
+        updated = store.load()
+        await runner.apply_config(updated)
+        try:
+            scaling_result = await runner.reconcile_ui_scaling(runtime["config_path"])
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except docker.errors.DockerException as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        message = (
+            f"UI scaling enabled with {ui_scaling.dashboard_replicas} dashboard replicas."
+            if ui_scaling.enabled
+            else "UI scaling disabled and scaled dashboard containers were removed."
+        )
+        return {"status": "ok", "message": message, "scaling": scaling_result}
 
     @app.get("/api/settings/email")
     async def email_settings(
@@ -1034,6 +1730,7 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
             "enabled": portal.enabled,
             "provider": portal.provider,
             "realm": portal.realm,
+            "session_secret_configured": bool(portal.session_secret),
             "oci_enabled": portal.oci.enabled,
             "tenancy_ocid": portal.oci.tenancy_ocid,
             "user_ocid": portal.oci.user_ocid,
@@ -1053,6 +1750,7 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
                     enabled=payload.enabled,
                     provider=payload.provider,
                     realm=payload.realm,
+                    session_secret=config.portal.session_secret,
                     users=config.portal.users,
                     oci=OCIAuthConfig(
                         enabled=payload.oci_enabled,

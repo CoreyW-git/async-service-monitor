@@ -15,6 +15,7 @@ from service_monitor.config import (
     PortalAuthConfig,
     PortalUserConfig,
     TelemetryConfig,
+    UIScalingConfig,
     load_config,
     validate_config,
 )
@@ -201,6 +202,7 @@ class ConfigStore:
         config.portal.enabled = portal.enabled
         config.portal.provider = portal.provider
         config.portal.realm = portal.realm
+        config.portal.session_secret = portal.session_secret
         config.portal.oci = OCIAuthConfig(
             enabled=portal.oci.enabled,
             tenancy_ocid=portal.oci.tenancy_ocid,
@@ -208,5 +210,11 @@ class ConfigStore:
             region=portal.oci.region,
             group_claim=portal.oci.group_claim,
         )
+        self.save(config)
+        return config
+
+    def update_ui_scaling(self, ui_scaling: UIScalingConfig) -> AppConfig:
+        config = self.load()
+        config.ui_scaling = ui_scaling
         self.save(config)
         return config

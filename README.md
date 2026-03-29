@@ -12,7 +12,7 @@
 | Cluster Monitoring | Peer health polling, failover ownership, and recovery decisions |
 | Container Ops | Start, stop, restart, and create monitor containers live |
 | Access Control | Read-only, read-write, and admin portal accounts |
-| Telemetry Storage | Optional 2-hour MySQL retention for monitor results, node health, and config snapshots |
+| Telemetry Storage | Optional retention of time-series data in PostgreSQL plus diagnostics/config snapshots in MinIO or OCI Object Storage |
 
 ## Architecture
 
@@ -26,7 +26,7 @@ flowchart LR
     C --> E["Peer Polling"]
     D --> F["Live Dashboard State"]
     E --> F
-    F --> G["Optional MySQL Telemetry"]
+    F --> G["Optional PostgreSQL + Object Storage Telemetry"]
 ```
 
 ### Cluster Behavior
@@ -50,8 +50,8 @@ flowchart LR
     A["Check Result"] --> B["MonitorState"]
     B --> C["Dashboard Graphs"]
     B --> D["Telemetry Store"]
-    D --> E["Local MySQL"]
-    D --> F["OCI MySQL"]
+    D --> E["Local PostgreSQL + MinIO"]
+    D --> F["OCI PostgreSQL + OCI Object Storage"]
 ```
 
 ## Main Portal Areas
@@ -84,7 +84,7 @@ flowchart LR
 
 - User and role management
 - Service configuration for telemetry and OCI auth scaffolding
-- Self-service local MySQL provisioning for telemetry storage
+- Self-service local PostgreSQL and MinIO provisioning for telemetry storage
 
 ## Telemetry Storage
 
@@ -96,10 +96,10 @@ Telemetry storage is optional and can retain up to 2 hours of:
 
 You can point telemetry at:
 
-1. A local MySQL instance
-2. An OCI-hosted MySQL instance
+1. Local PostgreSQL for time-series data plus local MinIO for diagnostics
+2. OCI-hosted PostgreSQL plus OCI Object Storage
 
-If you select local MySQL in the admin portal, you can also enable self-service provisioning. In that mode the service will attempt to start a local MySQL Docker container for you using `mysql:8.4`, then persist the generated connection details back into the config.
+If you select local PostgreSQL and MinIO in the admin portal, you can also enable self-service provisioning. In that mode the service will attempt to start dedicated local Docker containers for both services, then persist the generated connection details back into the config.
 
 Assumption:
 This self-service local setup expects Docker Engine to be available on the machine running the admin portal.
@@ -125,7 +125,8 @@ Sensitive fields include:
 
 - portal usernames and passwords
 - email usernames and passwords
-- telemetry usernames and passwords
+- telemetry PostgreSQL usernames and passwords
+- telemetry object storage access keys and secret keys
 - check auth usernames, passwords, bearer tokens, and header values
 
 Generate a strong passphrase:
@@ -243,7 +244,8 @@ From a connected machine, prepare:
 2. Docker image tar files for:
    - `mcr.microsoft.com/playwright/python:v1.53.0-jammy`
    - `async-service-monitor:offline`
-   - `mysql:8.4`
+   - `postgres:17-alpine`
+   - `minio/minio:RELEASE.2025-02-28T09-55-16Z`
    - `axllent/mailpit:latest`
 
 ### Prepare Offline Assets
@@ -316,17 +318,48 @@ docker compose -f docker-compose.offline.yml up
 
 ### Air-Gap Notes
 
-- Local self-provisioned MySQL still expects `mysql:8.4` to already be loaded into Docker.
+- Local self-provisioned PostgreSQL still expects `postgres:17-alpine` to already be loaded into Docker.
+- Local self-provisioned MinIO still expects `minio/minio:RELEASE.2025-02-28T09-55-16Z` to already be loaded into Docker.
 - Local self-provisioned Mailpit still expects `axllent/mailpit:latest` to already be loaded into Docker.
 - Browser Health Monitors in offline Docker deployments depend on the staged Playwright-ready base image `mcr.microsoft.com/playwright/python:v1.53.0-jammy`.
 - Browser Health Monitors in offline local Python installs depend on `offline/playwright-browsers` being present and `PLAYWRIGHT_BROWSERS_PATH` pointing to it.
-- If you plan to use OCI MySQL or external email providers in an offline environment, those endpoints still need network reachability from that environment.
+- If you plan to use OCI PostgreSQL, OCI Object Storage, or external email providers in an offline environment, those endpoints still need network reachability from that environment.
 
 ## Clustered Compose
 
 ```powershell
 docker compose up --build
 ```
+
+## Scaled UI Backend With Docker
+
+To keep Home and Dashboards responsive as monitor count and dashboard volume grow, the project now supports a split Docker topology:
+
+- `control-plane`
+  Runs the full FastAPI admin service plus the monitor runner.
+- `dashboard-*`
+  Runs read-only dashboard replicas that do not start monitor execution.
+- `portal-proxy`
+  An Nginx entrypoint that sends read-heavy dashboard traffic to the dashboard replicas and sends write/admin traffic to the control plane.
+
+This mode is intended for environments where:
+
+- telemetry storage is enabled in PostgreSQL plus object storage
+- all containers can read the same `config.yaml`
+- only one control-plane service should own live monitor execution and container management
+
+Start the scaled stack with:
+
+```powershell
+docker compose -f docker-compose.scaled.yml up --build
+```
+
+Important notes:
+
+- `SERVICE_MONITOR_APP_MODE=dashboard` requires telemetry storage to be enabled, because the dashboard replicas read monitor history and recent results from shared telemetry instead of local in-memory state.
+- Only the control-plane container mounts Docker Engine and performs monitor execution, config mutation application, container orchestration, and recovery.
+- The dashboard replicas are designed to absorb read load for `/`, `/dashboards`, and the read-heavy dashboard APIs.
+- The reverse proxy config lives in `docker/nginx.scaled.conf`.
 
 ## Key Files
 
@@ -351,5 +384,5 @@ docker compose up --build
 - Monitor config edits are written back to the YAML file.
 - Updated monitors re-run immediately after save.
 - The portal uses session-based login today and includes OCI auth scaffolding for future integration.
-- Local MySQL self-provisioning uses Docker and is intended to reduce manual setup when telemetry storage is enabled.
+- Local PostgreSQL and MinIO self-provisioning use Docker and are intended to reduce manual setup when telemetry storage is enabled.
 - Offline deployment support now exists, but the required wheelhouse and image tar files must still be generated once on a connected machine before moving into a disconnected environment.

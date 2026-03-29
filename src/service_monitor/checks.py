@@ -281,11 +281,29 @@ def _mysql_connect_sync(check: CheckConfig, timeout_seconds: float) -> None:
     connection.close()
 
 
+def _postgres_connect_sync(check: CheckConfig, timeout_seconds: float) -> None:
+    import psycopg
+
+    kwargs: dict[str, object] = {
+        "host": check.host,
+        "port": int(check.port or 5432),
+        "user": check.auth.username if check.auth else None,
+        "password": check.auth.password if check.auth else None,
+        "dbname": check.database_name,
+        "connect_timeout": max(1, int(timeout_seconds)),
+    }
+    connection = psycopg.connect(**kwargs)
+    connection.close()
+
+
 async def run_database_check(check: CheckConfig, timeout_seconds: float) -> CheckResult:
     started = time.perf_counter()
     try:
         if check.database_engine == "mysql" and check.auth and check.auth.username:
             await asyncio.to_thread(_mysql_connect_sync, check, timeout_seconds)
+            message = f"database login passed for {check.host}:{check.port}"
+        elif check.database_engine == "postgresql" and check.auth and check.auth.username:
+            await asyncio.to_thread(_postgres_connect_sync, check, timeout_seconds)
             message = f"database login passed for {check.host}:{check.port}"
         else:
             await _tcp_connect(check.host or "", int(check.port or 0), timeout_seconds)

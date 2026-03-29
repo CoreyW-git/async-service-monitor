@@ -1180,6 +1180,67 @@ button.danger {
   color: var(--muted);
 }
 
+.managed-field {
+  opacity: 0.58;
+}
+
+.managed-field input,
+.managed-field select,
+.managed-field textarea {
+  background: rgba(123, 129, 144, 0.08);
+  cursor: not-allowed;
+}
+
+.monitor-recorder-frame {
+  width: 100%;
+  min-height: 780px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fff;
+}
+
+.recorder-frame-wrap {
+  width: 100%;
+  overflow: hidden;
+  border-radius: 16px;
+}
+
+.recorder-step-row {
+  align-items: center;
+}
+
+.recorder-alert {
+  margin-top: 10px;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(217, 119, 6, 0.28);
+  background: rgba(217, 119, 6, 0.10);
+}
+
+.recorder-alert p {
+  margin: 6px 0 0;
+}
+
+.recorder-mode-card p {
+  margin: 0;
+}
+
+.recorder-help {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.recorder-help-list {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.recorder-help-list li + li {
+  margin-top: 6px;
+}
+
 .error-text {
   color: var(--red);
 }

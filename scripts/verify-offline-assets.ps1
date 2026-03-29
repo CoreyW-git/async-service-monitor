@@ -25,7 +25,8 @@ if (-not $appWheel) {
 
 $requiredImages = @(
     "playwright-python-v1.53.0-jammy.tar",
-    "mysql-8.4.tar",
+    "postgres-17-alpine.tar",
+    "minio-release-2025-02-28.tar",
     "mailpit-latest.tar",
     "async-service-monitor-offline.tar"
 )

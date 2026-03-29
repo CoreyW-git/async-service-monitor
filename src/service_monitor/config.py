@@ -154,16 +154,37 @@ class NotificationsConfig:
 @dataclass(slots=True)
 class TelemetryConfig:
     enabled: bool = False
-    provider: Literal["local_mysql", "oci_mysql"] = "local_mysql"
-    host: str | None = None
-    port: int = 3306
-    database: str | None = None
-    username: str | None = None
-    password: str | None = None
+    timeseries_provider: Literal["local_postgresql", "oci_postgresql"] = "local_postgresql"
+    timeseries_host: str | None = None
+    timeseries_port: int = 5432
+    timeseries_database: str | None = None
+    timeseries_username: str | None = None
+    timeseries_password: str | None = None
+    timeseries_use_ssl: bool = False
+    auto_provision_timeseries_local: bool = False
+    timeseries_local_container_name: str = "async-service-monitor-postgres"
+    object_provider: Literal["local_minio", "oci_object_storage"] = "local_minio"
+    object_endpoint: str | None = None
+    object_access_key: str | None = None
+    object_secret_key: str | None = None
+    object_bucket: str = "async-service-monitor"
+    object_region: str | None = None
+    object_use_ssl: bool = False
+    auto_provision_object_local: bool = False
+    object_local_container_name: str = "async-service-monitor-minio"
+    object_console_port: int = 9001
     retention_hours: int = 2
-    use_ssl: bool = False
-    auto_provision_local: bool = False
-    local_container_name: str = "async-service-monitor-mysql"
+
+
+@dataclass(slots=True)
+class UIScalingConfig:
+    enabled: bool = False
+    dashboard_replicas: int = 2
+    session_strategy: Literal["shared_cookie", "sticky_proxy"] = "shared_cookie"
+    sticky_sessions: bool = False
+    proxy_container_name: str = "async-service-monitor-proxy"
+    dashboard_container_prefix: str = "async-service-monitor-dashboard"
+    proxy_port: int = 8000
 
 
 @dataclass(slots=True)
@@ -192,6 +213,7 @@ class PortalAuthConfig:
     enabled: bool = True
     provider: Literal["basic", "oci"] = "basic"
     realm: str = "Async Service Monitor"
+    session_secret: str | None = None
     users: list[PortalUserConfig] = field(default_factory=list)
     oci: OCIAuthConfig = field(default_factory=OCIAuthConfig)
 
@@ -209,7 +231,7 @@ class CheckConfig:
     host: str | None = None
     port: int | None = None
     database_name: str | None = None
-    database_engine: Literal["mysql"] = "mysql"
+    database_engine: Literal["mysql", "postgresql"] = "mysql"
     expected_statuses: list[int] = field(default_factory=lambda: [200])
     expect_authenticated_statuses: list[int] = field(default_factory=lambda: [200])
     auth: AuthConfig | None = None
@@ -226,6 +248,7 @@ class AppConfig:
     cluster: ClusterConfig = field(default_factory=ClusterConfig)
     notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
     telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
+    ui_scaling: UIScalingConfig = field(default_factory=UIScalingConfig)
     portal: PortalAuthConfig = field(default_factory=PortalAuthConfig)
     checks: list[CheckConfig] = field(default_factory=list)
 
@@ -352,16 +375,51 @@ def _parse_telemetry(raw: dict[str, Any] | None) -> TelemetryConfig:
         return TelemetryConfig()
     return TelemetryConfig(
         enabled=_as_bool(raw.get("enabled", False)),
-        provider=raw.get("provider", "local_mysql"),
-        host=raw.get("host"),
-        port=int(raw.get("port") or 3306),
-        database=raw.get("database"),
-        username=raw.get("username"),
-        password=raw.get("password"),
+        timeseries_provider=raw.get(
+            "timeseries_provider",
+            raw.get("provider", "local_postgresql").replace("mysql", "postgresql"),
+        ),
+        timeseries_host=raw.get("timeseries_host", raw.get("host")),
+        timeseries_port=int(raw.get("timeseries_port") or raw.get("port") or 5432),
+        timeseries_database=raw.get("timeseries_database", raw.get("database")),
+        timeseries_username=raw.get("timeseries_username", raw.get("username")),
+        timeseries_password=raw.get("timeseries_password", raw.get("password")),
+        timeseries_use_ssl=_as_bool(raw.get("timeseries_use_ssl", raw.get("use_ssl", False))),
+        auto_provision_timeseries_local=_as_bool(
+            raw.get("auto_provision_timeseries_local", raw.get("auto_provision_local", False))
+        ),
+        timeseries_local_container_name=raw.get(
+            "timeseries_local_container_name",
+            raw.get("local_container_name", "async-service-monitor-postgres"),
+        ),
+        object_provider=raw.get("object_provider", "local_minio"),
+        object_endpoint=raw.get("object_endpoint"),
+        object_access_key=raw.get("object_access_key"),
+        object_secret_key=raw.get("object_secret_key"),
+        object_bucket=raw.get("object_bucket", "async-service-monitor"),
+        object_region=raw.get("object_region"),
+        object_use_ssl=_as_bool(raw.get("object_use_ssl", False)),
+        auto_provision_object_local=_as_bool(raw.get("auto_provision_object_local", False)),
+        object_local_container_name=raw.get(
+            "object_local_container_name",
+            "async-service-monitor-minio",
+        ),
+        object_console_port=int(raw.get("object_console_port") or 9001),
         retention_hours=int(raw.get("retention_hours") or 2),
-        use_ssl=_as_bool(raw.get("use_ssl", False)),
-        auto_provision_local=_as_bool(raw.get("auto_provision_local", False)),
-        local_container_name=raw.get("local_container_name", "async-service-monitor-mysql"),
+    )
+
+
+def _parse_ui_scaling(raw: dict[str, Any] | None) -> UIScalingConfig:
+    if not raw:
+        return UIScalingConfig()
+    return UIScalingConfig(
+        enabled=_as_bool(raw.get("enabled", False)),
+        dashboard_replicas=int(raw.get("dashboard_replicas") or 2),
+        session_strategy=raw.get("session_strategy", "shared_cookie"),
+        sticky_sessions=_as_bool(raw.get("sticky_sessions", False)),
+        proxy_container_name=raw.get("proxy_container_name", "async-service-monitor-proxy"),
+        dashboard_container_prefix=raw.get("dashboard_container_prefix", "async-service-monitor-dashboard"),
+        proxy_port=int(raw.get("proxy_port") or 8000),
     )
 
 
@@ -397,6 +455,7 @@ def _parse_portal(raw: dict[str, Any] | None) -> PortalAuthConfig:
         enabled=_as_bool(raw.get("enabled", True), default=True),
         provider=raw.get("provider", "basic"),
         realm=raw.get("realm", "Async Service Monitor"),
+        session_secret=raw.get("session_secret"),
         users=[_parse_portal_user(item) for item in raw.get("users", [])]
         or PortalAuthConfig().users,
         oci=_parse_oci(raw.get("oci")),
@@ -529,6 +588,8 @@ def validate_config(config: AppConfig) -> None:
                 raise ValueError("portal basic auth requires at least one enabled user")
             if not any(user.role == "admin" for user in enabled_users):
                 raise ValueError("portal basic auth requires at least one enabled admin user")
+        if config.ui_scaling.enabled and not config.portal.session_secret:
+            raise ValueError("ui_scaling requires portal.session_secret so sessions can be shared across replicas")
 
     email = config.notifications.email
     if email.enabled:
@@ -544,17 +605,33 @@ def validate_config(config: AppConfig) -> None:
 
     if config.telemetry.enabled:
         required = [
-            config.telemetry.host,
-            config.telemetry.database,
-            config.telemetry.username,
-            config.telemetry.password,
+            config.telemetry.timeseries_host,
+            config.telemetry.timeseries_database,
+            config.telemetry.timeseries_username,
+            config.telemetry.timeseries_password,
+            config.telemetry.object_endpoint,
+            config.telemetry.object_access_key,
+            config.telemetry.object_secret_key,
+            config.telemetry.object_bucket,
         ]
         if not all(required):
             raise ValueError(
-                "telemetry requires host, database, username, and password when enabled"
+                "telemetry requires PostgreSQL and object storage settings when enabled"
             )
         if config.telemetry.retention_hours <= 0:
             raise ValueError("telemetry.retention_hours must be > 0")
+        if config.telemetry.timeseries_port <= 0:
+            raise ValueError("telemetry.timeseries_port must be > 0")
+        if config.telemetry.object_console_port <= 0:
+            raise ValueError("telemetry.object_console_port must be > 0")
+
+    if config.ui_scaling.enabled:
+        if config.ui_scaling.dashboard_replicas <= 0:
+            raise ValueError("ui_scaling.dashboard_replicas must be > 0")
+        if config.ui_scaling.proxy_port <= 0:
+            raise ValueError("ui_scaling.proxy_port must be > 0")
+        if not config.telemetry.enabled:
+            raise ValueError("ui_scaling requires telemetry to be enabled for shared dashboard data")
 
 
 def load_config(path: str | Path) -> AppConfig:
@@ -584,6 +661,7 @@ def load_config(path: str | Path) -> AppConfig:
         cluster=_parse_cluster(raw.get("cluster")),
         notifications=_parse_notifications(raw.get("notifications")),
         telemetry=_parse_telemetry(raw.get("telemetry")),
+        ui_scaling=_parse_ui_scaling(raw.get("ui_scaling")),
         portal=_parse_portal(raw.get("portal")),
         checks=[_parse_check(item) for item in raw.get("checks", [])],
     )

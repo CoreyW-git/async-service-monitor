@@ -18,6 +18,21 @@ const state = {
     type: "all",
   },
   dashboardDetailContext: null,
+  recorder: {
+    sessionId: null,
+    mode: "in_app",
+    targetUrl: "",
+    steps: [],
+    lastPageUrl: "",
+    status: "",
+    fallbackSuggested: false,
+    fallbackReason: "",
+    playwrightSessionId: null,
+    playwrightStatus: "",
+    playwrightError: "",
+    playwrightBrowserOpen: false,
+    playwrightPollHandle: null,
+  },
 };
 
 const ROLE_LEVELS = {
@@ -1924,6 +1939,7 @@ function monitorFormMarkup(check, mode, cluster = { node_id: "monitor-1", peers:
                   <span>Database Engine</span>
                   <select name="database_engine" ${readonlyAttr}>
                     <option value="mysql" ${(check.database_engine || "mysql") === "mysql" ? "selected" : ""}>MySQL</option>
+                    <option value="postgresql" ${(check.database_engine || "mysql") === "postgresql" ? "selected" : ""}>PostgreSQL</option>
                   </select>
                 </label>
                 <label class="database-only ${check.type !== "database" ? "hidden" : ""}"><span>Database Username</span><input name="database_username" value="${escapeHtml(auth.username || "")}" ${readonlyAttr} /></label>
@@ -2524,6 +2540,437 @@ function browserMonitorMarkup(check, mode, cluster = { node_id: "monitor-1", pee
   `;
 }
 
+function recorderStepToBrowserStep(step, index) {
+  if (step.event === "navigate" || step.event === "page_ready") {
+    return {
+      name: step.title ? `Navigate to ${step.title}` : `Navigate ${index + 1}`,
+      action: "navigate",
+      selector: null,
+      value: step.url || null,
+      timeout_seconds: null,
+    };
+  }
+  if (step.event === "fill") {
+    return {
+      name: `Fill ${step.selector || `field ${index + 1}`}`,
+      action: "fill",
+      selector: step.selector || "input",
+      value: step.value || "",
+      timeout_seconds: null,
+    };
+  }
+  if (step.event === "submit") {
+    return {
+      name: `Submit ${step.selector || `form ${index + 1}`}`,
+      action: "click",
+      selector: step.selector || "form button[type='submit']",
+      value: null,
+      timeout_seconds: null,
+    };
+  }
+  return {
+    name: `Click ${step.selector || `element ${index + 1}`}`,
+    action: "click",
+    selector: step.selector || "body",
+    value: null,
+    timeout_seconds: null,
+  };
+}
+
+function recorderMonitorPayload(form) {
+  const formData = new FormData(form);
+  const placementMode = String(formData.get("placement_mode") || "auto");
+  return {
+    name: String(formData.get("name") || "Recorded Browser Monitor"),
+    type: "browser",
+    enabled: String(formData.get("enabled")) === "true",
+    interval_seconds: Number(formData.get("interval_seconds") || 300),
+    placement_mode: placementMode,
+    assigned_node_id: placementMode === "specific" ? String(formData.get("assigned_node_id") || "") || null : null,
+    timeout_seconds: formData.get("timeout_seconds") ? Number(formData.get("timeout_seconds")) : 30,
+    url: String(formData.get("url") || state.recorder.targetUrl || "").trim() || null,
+    host: null,
+    port: null,
+    database_name: null,
+    database_engine: "postgresql",
+    expected_statuses: [200],
+    expect_authenticated_statuses: [200],
+    auth: null,
+    content: { contains: [], not_contains: [], regex: null },
+    browser: {
+      expected_title_contains: String(formData.get("expected_title_contains") || "").trim() || null,
+      required_selectors: parseCsv(formData.get("required_selectors") || ""),
+      wait_until: String(formData.get("wait_until") || "networkidle"),
+      viewport_width: Number(formData.get("viewport_width") || 1440),
+      viewport_height: Number(formData.get("viewport_height") || 900),
+      steps: state.recorder.steps.map(recorderStepToBrowserStep),
+    },
+  };
+}
+
+function recorderStepMarkup(step, index) {
+  const meta = [];
+  if (step.selector) meta.push(step.selector);
+  if (step.value) meta.push(String(step.value).slice(0, 60));
+  if (step.url) meta.push(step.url);
+  return `
+    <div class="status-row compact recorder-step-row">
+      <span class="dot healthy"></span>
+      <div>
+        <strong>${escapeHtml((step.event || "step").toUpperCase())}</strong>
+        <div class="status-meta">
+          <span>${escapeHtml(meta.join(" | ") || "Recorded action")}</span>
+        </div>
+      </div>
+      <button type="button" class="ghost danger" data-remove-recorder-step="${index}">Remove</button>
+    </div>
+  `;
+}
+
+function recorderBlockedReason(payload = {}) {
+  const haystack = [
+    payload.title,
+    payload.textSnippet,
+    payload.message,
+    payload.error,
+    payload.body,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  const patterns = [
+    { needle: "too many requests", message: "The embedded recorder looks rate-limited by the target site." },
+    { needle: "access denied", message: "The embedded recorder was denied by the target site." },
+    { needle: "unusual traffic", message: "The embedded recorder appears to be blocked as automated traffic." },
+    { needle: "temporarily unavailable", message: "The target site is rejecting the embedded recorder session." },
+    { needle: "captcha", message: "The target site is asking for a CAPTCHA, which is a better fit for Chromium recorder." },
+    { needle: "verify you are human", message: "The embedded recorder is being challenged as a bot." },
+    { needle: "robot or human", message: "The embedded recorder is being challenged as a bot." },
+    { needle: "request blocked", message: "The embedded recorder request was blocked by the target site." },
+  ];
+  const match = patterns.find((pattern) => haystack.includes(pattern.needle));
+  return match ? match.message : "";
+}
+
+function stopPlaywrightRecorderPolling() {
+  if (state.recorder.playwrightPollHandle) {
+    window.clearInterval(state.recorder.playwrightPollHandle);
+    state.recorder.playwrightPollHandle = null;
+  }
+}
+
+async function teardownPlaywrightRecorder(stopRemote = false) {
+  stopPlaywrightRecorderPolling();
+  if (stopRemote && state.recorder.playwrightSessionId) {
+    try {
+      await api(`/api/recorder/playwright-session/${encodeURIComponent(state.recorder.playwrightSessionId)}/stop`, {
+        method: "POST",
+      });
+    } catch (_) {
+      // Best-effort cleanup only.
+    }
+  }
+  state.recorder.playwrightSessionId = null;
+  state.recorder.playwrightStatus = "";
+  state.recorder.playwrightError = "";
+  state.recorder.playwrightBrowserOpen = false;
+  if (state.recorder.mode === "playwright") {
+    state.recorder.mode = "in_app";
+  }
+}
+
+function refreshRecorderUi() {
+  const sessionLabel = document.getElementById("monitor-recorder-session-label");
+  const pageLabel = document.getElementById("monitor-recorder-page-label");
+  const count = document.getElementById("recorder-step-count");
+  const modeValue = document.getElementById("monitor-recorder-mode-value");
+  const modeHint = document.getElementById("monitor-recorder-mode-hint");
+  const fallbackPanel = document.getElementById("recorder-fallback-panel");
+  const fallbackText = document.getElementById("recorder-fallback-text");
+  const startPlaywrightButton = document.getElementById("use-playwright-recorder-btn");
+  const stopPlaywrightButton = document.getElementById("stop-playwright-recorder-btn");
+  const framePanel = document.getElementById("recorder-frame-panel");
+  const playwrightPanel = document.getElementById("playwright-recorder-panel");
+  const playwrightStatus = document.getElementById("playwright-recorder-status");
+
+  if (sessionLabel) {
+    sessionLabel.textContent = state.recorder.mode === "playwright"
+      ? (state.recorder.playwrightSessionId || "Not started")
+      : (state.recorder.sessionId || "Not started");
+  }
+  if (pageLabel) {
+    pageLabel.textContent = state.recorder.lastPageUrl || state.recorder.targetUrl || "No page loaded";
+  }
+  if (count) {
+    count.textContent = `${state.recorder.steps.length} recorded step${state.recorder.steps.length === 1 ? "" : "s"}`;
+  }
+  if (modeValue) {
+    modeValue.textContent = state.recorder.mode === "playwright" ? "Chromium Recorder" : "Embedded Recorder";
+  }
+  if (modeHint) {
+    modeHint.textContent = state.recorder.mode === "playwright"
+      ? (
+          state.recorder.playwrightBrowserOpen
+            ? "Chromium is open. Walk through the flow in that browser window and the steps will appear here."
+            : (state.recorder.playwrightStatus || "Chromium recorder is starting.")
+        )
+      : "Using the in-app recorder frame inside the portal.";
+  }
+  if (fallbackPanel) {
+    fallbackPanel.classList.toggle("hidden", !state.recorder.fallbackSuggested);
+  }
+  if (fallbackText) {
+    fallbackText.textContent = state.recorder.fallbackReason || "";
+  }
+  if (startPlaywrightButton) {
+    startPlaywrightButton.classList.toggle("hidden", state.recorder.mode === "playwright");
+  }
+  if (stopPlaywrightButton) {
+    stopPlaywrightButton.classList.toggle("hidden", state.recorder.mode !== "playwright");
+  }
+  if (framePanel) {
+    framePanel.classList.toggle("hidden", state.recorder.mode === "playwright");
+  }
+  if (playwrightPanel) {
+    playwrightPanel.classList.toggle("hidden", state.recorder.mode !== "playwright");
+  }
+  if (playwrightStatus) {
+    const message = state.recorder.playwrightError
+      || state.recorder.playwrightStatus
+      || "Chromium recorder not running.";
+    setStatus(playwrightStatus, message, Boolean(state.recorder.playwrightError));
+  }
+}
+
+function suggestPlaywrightFallback(reason) {
+  state.recorder.fallbackSuggested = true;
+  state.recorder.fallbackReason = reason;
+  refreshRecorderUi();
+}
+
+function clearPlaywrightFallback() {
+  state.recorder.fallbackSuggested = false;
+  state.recorder.fallbackReason = "";
+  refreshRecorderUi();
+}
+
+async function pollPlaywrightRecorderStatus() {
+  if (!state.recorder.playwrightSessionId) return;
+  const status = await api(`/api/recorder/playwright-session/${encodeURIComponent(state.recorder.playwrightSessionId)}`);
+  state.recorder.mode = "playwright";
+  state.recorder.playwrightStatus = status.status || "";
+  state.recorder.playwrightError = status.error || "";
+  state.recorder.playwrightBrowserOpen = Boolean(status.browser_open);
+  state.recorder.steps = Array.isArray(status.steps) ? status.steps : [];
+  renderRecorderSteps();
+  refreshRecorderUi();
+  if (status.error) {
+    stopPlaywrightRecorderPolling();
+  }
+  if (status.status === "stopped" || (!status.browser_open && status.status !== "launching" && status.status !== "running")) {
+    stopPlaywrightRecorderPolling();
+  }
+}
+
+function startPlaywrightRecorderPolling() {
+  stopPlaywrightRecorderPolling();
+  state.recorder.playwrightPollHandle = window.setInterval(() => {
+    pollPlaywrightRecorderStatus().catch((error) => {
+      state.recorder.playwrightError = error.message;
+      refreshRecorderUi();
+      stopPlaywrightRecorderPolling();
+    });
+  }, 1500);
+}
+
+async function launchPlaywrightRecorder(url) {
+  const status = document.getElementById("monitor-recorder-status");
+  setStatus(status, "Launching Chromium recorder...");
+  const session = await api(`/api/recorder/playwright-session?url=${encodeURIComponent(url)}`, { method: "POST" });
+  state.recorder.mode = "playwright";
+  state.recorder.playwrightSessionId = session.session_id;
+  state.recorder.playwrightStatus = session.message || session.status || "Chromium recorder launch requested.";
+  state.recorder.playwrightError = "";
+  state.recorder.playwrightBrowserOpen = false;
+  state.recorder.steps = [];
+  state.recorder.targetUrl = url;
+  state.recorder.lastPageUrl = url;
+  clearPlaywrightFallback();
+  renderRecorderSteps();
+  refreshRecorderUi();
+  await pollPlaywrightRecorderStatus();
+  startPlaywrightRecorderPolling();
+}
+
+function renderRecorderSteps() {
+  const host = document.getElementById("recorder-steps-list");
+  const count = document.getElementById("recorder-step-count");
+  if (!host) return;
+  host.innerHTML = state.recorder.steps.length
+    ? state.recorder.steps.map((step, index) => recorderStepMarkup(step, index)).join("")
+    : `<div class="guide-card"><p>No recorded actions yet. Load a page and interact with it inside the recorder workspace.</p></div>`;
+  if (count) {
+    count.textContent = `${state.recorder.steps.length} recorded step${state.recorder.steps.length === 1 ? "" : "s"}`;
+  }
+  refreshRecorderUi();
+}
+
+function updateRecorderFrame() {
+  const frame = document.getElementById("monitor-recorder-frame");
+  const status = document.getElementById("monitor-recorder-status");
+  if (!frame) return;
+  if (!state.recorder.sessionId || !state.recorder.targetUrl) {
+    frame.removeAttribute("src");
+    refreshRecorderUi();
+    return;
+  }
+  frame.src = `/api/recorder/proxy?url=${encodeURIComponent(state.recorder.targetUrl)}&session_id=${encodeURIComponent(state.recorder.sessionId)}`;
+  state.recorder.mode = "in_app";
+  setStatus(status, `Recorder session started for ${state.recorder.targetUrl}`);
+  refreshRecorderUi();
+}
+
+function renderMonitorRecorderPage(cluster = { node_id: "monitor-1", peers: [], healthy_nodes: [] }) {
+  setWorkspaceHeader("Monitor Recorder", "Load a page, walk through the journey, and turn the captured interactions into a browser monitor.", [
+    { label: "Monitors", href: "/monitors" },
+    { label: "Add Monitor", href: "/monitors/new" },
+    { label: "Advanced Monitor", href: "/monitors/new/advanced" },
+    { label: "Monitor Recorder" },
+  ]);
+  const nodes = assignableNodeOptions(cluster);
+  const selectedNodeId = cluster.node_id || "";
+  document.getElementById("app-root").innerHTML = `
+    <div class="stack">
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Recorded Browser Monitor</h3>
+          <p>Capture clicks, fills, submits, and navigations from the in-app recorder and save them as a reusable synthetic monitor.</p>
+        </div>
+        <div class="recorder-help">
+          <article class="guide-card">
+            <h4>How To Use The Embedded Recorder</h4>
+            <ol class="recorder-help-list">
+              <li>Enter the page URL you want to monitor.</li>
+              <li>Select <strong>Start Embedded Recorder</strong> to load the page inside the portal.</li>
+              <li>Click through the page, including login fields and navigation steps.</li>
+              <li>Watch the recorded journey build below as each step is captured.</li>
+              <li>Select <strong>Test Recorded Monitor</strong> to replay the generated synthetic before saving.</li>
+            </ol>
+          </article>
+          <article class="guide-card">
+            <h4>When To Use Chromium Recorder</h4>
+            <ol class="recorder-help-list">
+              <li>If the embedded page shows blocking behavior like rate limits, access denied, or bot checks, select <strong>Use Chromium Recorder</strong>.</li>
+              <li>A separate Chromium window will open for that page.</li>
+              <li>Walk through the flow in Chromium just like a normal browser session.</li>
+              <li>The portal will continue collecting your recorded steps and show them in the same journey list.</li>
+              <li>Select <strong>Stop Chromium Recorder</strong> when you are done, then test and save the monitor.</li>
+            </ol>
+          </article>
+        </div>
+        <form class="check-form" id="monitor-recorder-form">
+          <div class="accordion">
+            <details class="accordion-item" open>
+              <summary class="accordion-summary"><div><strong>Basics</strong><div class="status-meta"><span>Name, schedule, and placement for the generated synthetic monitor</span></div></div></summary>
+              <div class="accordion-body">
+                <label><span>Name</span><input name="name" value="Recorded Browser Monitor" required /></label>
+                <label><span>Enabled</span><select name="enabled"><option value="true" selected>Enabled</option><option value="false">Disabled</option></select></label>
+                <label><span>Interval Seconds</span><input name="interval_seconds" type="number" min="1" value="300" /></label>
+                <label><span>Timeout Seconds</span><input name="timeout_seconds" type="number" min="1" value="30" /></label>
+                <label><span>Placement</span><select name="placement_mode"><option value="auto" selected>Auto-select the healthiest least-loaded container</option><option value="specific">Choose a specific monitoring container</option></select></label>
+                <label class="field-assigned-node hidden"><span>Monitoring Container</span><select name="assigned_node_id"><option value="">Select a monitoring container</option>${nodes.map((node) => `<option value="${escapeHtml(node.node_id)}" ${selectedNodeId === node.node_id ? "selected" : ""}>${escapeHtml(node.label)}${node.healthy ? " | healthy" : " | unhealthy"} | ${escapeHtml(node.description || "")}</option>`).join("")}</select></label>
+              </div>
+            </details>
+
+            <details class="accordion-item" open>
+              <summary class="accordion-summary"><div><strong>Recorder Target</strong><div class="status-meta"><span>Choose the page to load in the recorder and how the generated monitor should validate it</span></div></div></summary>
+              <div class="accordion-body">
+                <label><span>Target URL</span><input name="url" id="monitor-recorder-url" value="${escapeHtml(state.recorder.targetUrl || "")}" placeholder="https://example.com/login" required /></label>
+                <label><span>Wait Until</span><select name="wait_until"><option value="networkidle" selected>Network Idle</option><option value="load">Load</option><option value="domcontentloaded">DOMContentLoaded</option></select></label>
+                <label><span>Viewport Width</span><input name="viewport_width" type="number" min="320" value="1440" /></label>
+                <label><span>Viewport Height</span><input name="viewport_height" type="number" min="320" value="900" /></label>
+                <label><span>Expected Title Contains</span><input name="expected_title_contains" placeholder="Optional title assertion" /></label>
+                <label><span>Required Selectors</span><input name="required_selectors" placeholder="#app, nav a.login" /></label>
+                <div class="button-row">
+                  <button type="button" id="start-monitor-recorder-btn">Start Embedded Recorder</button>
+                  <button type="button" class="secondary" id="use-playwright-recorder-btn">Use Chromium Recorder</button>
+                  <button type="button" class="secondary hidden" id="stop-playwright-recorder-btn">Stop Chromium Recorder</button>
+                  <button type="button" class="secondary" id="clear-monitor-recorder-btn">Clear Recorded Steps</button>
+                </div>
+                <p class="form-note">The recorder uses a proxied in-app browser session. It works best for flows that can be rendered inside the application; some highly locked-down sites may still restrict parts of their behavior.</p>
+                <div id="recorder-fallback-panel" class="recorder-alert hidden">
+                  <strong>Embedded recorder hit a wall.</strong>
+                  <p id="recorder-fallback-text"></p>
+                  <p class="subtle">Switch to Chromium recorder and continue capturing the same journey in a real browser window.</p>
+                </div>
+              </div>
+            </details>
+          </div>
+          <div class="button-row">
+            <button type="button" id="test-monitor-recorder-btn">Test Recorded Monitor</button>
+            <button type="submit">Save As Browser Monitor</button>
+          </div>
+          <p class="form-status" id="monitor-recorder-form-status"></p>
+        </form>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Recorder Workspace</h3>
+          <p>Interact with the page below. Captured actions will appear in the step list and be converted into browser-monitor steps automatically.</p>
+        </div>
+        <div class="guide-grid compact-grid">
+          <article class="guide-card compact-card">
+            <h4>Recorder Session</h4>
+            <p id="monitor-recorder-session-label">${escapeHtml(state.recorder.sessionId || "Not started")}</p>
+          </article>
+          <article class="guide-card compact-card">
+            <h4>Current Page</h4>
+            <p id="monitor-recorder-page-label">${escapeHtml(state.recorder.lastPageUrl || state.recorder.targetUrl || "No page loaded")}</p>
+          </article>
+          <article class="guide-card compact-card">
+            <h4>Captured Steps</h4>
+            <p id="recorder-step-count">${state.recorder.steps.length} recorded step${state.recorder.steps.length === 1 ? "" : "s"}</p>
+          </article>
+          <article class="guide-card compact-card recorder-mode-card">
+            <h4>Recorder Mode</h4>
+            <p id="monitor-recorder-mode-value">Embedded Recorder</p>
+            <div class="status-meta"><span id="monitor-recorder-mode-hint">Using the in-app recorder frame inside the portal.</span></div>
+          </article>
+        </div>
+        <div class="recorder-frame-wrap" id="recorder-frame-panel">
+          <iframe id="monitor-recorder-frame" class="monitor-recorder-frame" title="Monitor Recorder"></iframe>
+        </div>
+        <div class="guide-card hidden" id="playwright-recorder-panel">
+          <h4>Chromium Recorder</h4>
+          <p>Chromium opens in its own window so protected sites can behave more like a normal browser session. Walk through the flow there and the recorded steps will stream back into this page.</p>
+          <p class="form-status" id="playwright-recorder-status"></p>
+        </div>
+        <p class="form-status" id="monitor-recorder-status"></p>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Recorded Journey</h3>
+          <p>These recorded interactions are transformed into the synthetic browser steps that will be saved with the monitor.</p>
+        </div>
+        <div class="stack" id="recorder-steps-list"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Recorder Test Session</h3>
+          <p>Run the generated browser monitor in place before saving it.</p>
+        </div>
+        <div id="browser-test-results">${browserTestResultsMarkup(null)}</div>
+      </section>
+    </div>
+  `;
+  renderRecorderSteps();
+  updateRecorderFrame();
+  refreshRecorderUi();
+}
+
 function renderContainersPage(peers, containers, nodeMetrics, cluster = { enabled: false, node_id: "monitor-1", peers: [], local_assigned_checks: [] }) {
   setWorkspaceHeader("Configure Containers", "Configure peer monitors, add new nodes, and define how the cluster is managed.", [
     { label: "Cluster", href: "/cluster/configure" },
@@ -2814,7 +3261,7 @@ function renderGuidePage() {
         <div class="guide-grid">
           <article class="guide-card">
             <h4>At A Glance</h4>
-            <p>The service combines endpoint monitoring, cluster coordination, container operations, access control, and optional MySQL telemetry retention in one admin portal.</p>
+            <p>The service combines endpoint monitoring, cluster coordination, container operations, access control, and optional PostgreSQL plus object-storage telemetry retention in one admin portal.</p>
           </article>
           <article class="guide-card">
             <h4>Portal Areas</h4>
@@ -2865,7 +3312,7 @@ function renderGuidePage() {
       <section class="panel">
         <div class="panel-head">
           <h3>Telemetry Storage</h3>
-          <p>Telemetry can stay local in memory or be retained in MySQL for two hours, locally or in OCI.</p>
+          <p>Telemetry can stay local in memory or be retained in PostgreSQL plus MinIO-compatible object storage for two hours, locally or in OCI.</p>
         </div>
         <div class="diagram-row">
           <div class="diagram-node">Check Result</div>
@@ -2874,7 +3321,7 @@ function renderGuidePage() {
           <div class="diagram-arrow">→</div>
           <div class="diagram-node">Live Graphs</div>
           <div class="diagram-arrow">+</div>
-          <div class="diagram-node">MySQL Retention</div>
+          <div class="diagram-node">PostgreSQL + Object Storage</div>
         </div>
       </section>
 
@@ -2986,14 +3433,14 @@ docker compose -f docker-compose.offline.yml up</pre>
         </div>
         <div class="guide-card">
           <h4>Air-Gap Notes</h4>
-          <p>Offline support expects the Python wheels and supporting Docker images to be prepared first. Self-provisioned local MySQL and Mailpit still need their images loaded into Docker in the disconnected environment.</p>
+          <p>Offline support expects the Python wheels and supporting Docker images to be prepared first. Self-provisioned local PostgreSQL, MinIO, and Mailpit still need their images loaded into Docker in the disconnected environment.</p>
         </div>
       </section>
     </div>
   `;
 }
 
-function renderAdminPage(users, telemetry, portalSettings, emailSettings) {
+function renderAdminPage(users, telemetry, portalSettings, emailSettings, uiScaling) {
   setWorkspaceHeader("Administration", "Create accounts and control who can view, edit, or fully administer the platform.", [
     { label: "Administration" },
   ]);
@@ -3113,13 +3560,15 @@ function renderAdminPage(users, telemetry, portalSettings, emailSettings) {
             <div>
               <strong>Telemetry Storage</strong>
               <div class="status-meta">
-                <span>${telemetry?.provider === "oci_mysql" ? "OCI MySQL" : "Local MySQL"}</span>
+                <span>${telemetry?.timeseries_provider === "oci_postgresql" ? "OCI PostgreSQL" : "Local PostgreSQL"}</span>
+                <span>${telemetry?.object_provider === "oci_object_storage" ? "OCI Object Storage" : "MinIO Compatible Object Store"}</span>
                 <span>${telemetry?.retention_hours || 2} hour retention</span>
               </div>
             </div>
           </summary>
           <div class="accordion-body">
             <form id="telemetry-form" class="check-form">
+              <h4>Timeseries</h4>
               <label>
                 <span>Enabled</span>
                 <select name="enabled">
@@ -3128,34 +3577,54 @@ function renderAdminPage(users, telemetry, portalSettings, emailSettings) {
                 </select>
               </label>
               <label>
-                <span>MySQL Target</span>
-                <select name="provider">
-                  <option value="local_mysql" ${telemetry?.provider === "local_mysql" ? "selected" : ""}>Local MySQL Instance</option>
-                  <option value="oci_mysql" ${telemetry?.provider === "oci_mysql" ? "selected" : ""}>OCI Hosted MySQL</option>
-                </select>
-              </label>
-              <label><span>Host</span><input name="host" value="${escapeHtml(telemetry?.host || "")}" placeholder="mysql.example.internal" /></label>
-              <label><span>Port</span><input name="port" type="number" min="1" value="${escapeHtml(telemetry?.port || 3306)}" /></label>
-              <label><span>Database</span><input name="database" value="${escapeHtml(telemetry?.database || "")}" /></label>
-              <label><span>Username</span><input name="username" value="${escapeHtml(telemetry?.username || "")}" /></label>
-              <label><span>Password</span><input name="password" type="password" value="${escapeHtml(telemetry?.password || "")}" /></label>
-              <label><span>Retention Hours</span><input name="retention_hours" type="number" min="1" max="2" value="${escapeHtml(telemetry?.retention_hours || 2)}" /></label>
-              <label>
-                <span>Use SSL</span>
-                <select name="use_ssl">
-                  <option value="true" ${telemetry?.use_ssl ? "selected" : ""}>Enabled</option>
-                  <option value="false" ${!telemetry?.use_ssl ? "selected" : ""}>Disabled</option>
+                <span>PostgreSQL Target</span>
+                <select name="timeseries_provider">
+                  <option value="local_postgresql" ${telemetry?.timeseries_provider === "local_postgresql" ? "selected" : ""}>Local PostgreSQL Instance</option>
+                  <option value="oci_postgresql" ${telemetry?.timeseries_provider === "oci_postgresql" ? "selected" : ""}>OCI Hosted PostgreSQL</option>
                 </select>
               </label>
               <label>
-                <span>Provision Local MySQL For Me</span>
-                <select name="auto_provision_local">
-                  <option value="true" ${telemetry?.auto_provision_local ? "selected" : ""}>Yes, provision it automatically</option>
-                  <option value="false" ${!telemetry?.auto_provision_local ? "selected" : ""}>No, I will point to my own server</option>
+                <span>Provision Local PostgreSQL For Me</span>
+                <select name="auto_provision_timeseries_local">
+                  <option value="true" ${telemetry?.auto_provision_timeseries_local ? "selected" : ""}>Yes, provision it automatically</option>
+                  <option value="false" ${!telemetry?.auto_provision_timeseries_local ? "selected" : ""}>No, I will point to my own server</option>
                 </select>
               </label>
-              <label><span>Local MySQL Container Name</span><input name="local_container_name" value="${escapeHtml(telemetry?.local_container_name || "async-service-monitor-mysql")}" /></label>
+              <label><span>Local PostgreSQL Container Name</span><input name="timeseries_local_container_name" value="${escapeHtml(telemetry?.timeseries_local_container_name || "async-service-monitor-postgres")}" /></label>
+              <label data-telemetry-timeseries-managed><span>Host</span><input name="timeseries_host" value="${escapeHtml(telemetry?.timeseries_host || "")}" placeholder="postgres.example.internal" /></label>
+              <label data-telemetry-timeseries-managed><span>Port</span><input name="timeseries_port" type="number" min="1" value="${escapeHtml(telemetry?.timeseries_port || 5432)}" /></label>
+              <label data-telemetry-timeseries-managed><span>Database</span><input name="timeseries_database" value="${escapeHtml(telemetry?.timeseries_database || "")}" /></label>
+              <label data-telemetry-timeseries-managed><span>Username</span><input name="timeseries_username" value="${escapeHtml(telemetry?.timeseries_username || "")}" /></label>
+              <label data-telemetry-timeseries-managed><span>Password</span><input name="timeseries_password" type="password" value="${escapeHtml(telemetry?.timeseries_password || "")}" /></label>
+              <label data-telemetry-timeseries-managed><span>Use SSL</span><select name="timeseries_use_ssl"><option value="true" ${telemetry?.timeseries_use_ssl ? "selected" : ""}>Enabled</option><option value="false" ${!telemetry?.timeseries_use_ssl ? "selected" : ""}>Disabled</option></select></label>
+              <label><span>Retention Hours</span><input name="retention_hours" type="number" min="1" value="${escapeHtml(telemetry?.retention_hours || 2)}" /></label>
+
+              <h4>Diagnostics Object Storage</h4>
+              <label>
+                <span>Object Storage Target</span>
+                <select name="object_provider">
+                  <option value="local_minio" ${telemetry?.object_provider === "local_minio" ? "selected" : ""}>Local MinIO</option>
+                  <option value="oci_object_storage" ${telemetry?.object_provider === "oci_object_storage" ? "selected" : ""}>OCI Object Storage</option>
+                </select>
+              </label>
+              <label>
+                <span>Provision Local MinIO For Me</span>
+                <select name="auto_provision_object_local">
+                  <option value="true" ${telemetry?.auto_provision_object_local ? "selected" : ""}>Yes, provision it automatically</option>
+                  <option value="false" ${!telemetry?.auto_provision_object_local ? "selected" : ""}>No, I will point to my own server</option>
+                </select>
+              </label>
+              <label><span>Local MinIO Container Name</span><input name="object_local_container_name" value="${escapeHtml(telemetry?.object_local_container_name || "async-service-monitor-minio")}" /></label>
+              <label><span>Local MinIO Console Port</span><input name="object_console_port" type="number" min="1" value="${escapeHtml(telemetry?.object_console_port || 9001)}" /></label>
+              <label data-telemetry-object-managed><span>Endpoint</span><input name="object_endpoint" value="${escapeHtml(telemetry?.object_endpoint || "")}" placeholder="http://127.0.0.1:9000" /></label>
+              <label data-telemetry-object-managed><span>Bucket</span><input name="object_bucket" value="${escapeHtml(telemetry?.object_bucket || "async-service-monitor")}" /></label>
+              <label data-telemetry-object-managed><span>Access Key</span><input name="object_access_key" value="${escapeHtml(telemetry?.object_access_key || "")}" /></label>
+              <label data-telemetry-object-managed><span>Secret Key</span><input name="object_secret_key" type="password" value="${escapeHtml(telemetry?.object_secret_key || "")}" /></label>
+              <label data-telemetry-object-managed><span>Region</span><input name="object_region" value="${escapeHtml(telemetry?.object_region || "")}" placeholder="us-phoenix-1" /></label>
+              <label data-telemetry-object-managed><span>Use TLS</span><select name="object_use_ssl"><option value="true" ${telemetry?.object_use_ssl ? "selected" : ""}>Enabled</option><option value="false" ${!telemetry?.object_use_ssl ? "selected" : ""}>Disabled</option></select></label>
               <button type="submit">Save Telemetry Settings</button>
+              <p class="form-note">Timeseries data is retained in PostgreSQL, while full diagnostics and config snapshots are retained in MinIO or OCI Object Storage.</p>
+              <p class="form-note" id="telemetry-managed-note"></p>
               <p class="form-status" id="telemetry-status"></p>
             </form>
           </div>
@@ -3229,6 +3698,53 @@ function renderAdminPage(users, telemetry, portalSettings, emailSettings) {
         <details class="accordion-item">
           <summary class="accordion-summary">
             <div>
+              <strong>UI Scaling</strong>
+              <div class="status-meta">
+                <span>${uiScaling?.enabled ? `${uiScaling.dashboard_replicas} dashboard replicas` : "Disabled"}</span>
+                <span>${uiScaling?.session_strategy === "sticky_proxy" ? "Sticky proxy sessions" : "Shared signed sessions"}</span>
+              </div>
+            </div>
+          </summary>
+          <div class="accordion-body">
+            <form id="ui-scaling-form" class="check-form">
+              <label>
+                <span>Enable UI Scaling</span>
+                <select name="enabled">
+                  <option value="true" ${uiScaling?.enabled ? "selected" : ""}>Enabled</option>
+                  <option value="false" ${!uiScaling?.enabled ? "selected" : ""}>Disabled</option>
+                </select>
+              </label>
+              <label>
+                <span>Session Handling</span>
+                <select name="session_strategy">
+                  <option value="shared_cookie" ${!uiScaling?.session_strategy || uiScaling?.session_strategy === "shared_cookie" ? "selected" : ""}>Shared signed sessions</option>
+                  <option value="sticky_proxy" ${uiScaling?.session_strategy === "sticky_proxy" ? "selected" : ""}>Sticky proxy sessions</option>
+                </select>
+              </label>
+              <label>
+                <span>Enable Sticky Sessions</span>
+                <select name="sticky_sessions">
+                  <option value="true" ${uiScaling?.sticky_sessions ? "selected" : ""}>Enabled</option>
+                  <option value="false" ${!uiScaling?.sticky_sessions ? "selected" : ""}>Disabled</option>
+                </select>
+              </label>
+              <label><span>Dashboard Replica Count</span><input name="dashboard_replicas" type="number" min="1" max="10" value="${escapeHtml(uiScaling?.dashboard_replicas || 2)}" /></label>
+              <label><span>Proxy Container Name</span><input name="proxy_container_name" value="${escapeHtml(uiScaling?.proxy_container_name || "async-service-monitor-proxy")}" /></label>
+              <label><span>Dashboard Container Prefix</span><input name="dashboard_container_prefix" value="${escapeHtml(uiScaling?.dashboard_container_prefix || "async-service-monitor-dashboard")}" /></label>
+              <label><span>Proxy Port</span><input name="proxy_port" type="number" min="1" value="${escapeHtml(uiScaling?.proxy_port || 8000)}" /></label>
+              <div class="guide-card">
+                <h4>Scaling Notes</h4>
+                <p>When enabled, the service provisions Docker-based dashboard replicas and a proxy automatically. Shared telemetry is required, and the portal will auto-generate a shared session secret if one is missing.</p>
+              </div>
+              <button type="submit">Save UI Scaling</button>
+              <p class="form-status" id="ui-scaling-status"></p>
+            </form>
+          </div>
+        </details>
+
+        <details class="accordion-item">
+          <summary class="accordion-summary">
+            <div>
               <strong>Portal Authentication</strong>
               <div class="status-meta">
                 <span>${portalSettings?.provider === "oci" ? "OCI Auth" : "Basic Auth"}</span>
@@ -3253,6 +3769,10 @@ function renderAdminPage(users, telemetry, portalSettings, emailSettings) {
                 </select>
               </label>
               <label><span>Realm</span><input name="realm" value="${escapeHtml(portalSettings?.realm || "Async Service Monitor")}" /></label>
+              <div class="guide-card">
+                <h4>Session Handling</h4>
+                <p>${portalSettings?.session_secret_configured ? "A shared signed session secret is configured for multi-container portal access." : "A shared session secret will be generated automatically when scaled UI mode is enabled."}</p>
+              </div>
               <label>
                 <span>OCI Settings Enabled</span>
                 <select name="oci_enabled">
@@ -3375,7 +3895,7 @@ function browserMonitorPayload(form) {
     host: null,
     port: portValue ? Number(portValue) : null,
     database_name: null,
-    database_engine: "mysql",
+    database_engine: "postgresql",
     expected_statuses: [200],
     expect_authenticated_statuses: [200],
     auth: null,
@@ -3502,6 +4022,30 @@ async function runBrowserMonitorTest() {
   }
 }
 
+async function runMonitorRecorderTest() {
+  if (!hasRole("read_write")) return;
+  const form = document.getElementById("monitor-recorder-form");
+  if (!form) return;
+  const status = document.getElementById("monitor-recorder-form-status");
+  const results = document.getElementById("browser-test-results");
+  try {
+    setStatus(status, "Testing recorded browser monitor...");
+    const result = await api("/api/checks/test", {
+      method: "POST",
+      body: JSON.stringify(recorderMonitorPayload(form)),
+    });
+    results.innerHTML = browserTestResultsMarkup(result);
+    applyNetworkFilters();
+    setStatus(
+      status,
+      `${result.success ? "Success" : "Failed"}: ${result.message} (${Math.round(Number(result.duration_ms || 0))} ms)`,
+      !result.success
+    );
+  } catch (error) {
+    setStatus(status, error.message, true);
+  }
+}
+
 function peerFormPayload(form) {
   const formData = new FormData(form);
   return {
@@ -3529,20 +4073,46 @@ function userFormPayload(form) {
   };
 }
 
+function uiScalingPayload(form) {
+  const formData = new FormData(form);
+  return {
+    enabled: String(formData.get("enabled")) === "true",
+    dashboard_replicas: Number(formData.get("dashboard_replicas") || 2),
+    session_strategy: String(formData.get("session_strategy") || "shared_cookie"),
+    sticky_sessions: String(formData.get("sticky_sessions")) === "true",
+    proxy_container_name: String(formData.get("proxy_container_name") || "async-service-monitor-proxy"),
+    dashboard_container_prefix: String(formData.get("dashboard_container_prefix") || "async-service-monitor-dashboard"),
+    proxy_port: Number(formData.get("proxy_port") || 8000),
+  };
+}
+
 function telemetryFormPayload(form) {
   const formData = new FormData(form);
   return {
     enabled: String(formData.get("enabled")) === "true",
-    provider: String(formData.get("provider")),
-    host: String(formData.get("host") || "") || null,
-    port: Number(formData.get("port") || 3306),
-    database: String(formData.get("database") || "") || null,
-    username: String(formData.get("username") || "") || null,
-    password: String(formData.get("password") || "") || null,
+    timeseries_provider: String(formData.get("timeseries_provider") || "local_postgresql"),
+    timeseries_host: String(formData.get("timeseries_host") || "") || null,
+    timeseries_port: Number(formData.get("timeseries_port") || 5432),
+    timeseries_database: String(formData.get("timeseries_database") || "") || null,
+    timeseries_username: String(formData.get("timeseries_username") || "") || null,
+    timeseries_password: String(formData.get("timeseries_password") || "") || null,
+    timeseries_use_ssl: String(formData.get("timeseries_use_ssl")) === "true",
+    auto_provision_timeseries_local:
+      String(formData.get("auto_provision_timeseries_local")) === "true",
+    timeseries_local_container_name:
+      String(formData.get("timeseries_local_container_name") || "") || "async-service-monitor-postgres",
+    object_provider: String(formData.get("object_provider") || "local_minio"),
+    object_endpoint: String(formData.get("object_endpoint") || "") || null,
+    object_access_key: String(formData.get("object_access_key") || "") || null,
+    object_secret_key: String(formData.get("object_secret_key") || "") || null,
+    object_bucket: String(formData.get("object_bucket") || "") || "async-service-monitor",
+    object_region: String(formData.get("object_region") || "") || null,
+    object_use_ssl: String(formData.get("object_use_ssl")) === "true",
+    auto_provision_object_local: String(formData.get("auto_provision_object_local")) === "true",
+    object_local_container_name:
+      String(formData.get("object_local_container_name") || "") || "async-service-monitor-minio",
+    object_console_port: Number(formData.get("object_console_port") || 9001),
     retention_hours: Number(formData.get("retention_hours") || 2),
-    use_ssl: String(formData.get("use_ssl")) === "true",
-    auto_provision_local: String(formData.get("auto_provision_local")) === "true",
-    local_container_name: String(formData.get("local_container_name") || "") || "async-service-monitor-mysql",
   };
 }
 
@@ -3603,6 +4173,88 @@ function hydrateEmailSettingsForm(form) {
   }
 }
 
+function hydrateTelemetrySettingsForm(form) {
+  if (!form) return;
+  const timeseriesProvider = form.querySelector("select[name='timeseries_provider']")?.value || "local_postgresql";
+  const autoProvisionTimeseries =
+    timeseriesProvider === "local_postgresql" &&
+    form.querySelector("select[name='auto_provision_timeseries_local']")?.value === "true";
+  const objectProvider = form.querySelector("select[name='object_provider']")?.value || "local_minio";
+  const autoProvisionObject =
+    objectProvider === "local_minio" &&
+    form.querySelector("select[name='auto_provision_object_local']")?.value === "true";
+
+  const setManagedState = (selector, disabled, message) => {
+    form.querySelectorAll(selector).forEach((node) => {
+      node.classList.toggle("managed-field", disabled);
+      const input = node.querySelector("input, select, textarea");
+      if (!input) return;
+      if (disabled) {
+        input.setAttribute("disabled", "disabled");
+        input.setAttribute("title", message);
+      } else {
+        input.removeAttribute("disabled");
+        input.removeAttribute("title");
+      }
+    });
+  };
+
+  if (autoProvisionTimeseries) {
+    const defaults = {
+      timeseries_host: "127.0.0.1",
+      timeseries_port: "5432",
+      timeseries_database: "async_service_monitor",
+      timeseries_username: "asm_telemetry",
+      timeseries_use_ssl: "false",
+    };
+    Object.entries(defaults).forEach(([name, value]) => {
+      const field = form.querySelector(`[name='${name}']`);
+      if (field && !field.value) {
+        field.value = value;
+      }
+    });
+  }
+
+  if (autoProvisionObject) {
+    const defaults = {
+      object_endpoint: "http://127.0.0.1:9000",
+      object_bucket: "async-service-monitor",
+      object_access_key: "asm_minio",
+      object_use_ssl: "false",
+      object_region: "",
+    };
+    Object.entries(defaults).forEach(([name, value]) => {
+      const field = form.querySelector(`[name='${name}']`);
+      if (field && !field.value) {
+        field.value = value;
+      }
+    });
+  }
+
+  setManagedState(
+    "[data-telemetry-timeseries-managed]",
+    autoProvisionTimeseries,
+    "Provisioned automatically by the application."
+  );
+  setManagedState(
+    "[data-telemetry-object-managed]",
+    autoProvisionObject,
+    "Provisioned automatically by the application."
+  );
+
+  const managedNote = form.querySelector("#telemetry-managed-note");
+  if (managedNote) {
+    const notes = [];
+    if (autoProvisionTimeseries) {
+      notes.push("The app will generate and wire in the local PostgreSQL connection settings.");
+    }
+    if (autoProvisionObject) {
+      notes.push("The app will generate and wire in the local MinIO endpoint, bucket, and credentials.");
+    }
+    managedNote.textContent = notes.join(" ");
+  }
+}
+
 function setStatus(element, text, isError = false) {
   if (!element) return;
   element.textContent = text;
@@ -3633,6 +4285,9 @@ async function renderRoute() {
   renderSessionChip();
 
   const path = window.location.pathname;
+  if (path !== "/monitors/new/advanced/monitor-recorder") {
+    stopPlaywrightRecorderPolling();
+  }
   if (path.startsWith("/cluster") || path === "/containers") {
     state.clusterExpanded = true;
   }
@@ -3731,13 +4386,15 @@ async function renderRoute() {
       navigate("/");
       return;
     }
-    const [users, telemetry, portalSettings, emailSettings] = await Promise.all([
+    const [users, telemetry, portalSettings, emailSettings, uiScaling] = await Promise.all([
       api("/api/users"),
       api("/api/settings/telemetry"),
       api("/api/settings/portal"),
       api("/api/settings/email"),
+      api("/api/settings/ui-scaling"),
     ]);
-    renderAdminPage(users, telemetry, portalSettings, emailSettings);
+    renderAdminPage(users, telemetry, portalSettings, emailSettings, uiScaling);
+    hydrateTelemetrySettingsForm(document.getElementById("telemetry-form"));
     hydrateEmailSettingsForm(document.getElementById("email-settings-form"));
     return;
   }
@@ -3799,7 +4456,16 @@ async function renderRoute() {
   }
 
   if (path === "/monitors/new/advanced/monitor-recorder") {
-    renderAdvancedMonitorSubpage("Monitor Recorder", "Reserved for recording monitor journeys and reusable monitor definitions.");
+    const cluster = await api("/api/cluster");
+    if (!state.recorder.sessionId) {
+      const session = await api("/api/recorder/session", { method: "POST" });
+      state.recorder.sessionId = session.session_id;
+    }
+    renderMonitorRecorderPage(cluster);
+    if (state.recorder.playwrightSessionId) {
+      pollPlaywrightRecorderStatus().catch(() => {});
+      startPlaywrightRecorderPolling();
+    }
     return;
   }
 
@@ -4142,6 +4808,24 @@ async function handleSubmit(event) {
     return;
   }
 
+  if (event.target.id === "ui-scaling-form") {
+    event.preventDefault();
+    if (!hasRole("admin")) return;
+    const form = event.target;
+    const status = document.getElementById("ui-scaling-status");
+    try {
+      setStatus(status, "Saving UI scaling settings...");
+      const result = await api("/api/settings/ui-scaling", {
+        method: "PUT",
+        body: JSON.stringify(uiScalingPayload(form)),
+      });
+      setStatus(status, result.message || "UI scaling settings saved.");
+    } catch (error) {
+      setStatus(status, error.message, true);
+    }
+    return;
+  }
+
   if (event.target.id === "monitor-form") {
     event.preventDefault();
     if (!hasRole("read_write")) return;
@@ -4271,6 +4955,24 @@ async function handleSubmit(event) {
       setStatus(status, error.message, true);
     }
   }
+
+  if (event.target.id === "monitor-recorder-form") {
+    event.preventDefault();
+    if (!hasRole("read_write")) return;
+    const form = event.target;
+    const status = document.getElementById("monitor-recorder-form-status");
+    try {
+      setStatus(status, "Saving recorded browser monitor...");
+      await api("/api/checks", {
+        method: "POST",
+        body: JSON.stringify(recorderMonitorPayload(form)),
+      });
+      state.recorder.steps = [];
+      await renderRoute();
+    } catch (error) {
+      setStatus(status, error.message, true);
+    }
+  }
 }
 
 async function handleClick(event) {
@@ -4318,6 +5020,59 @@ async function handleClick(event) {
     return;
   }
 
+  if (event.target.id === "start-monitor-recorder-btn") {
+    if (!hasRole("read_write")) return;
+    const url = document.getElementById("monitor-recorder-url")?.value?.trim() || "";
+    if (!url) {
+      setStatus(document.getElementById("monitor-recorder-status"), "Enter a URL to start recording.", true);
+      return;
+    }
+    await teardownPlaywrightRecorder(true);
+    if (!state.recorder.sessionId) {
+      const session = await api("/api/recorder/session", { method: "POST" });
+      state.recorder.sessionId = session.session_id;
+    }
+    state.recorder.targetUrl = url;
+    state.recorder.steps = [];
+    state.recorder.lastPageUrl = url;
+    clearPlaywrightFallback();
+    renderRecorderSteps();
+    updateRecorderFrame();
+    return;
+  }
+
+  if (event.target.id === "use-playwright-recorder-btn") {
+    if (!hasRole("read_write")) return;
+    const url = document.getElementById("monitor-recorder-url")?.value?.trim() || state.recorder.targetUrl || "";
+    if (!url) {
+      setStatus(document.getElementById("monitor-recorder-status"), "Enter a URL before launching Chromium recorder.", true);
+      return;
+    }
+    await launchPlaywrightRecorder(url);
+    setStatus(document.getElementById("monitor-recorder-status"), "Chromium recorder launched.");
+    return;
+  }
+
+  if (event.target.id === "stop-playwright-recorder-btn") {
+    if (!hasRole("read_write")) return;
+    await teardownPlaywrightRecorder(true);
+    refreshRecorderUi();
+    setStatus(document.getElementById("monitor-recorder-status"), "Chromium recorder stopped.");
+    return;
+  }
+
+  if (event.target.id === "clear-monitor-recorder-btn") {
+    state.recorder.steps = [];
+    renderRecorderSteps();
+    setStatus(document.getElementById("monitor-recorder-status"), "Recorded steps cleared.");
+    return;
+  }
+
+  if (event.target.id === "test-monitor-recorder-btn") {
+    await runMonitorRecorderTest();
+    return;
+  }
+
   if (event.target.id === "test-auth-btn") {
     await runMonitorTest("auth");
     return;
@@ -4354,6 +5109,14 @@ async function handleClick(event) {
   const removeBrowserStep = event.target.closest("[data-remove-browser-step]");
   if (removeBrowserStep) {
     removeBrowserStep.closest("[data-browser-step]")?.remove();
+    return;
+  }
+
+  const removeRecorderStep = event.target.closest("[data-remove-recorder-step]");
+  if (removeRecorderStep) {
+    const index = Number(removeRecorderStep.dataset.removeRecorderStep);
+    state.recorder.steps.splice(index, 1);
+    renderRecorderSteps();
     return;
   }
 
@@ -4486,9 +5249,13 @@ function handleChange(event) {
 
   if (
     event.target.matches("#browser-monitor-form select[name='placement_mode']") ||
+    event.target.matches("#monitor-recorder-form select[name='placement_mode']") ||
     event.target.matches("select[name='browser_step_action']")
   ) {
-    if (event.target.matches("#browser-monitor-form select[name='placement_mode']")) {
+    if (
+      event.target.matches("#browser-monitor-form select[name='placement_mode']") ||
+      event.target.matches("#monitor-recorder-form select[name='placement_mode']")
+    ) {
       const form = event.target.closest("form");
       const placementMode = event.target.value || "auto";
       form.querySelectorAll(".field-assigned-node").forEach((node) => {
@@ -4507,6 +5274,16 @@ function handleChange(event) {
     event.target.matches("[data-network-filter-max]")
   ) {
     applyNetworkFilters();
+    return;
+  }
+
+  if (
+    event.target.matches("#telemetry-form select[name='timeseries_provider']") ||
+    event.target.matches("#telemetry-form select[name='auto_provision_timeseries_local']") ||
+    event.target.matches("#telemetry-form select[name='object_provider']") ||
+    event.target.matches("#telemetry-form select[name='auto_provision_object_local']")
+  ) {
+    hydrateTelemetrySettingsForm(event.target.closest("form"));
     return;
   }
 
@@ -4537,6 +5314,59 @@ function handleInput(event) {
   if (event.target.id === "configured-monitors-search") {
     updateConfiguredMonitorsFilters(event);
     renderRoute().catch((error) => alert(error.message));
+    return;
+  }
+
+  if (event.target.id === "monitor-recorder-url") {
+    state.recorder.targetUrl = event.target.value || "";
+  }
+}
+
+function handleWindowMessage(event) {
+  const payload = event.data;
+  if (!payload || payload.source !== "asm-recorder") return;
+
+  if (payload.event === "navigate" || payload.event === "page_ready") {
+    state.recorder.lastPageUrl = payload.url || state.recorder.lastPageUrl;
+    const pageLabel = document.getElementById("monitor-recorder-page-label");
+    if (pageLabel) {
+      pageLabel.textContent = state.recorder.lastPageUrl || "No page loaded";
+    }
+    if (!state.recorder.steps.length || state.recorder.steps[state.recorder.steps.length - 1]?.url !== payload.url) {
+      state.recorder.steps.push({
+        event: "navigate",
+        url: payload.url || "",
+        title: payload.title || "",
+      });
+      renderRecorderSteps();
+    }
+    const blockedReason = recorderBlockedReason(payload);
+    if (blockedReason) {
+      suggestPlaywrightFallback(blockedReason);
+      setStatus(document.getElementById("monitor-recorder-status"), blockedReason, true);
+    }
+    return;
+  }
+
+  if (payload.event === "click" || payload.event === "fill" || payload.event === "submit") {
+    state.recorder.steps.push({
+      event: payload.event,
+      selector: payload.selector || null,
+      value: payload.value || null,
+      url: payload.href || payload.action || null,
+      title: payload.text || null,
+      method: payload.method || null,
+    });
+    renderRecorderSteps();
+    clearPlaywrightFallback();
+    setStatus(document.getElementById("monitor-recorder-status"), `Captured ${payload.event} action.`);
+    return;
+  }
+
+  if (payload.event === "proxy_error") {
+    const message = payload.message || "Recorder proxy failed.";
+    suggestPlaywrightFallback(recorderBlockedReason(payload) || "The embedded recorder hit an error. Chromium recorder may work better for this site.");
+    setStatus(document.getElementById("monitor-recorder-status"), message, true);
   }
 }
 
@@ -4546,6 +5376,7 @@ function boot() {
   document.addEventListener("change", handleChange);
   document.addEventListener("input", handleInput);
   document.addEventListener("toggle", handleToggle, true);
+  window.addEventListener("message", handleWindowMessage);
   window.addEventListener("popstate", () => renderRoute().catch((error) => alert(error.message)));
   renderRoute().catch((error) => alert(error.message));
   state.pollingHandle = setInterval(() => {
