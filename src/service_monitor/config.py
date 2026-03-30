@@ -112,6 +112,7 @@ class BrowserStepConfig:
     selector: str | None = None
     value: str | None = None
     timeout_seconds: float | None = None
+    sensitive: bool = False
 
 
 @dataclass(slots=True)
@@ -141,6 +142,31 @@ class AlertThresholdsConfig:
     p95_latency_critical_ms: float = 3000.0
     p99_latency_warning_ms: float = 2500.0
     p99_latency_critical_ms: float = 5000.0
+
+
+@dataclass(slots=True)
+class NetworkPathConfig:
+    request_type: Literal["tcp", "udp", "icmp"] = "tcp"
+    source_service: str | None = None
+    destination_service: str | None = None
+    max_ttl: int = 30
+    e2e_queries: int = 50
+    traceroute_queries: int = 3
+    tcp_traceroute_strategy: Literal["sack", "syn", "force_sack"] = "sack"
+    latency_operator_1: Literal["avg", "max", "min"] = "avg"
+    latency_operator_2: Literal["is", "<", "<=", ">", ">="] = "<="
+    latency_value: float | None = None
+    packet_loss_operator: Literal["is", "<", "<=", ">", ">="] = "<="
+    packet_loss_value: float | None = None
+    jitter_operator: Literal["is", "<", "<=", ">", ">="] = "<="
+    jitter_value: float | None = None
+    hops_operator_1: Literal["avg", "max", "min"] = "avg"
+    hops_operator_2: Literal["is", "<", "<=", ">", ">="] = "<="
+    hops_value: float | None = None
+    alert_window_minutes: int = 5
+    n_locations: int = 1
+    total_locations: int = 3
+    tags: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -188,8 +214,20 @@ class EmailConfig:
 
 
 @dataclass(slots=True)
+class SlackConfig:
+    enabled: bool = False
+    webhook_url: str | None = None
+    channel: str | None = None
+    username: str | None = None
+    icon_emoji: str | None = None
+    mention_here: bool = False
+    message_prefix: str = "[async-service-monitor]"
+
+
+@dataclass(slots=True)
 class NotificationsConfig:
     email: EmailConfig = field(default_factory=EmailConfig)
+    slack: SlackConfig = field(default_factory=SlackConfig)
 
 
 @dataclass(slots=True)
@@ -262,7 +300,7 @@ class PortalAuthConfig:
 @dataclass(slots=True)
 class CheckConfig:
     name: str
-    type: Literal["http", "dns", "auth", "database", "generic", "browser", "api"]
+    type: Literal["http", "dns", "auth", "database", "generic", "browser", "api", "network_path"]
     interval_seconds: float
     id: str = field(default_factory=lambda: secrets.token_urlsafe(10))
     enabled: bool = True
@@ -285,6 +323,7 @@ class CheckConfig:
     auth: AuthConfig | None = None
     content: ContentConfig | None = None
     browser: BrowserConfig | None = None
+    network_path: NetworkPathConfig | None = None
     retry: RetryConfig = field(default_factory=RetryConfig)
     alert_thresholds: AlertThresholdsConfig = field(default_factory=AlertThresholdsConfig)
     unauthenticated_probe: UnauthenticatedProbeConfig = field(
@@ -397,6 +436,7 @@ def _parse_browser_step(raw: dict[str, Any]) -> BrowserStepConfig:
         timeout_seconds=(
             float(raw["timeout_seconds"]) if raw.get("timeout_seconds") is not None else None
         ),
+        sensitive=_as_bool(raw.get("sensitive", False)),
     )
 
 
@@ -432,6 +472,40 @@ def _parse_alert_thresholds(raw: dict[str, Any] | None) -> AlertThresholdsConfig
         p95_latency_critical_ms=float(raw.get("p95_latency_critical_ms") or 3000.0),
         p99_latency_warning_ms=float(raw.get("p99_latency_warning_ms") or 2500.0),
         p99_latency_critical_ms=float(raw.get("p99_latency_critical_ms") or 5000.0),
+    )
+
+
+def _parse_network_path(raw: dict[str, Any] | None) -> NetworkPathConfig | None:
+    if not raw:
+        return None
+    return NetworkPathConfig(
+        request_type=raw.get("request_type", "tcp"),
+        source_service=raw.get("source_service"),
+        destination_service=raw.get("destination_service"),
+        max_ttl=max(1, int(raw.get("max_ttl") or 30)),
+        e2e_queries=max(1, int(raw.get("e2e_queries") or 50)),
+        traceroute_queries=max(1, int(raw.get("traceroute_queries") or 3)),
+        tcp_traceroute_strategy=raw.get("tcp_traceroute_strategy", "sack"),
+        latency_operator_1=raw.get("latency_operator_1", "avg"),
+        latency_operator_2=raw.get("latency_operator_2", "<="),
+        latency_value=(
+            float(raw["latency_value"]) if raw.get("latency_value") is not None else None
+        ),
+        packet_loss_operator=raw.get("packet_loss_operator", "<="),
+        packet_loss_value=(
+            float(raw["packet_loss_value"]) if raw.get("packet_loss_value") is not None else None
+        ),
+        jitter_operator=raw.get("jitter_operator", "<="),
+        jitter_value=(
+            float(raw["jitter_value"]) if raw.get("jitter_value") is not None else None
+        ),
+        hops_operator_1=raw.get("hops_operator_1", "avg"),
+        hops_operator_2=raw.get("hops_operator_2", "<="),
+        hops_value=float(raw["hops_value"]) if raw.get("hops_value") is not None else None,
+        alert_window_minutes=max(1, int(raw.get("alert_window_minutes") or 5)),
+        n_locations=max(1, int(raw.get("n_locations") or 1)),
+        total_locations=max(1, int(raw.get("total_locations") or 3)),
+        tags=[str(item).strip() for item in raw.get("tags", []) if str(item).strip()],
     )
 
 
@@ -489,10 +563,27 @@ def _parse_email(raw: dict[str, Any] | None) -> EmailConfig:
     )
 
 
+def _parse_slack(raw: dict[str, Any] | None) -> SlackConfig:
+    if not raw:
+        return SlackConfig()
+    return SlackConfig(
+        enabled=_as_bool(raw.get("enabled", False)),
+        webhook_url=raw.get("webhook_url"),
+        channel=raw.get("channel"),
+        username=raw.get("username"),
+        icon_emoji=raw.get("icon_emoji"),
+        mention_here=_as_bool(raw.get("mention_here", False)),
+        message_prefix=raw.get("message_prefix", "[async-service-monitor]"),
+    )
+
+
 def _parse_notifications(raw: dict[str, Any] | None) -> NotificationsConfig:
     if not raw:
         return NotificationsConfig()
-    return NotificationsConfig(email=_parse_email(raw.get("email")))
+    return NotificationsConfig(
+        email=_parse_email(raw.get("email")),
+        slack=_parse_slack(raw.get("slack")),
+    )
 
 
 def _parse_telemetry(raw: dict[str, Any] | None) -> TelemetryConfig:
@@ -617,6 +708,7 @@ def _parse_check(raw: dict[str, Any]) -> CheckConfig:
         auth=_parse_auth(raw.get("auth")),
         content=_parse_content(raw.get("content")),
         browser=_parse_browser(raw.get("browser")),
+        network_path=_parse_network_path(raw.get("network_path")),
         retry=_parse_retry(raw.get("retry")),
         alert_thresholds=_parse_alert_thresholds(raw.get("alert_thresholds")),
         unauthenticated_probe=_parse_probe(raw.get("unauthenticated_probe")),
@@ -650,6 +742,14 @@ def validate_config(config: AppConfig) -> None:
 
         if check.type == "dns" and not check.host:
             raise ValueError(f"Check '{check.name}' requires a host")
+
+        if check.type == "network_path":
+            if check.network_path is None:
+                raise ValueError(f"Check '{check.name}' requires a network_path block")
+            if not check.host and not check.url:
+                raise ValueError(f"Check '{check.name}' requires a host or url")
+            if check.network_path.request_type == "tcp" and check.port is None and not check.url:
+                raise ValueError(f"Check '{check.name}' requires a port for TCP network path tests")
 
         if check.type == "auth" and not check.auth:
             raise ValueError(f"Check '{check.name}' requires an auth block")
@@ -750,6 +850,11 @@ def validate_config(config: AppConfig) -> None:
             raise ValueError("notifications.email.port must be > 0")
         if email.local_ui_port <= 0:
             raise ValueError("notifications.email.local_ui_port must be > 0")
+
+    slack = config.notifications.slack
+    if slack.enabled:
+        if not slack.webhook_url:
+            raise ValueError("notifications.slack.webhook_url is required when Slack notifications are enabled")
 
     if config.telemetry.enabled:
         required = [

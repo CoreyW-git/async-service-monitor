@@ -14,6 +14,7 @@ from service_monitor.config import (
     PeerConfig,
     PortalAuthConfig,
     PortalUserConfig,
+    SlackConfig,
     TelemetryConfig,
     UIScalingConfig,
     load_config,
@@ -212,6 +213,12 @@ class ConfigStore:
     def update_email_settings(self, email: EmailConfig) -> AppConfig:
         config = self.load()
         config.notifications.email = email
+        self.save(config)
+        return config
+
+    def update_slack_settings(self, slack: SlackConfig) -> AppConfig:
+        config = self.load()
+        config.notifications.slack = slack
         self.save(config)
         return config
 

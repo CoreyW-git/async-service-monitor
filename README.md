@@ -41,7 +41,7 @@ flowchart TD
     B --> E
     C --> E
     E --> F["Failover + Recovery"]
-    F --> G["Email Notifications"]
+    F --> G["Slack + Email Notifications"]
 ```
 
 ### Telemetry Retention

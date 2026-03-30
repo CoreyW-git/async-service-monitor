@@ -11,7 +11,7 @@ import docker
 import httpx
 
 from service_monitor.config import AppConfig, CheckConfig, PeerConfig
-from service_monitor.notifier import EmailNotifier
+from service_monitor.notifier import NotificationManager
 from service_monitor.state import MonitorState
 
 
@@ -25,7 +25,7 @@ class PeerState:
 
 
 class ClusterCoordinator:
-    def __init__(self, config: AppConfig, notifier: EmailNotifier, state: MonitorState) -> None:
+    def __init__(self, config: AppConfig, notifier: NotificationManager, state: MonitorState) -> None:
         self.config = config
         self.notifier = notifier
         self.state = state

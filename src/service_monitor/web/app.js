@@ -25,6 +25,7 @@ function createRecorderState() {
 const state = {
   pollingHandle: null,
   session: null,
+  appVersion: null,
   clusterExpanded: false,
   dashboardRunDiagnostics: {},
   configuredMonitors: {
@@ -42,6 +43,16 @@ const state = {
     status: "all",
     type: "all",
   },
+  apmWorkspace: {
+    selectedCheckKey: "",
+    selectedRunKey: "",
+    traceTab: "flame",
+    detailTab: "overview",
+    selectedSpanId: "",
+    selectedHopId: "",
+    pathLatencyWarningMs: 80,
+    pathLatencyCriticalMs: 200,
+  },
   helpWorkspace: {
     query: "",
   },
@@ -50,6 +61,9 @@ const state = {
     lastTestResult: null,
   },
   browserMonitorBuilder: {
+    lastTestResult: null,
+  },
+  networkPathMonitorBuilder: {
     lastTestResult: null,
   },
   recorder: createRecorderState(),
@@ -88,12 +102,12 @@ const HELP_SECTIONS = [
   {
     id: "operations",
     title: "Operations",
-    summary: "Dashboards, troubleshooting, cluster placement, and live container health.",
+    summary: "Dashboards, APM traces and spans, troubleshooting, cluster placement, and live container health.",
   },
   {
     id: "administration",
     title: "Administration",
-    summary: "Users, roles, telemetry, email, scaling, and security settings.",
+    summary: "Users, roles, telemetry, Slack and email notifications, scaling, and security settings.",
   },
   {
     id: "deployment",
@@ -132,23 +146,37 @@ const HELP_TOPICS = [
     keywords: ["first login", "onboarding", "new user", "start", "quick start"],
     content: () => `
       <h3>Who This Topic Is For</h3>
-      <p>Use this page if you have never used the portal before or if you want the shortest path to getting a monitor working and visible on the dashboards.</p>
+      <p>Use this page if you are new to the portal, new to monitoring in general, or simply want a safe path to your first successful monitor.</p>
+      <div class="help-callout">
+        <strong>Think of the portal like this:</strong>
+        <p>A <strong>monitor</strong> is an automated check. It asks a question on a schedule, such as "Is this page up?", "Did this API respond correctly?", or "Did this browser journey work the way a user expects?"</p>
+      </div>
       <h3>Recommended First Workflow</h3>
       <ol class="help-numbered-list">
-        <li>Sign in and land on <strong>Home</strong> to confirm the service is up.</li>
+        <li>Sign in and land on <strong>Home</strong>. This tells you whether the portal itself is healthy before you begin.</li>
         <li>Open <strong>Monitors</strong>, choose <strong>Add Monitor</strong>, then start with the <strong>Basic Monitor Builder</strong>.</li>
-        <li>Select a request type such as HTTP, API, DNS, Database, or Generic, define the request, and run a live test before you save.</li>
-        <li>Use the right-side live test console to review the request preview, response preview, body content, and assertion results.</li>
-        <li>Save the monitor and immediately open its dedicated dashboard to review availability, latency, and error signals.</li>
-        <li>Use <strong>Administration</strong> only after the first monitor works so storage, email, and scaling changes are easier to validate.</li>
+        <li>Pick the monitor type that best matches what you are trying to watch. If you are unsure, start with <strong>HTTP</strong> or <strong>API</strong>.</li>
+        <li>Fill out the request details and always run a live test before saving. The live test is your proof that the monitor definition makes sense.</li>
+        <li>Read the right-side live test console. It shows you what was sent, what came back, and whether your assertions are reasonable.</li>
+        <li>Save the monitor, then open its dashboard to understand how the service behaves over time, not just once.</li>
+        <li>Move into <strong>Administration</strong> only after the first monitor works. That makes storage, Slack or email alerts, scaling, and cluster changes much easier to validate.</li>
       </ol>
       <div class="help-callout">
         <strong>Best first monitor:</strong>
         <p>An HTTP or API monitor against an internal health endpoint is the easiest way to validate the platform end to end because you can test the request, define assertions, and immediately see the results in the live console.</p>
       </div>
+      <h3>How To Think About Success</h3>
+      <ul class="help-bullet-list">
+        <li><strong>Home</strong> answers: "Is my monitoring fleet generally healthy?"</li>
+        <li><strong>Monitors</strong> answer: "What exactly should I test, and how should I test it?"</li>
+        <li><strong>Dashboards</strong> answer: "How has this service behaved over time, and what went wrong when it failed?"</li>
+        <li><strong>Application Performance Management</strong> answers: "What happened inside one specific monitor run, and where did the time or failure come from?"</li>
+        <li><strong>Administration</strong> answers: "How should the platform itself be configured, secured, and scaled?"</li>
+      </ul>
       <h3>Where To Go Next</h3>
       <div class="help-link-grid">
         <a class="button-link" href="${guideTopicHref("monitors", "basic-monitors")}" data-link>Build Basic Monitors</a>
+        <a class="button-link secondary" href="${guideTopicHref("monitors", "browser-monitoring")}" data-link>Learn Browser Monitors</a>
         <a class="button-link secondary" href="${guideTopicHref("operations", "dashboards-and-troubleshooting")}" data-link>Read Dashboards</a>
         <a class="button-link secondary" href="${guideTopicHref("administration", "administration-workspace")}" data-link>Admin Guide</a>
       </div>
@@ -222,6 +250,10 @@ const HELP_TOPICS = [
           <p>APM-style observability for each monitor with latency, availability, error trends, SLOs, and diagnostics.</p>
         </article>
         <article class="help-example-card">
+          <h4>Application Performance Management</h4>
+          <p>Trace-style investigation for a single monitor run, including inferred flame graphs, span lists, and run metadata.</p>
+        </article>
+        <article class="help-example-card">
           <h4>Monitors</h4>
           <p>Use the monitor builders to create Basic and Advanced monitors, define assertions, test requests, record browser journeys, and control placement.</p>
         </article>
@@ -245,19 +277,21 @@ const HELP_TOPICS = [
     summary: "How to use the Basic Monitor builder for HTTP, API, DNS, Auth, Database, and Generic monitors.",
     keywords: ["basic monitor", "builder", "http", "api", "dns", "auth", "database", "generic", "examples", "port"],
     content: () => `
+      <h3>What A Basic Monitor Is</h3>
+      <p>A Basic Monitor is the easiest way to describe a recurring machine-to-machine check. You tell the portal what to call, what to expect back, how often to run it, and what should count as unhealthy.</p>
       <h3>How The Basic Monitor Builder Works</h3>
       <ol class="help-numbered-list">
         <li><strong>Select Request Type</strong> to choose the monitor family you want to build.</li>
-        <li><strong>Define Request</strong> to provide the URL, host, path, port, method, headers, or body needed for the test.</li>
-        <li><strong>Test Request</strong> to validate the target before you save it.</li>
-        <li><strong>Define Assertions</strong> to set status-code, response-time, response-header, body, or content expectations.</li>
-        <li><strong>Define Retry Conditions</strong> for retry counts, delays, and retryable status codes.</li>
-        <li><strong>Define Scheduling And Alert Conditions</strong> for interval, placement, and threshold behavior.</li>
-        <li><strong>Configure The Monitor</strong> to name it and create it.</li>
+        <li><strong>Define Request</strong> to describe what the monitor should send or connect to.</li>
+        <li><strong>Test Request</strong> to see a real response before you commit the monitor.</li>
+        <li><strong>Define Assertions</strong> to tell the platform what "good" looks like.</li>
+        <li><strong>Define Retry Conditions</strong> to decide how patient the monitor should be with intermittent failures.</li>
+        <li><strong>Define Scheduling And Alert Conditions</strong> to decide how often it runs and when the platform should start warning you.</li>
+        <li><strong>Configure The Monitor</strong> to give it a name and decide whether it should start enabled.</li>
       </ol>
       <div class="help-callout">
         <strong>Live Test Console:</strong>
-        <p>The right-side panel shows the full request preview, response preview, response body, and assertion outcomes while you are building the monitor. Use it before you click create.</p>
+        <p>The right-side panel is your teaching tool while you build. It shows the full request preview, response preview, response body, and assertion outcomes. If the live test does not make sense to you there, the saved monitor will not make sense later either.</p>
       </div>
       <h3>Available Basic Monitor Types</h3>
       <div class="help-example-grid">
@@ -316,13 +350,25 @@ Host: cache.internal
 Port: 6379</pre>
         </article>
       </div>
+      <h3>How To Choose The Right Type</h3>
+      <ul class="help-bullet-list">
+        <li>Choose <strong>HTTP</strong> when you mostly care whether a page or endpoint is reachable and returns the right content.</li>
+        <li>Choose <strong>API</strong> when you need a richer request definition with methods, headers, bodies, and response rules.</li>
+        <li>Choose <strong>Auth</strong> when the main question is whether a protected endpoint accepts the expected credentials or token.</li>
+        <li>Choose <strong>DNS</strong> when the problem you are trying to detect is name resolution.</li>
+        <li>Choose <strong>Database</strong> when the concern is whether the database endpoint itself is reachable and alive.</li>
+        <li>Choose <strong>Generic</strong> when you just need simple host or port connectivity without HTTP semantics.</li>
+      </ul>
       <h3>Important Configuration Choices</h3>
       <ul class="help-bullet-list">
-        <li><strong>Port</strong> is available anywhere a service might not use a default port.</li>
-        <li><strong>API request definitions</strong> support HTTP method, headers, and request body so the monitor can reflect a real API call instead of a shallow ping.</li>
+        <li><strong>Port</strong> matters when the service is not on its usual default. This is common with internal APIs, alternate web ports, and custom database listeners.</li>
+        <li><strong>Request Method</strong> matters most for API monitors. A GET checks reads, but POST, PUT, PATCH, or DELETE can represent a more realistic API behavior.</li>
+        <li><strong>Request Headers</strong> are where you add tokens, content type, version headers, and correlation IDs.</li>
+        <li><strong>Assertions</strong> define success. A monitor without useful assertions often becomes a shallow ping rather than a meaningful health check.</li>
+        <li><strong>Retry Conditions</strong> help reduce noise when a system is briefly flaky instead of truly down.</li>
         <li><strong>Placement</strong> controls whether a monitor is auto-balanced or pinned to a specific monitoring node.</li>
-        <li><strong>Alert Thresholds</strong> can be learned automatically or set manually per monitor.</li>
-        <li><strong>Validation Rules</strong> should be strict enough to catch regressions but not so strict that harmless copy changes create noise.</li>
+        <li><strong>Alert Thresholds</strong> can be learned automatically or set manually per monitor, which is useful when one service is naturally slower than another.</li>
+        <li><strong>Validation Rules</strong> should be strict enough to catch regressions but not so strict that harmless copy changes create false alarms.</li>
       </ul>
     `,
   },
@@ -334,21 +380,35 @@ Port: 6379</pre>
     keywords: ["browser health", "synthetic", "journey", "playwright", "chromium", "network", "har"],
     content: () => `
       <h3>What Browser Health Monitors Do</h3>
-      <p>Browser monitors go beyond availability. They open a page, wait for content, execute journey steps, record timing, and capture browser-specific diagnostics such as failed requests and console errors.</p>
+      <p>Browser monitors are for user-like testing. Instead of only asking "Did the server answer?", they ask "Did the page load the way a user needs it to load?"</p>
+      <p>They open a real browser context, load the page, run journey steps, record timing, and collect browser-specific diagnostics such as failed requests, console noise, and runtime page errors.</p>
       <h3>What To Configure</h3>
       <ul class="help-bullet-list">
-        <li>Target page URL and optional custom port</li>
-        <li>Viewport size for the synthetic browser session</li>
-        <li>Expected page title fragments</li>
-        <li>Required selectors that must render for success</li>
-        <li>Journey steps such as navigate, click, fill, press, and assertions</li>
-        <li>Optional authenticated session reuse for continuous runs</li>
-        <li>Per-monitor alert thresholds in either auto-learned or manual mode</li>
+        <li><strong>Target page URL</strong>: where the browser journey starts.</li>
+        <li><strong>Wait Until</strong>: how patient the browser should be before treating the page as loaded enough to continue.</li>
+        <li><strong>Viewport size</strong>: how large the browser window should be during the synthetic run.</li>
+        <li><strong>Enable page scripts</strong>: whether JavaScript should run normally while loading and replaying the journey.</li>
+        <li><strong>Expected page title</strong>: a simple way to confirm you are on the right page.</li>
+        <li><strong>Required selectors</strong>: a way to confirm key page elements actually rendered.</li>
+        <li><strong>Journey steps</strong>: actions such as navigate, click, fill, press, waits, and assertions.</li>
+        <li><strong>Fail on script requests</strong>: decide whether failed JavaScript file loads are just diagnostic noise or a true monitor failure.</li>
+        <li><strong>Fail on page errors</strong>: decide whether browser runtime errors should fail the run or only be recorded as diagnostics.</li>
+        <li><strong>Authenticated session reuse</strong>: whether a captured signed-in browser session should be reused during scheduled runs.</li>
+        <li><strong>Per-monitor alert thresholds</strong>: either auto-learned from behavior or manually set.</li>
       </ul>
       <div class="help-callout">
         <strong>Use Browser Health when:</strong>
         <p>You need to know whether the page experience is truly working, not just whether the endpoint returned a 200.</p>
       </div>
+      <h3>How To Think About The New Browser Options</h3>
+      <ul class="help-bullet-list">
+        <li><strong>Wait Until = Load</strong> is usually the best default for modern, script-heavy websites.</li>
+        <li><strong>Wait Until = DOMContentLoaded</strong> is useful when you care about earlier page structure rather than every late asset.</li>
+        <li><strong>Wait Until = Network Idle</strong> is stricter, but many dynamic sites never go truly quiet, so it can be too aggressive.</li>
+        <li><strong>Disable page scripts</strong> only when you are troubleshooting a noisy site or trying to understand how much of the experience depends on JavaScript.</li>
+        <li><strong>Fail on script errors</strong> should be enabled when missing scripts truly mean the page is broken for users.</li>
+        <li><strong>Fail on page errors</strong> should be enabled when JavaScript runtime errors are operationally important, even if the page still looks usable.</li>
+      </ul>
       <h3>What Appears On The Dashboard</h3>
       <p>Browser dashboards surface P50, average, P95, and P99 latency trends, availability, error trends, step-level outcomes, session diagnostics, network diagnostics, and downloadable HAR-style files for deeper investigation.</p>
     `,
@@ -360,6 +420,8 @@ Port: 6379</pre>
     summary: "Record clicks, form fills, and navigation as a synthetic browser monitor.",
     keywords: ["recorder", "record", "browser recorder", "embedded", "chromium recorder", "auth session"],
     content: () => `
+      <h3>What The Recorder Is For</h3>
+      <p>The Monitor Recorder is a teaching and capture tool. It lets you act like a user in a browser, then turns what you did into a reusable synthetic browser monitor.</p>
       <h3>Recorder Modes</h3>
       <div class="help-example-grid">
         <article class="help-example-card">
@@ -374,18 +436,33 @@ Port: 6379</pre>
       <h3>Recommended Workflow</h3>
       <ol class="help-numbered-list">
         <li>Open <strong>Monitors → Add Monitor → Advanced Monitor → Monitor Recorder</strong>.</li>
+        <li>Set the recorder target settings before you launch it. This now includes <strong>Wait Until</strong>, viewport size, script enablement, and the browser failure options you want the saved monitor to use.</li>
         <li>Enter the target URL and start with the embedded recorder.</li>
-        <li>If the page is blocked, rate limited, or starts behaving badly inside the embedded view, switch to <strong>Use Chromium Recorder</strong>.</li>
-        <li>Click through the journey, including login if needed.</li>
+        <li>If the page is blocked, rate limited, or behaves badly inside the embedded view, switch to <strong>Use Chromium Recorder</strong>.</li>
+        <li>Click through the journey exactly the way you want the synthetic monitor to behave later.</li>
+        <li>Use the assertions section to decide what must be true after the journey completes.</li>
         <li>Choose whether to persist the authenticated browser session for future scheduled runs.</li>
         <li>Test the journey, then save it as a browser monitor.</li>
       </ol>
+      <h3>Recorder Target Settings Explained</h3>
+      <ul class="help-bullet-list">
+        <li><strong>Target URL</strong>: the page the recorder should open first.</li>
+        <li><strong>Wait Until</strong>: how long Playwright waits during page navigation before continuing. For sites like Yahoo Finance, <strong>Load</strong> is usually the right answer.</li>
+        <li><strong>Viewport Width / Height</strong>: the browser window size used for recording and replaying.</li>
+        <li><strong>Enable page scripts</strong>: lets JavaScript execute normally. Turn it off when you want a quieter troubleshooting view.</li>
+        <li><strong>Fail on script requests</strong>: if on, failed script loads become hard failures in the saved browser monitor.</li>
+        <li><strong>Fail on page errors</strong>: if on, runtime page errors become hard failures in the saved browser monitor.</li>
+      </ul>
       <h3>What The Desktop Recorder Does Differently</h3>
       <ul class="help-bullet-list">
         <li>Launches a separate visible browser helper in your desktop session.</li>
         <li>Keeps the recorder focused on one controlled page even when a site attempts to open new tabs or popups.</li>
         <li>Streams recorded steps, page navigation, and captured browser session state back into the portal.</li>
       </ul>
+      <div class="help-callout">
+        <strong>When a recorded test fails:</strong>
+        <p>If the journey steps succeeded but the page produced script or runtime noise, decide whether that noise should really count as a failure. That is exactly what the new <strong>Fail on script requests</strong> and <strong>Fail on page errors</strong> settings are for.</p>
+      </div>
       <h3>Authentication Notes</h3>
       <p>The recorder can capture browser session state and reuse it later. You can also update the stored browser session manually on the saved monitor page without recreating the entire monitor.</p>
     `,
@@ -403,6 +480,13 @@ Port: 6379</pre>
         <li><strong>Latency</strong> shows P50, average, P95, and P99 performance characteristics.</li>
         <li><strong>Error Trend</strong> counts failures and smaller browser/runtime errors separately from full outages.</li>
         <li><strong>Traffic</strong> shows how many monitor runs are contributing to the current window.</li>
+      </ul>
+      <h3>How To Read A Browser Dashboard</h3>
+      <ul class="help-bullet-list">
+        <li>If <strong>Availability</strong> drops, the monitor itself is failing.</li>
+        <li>If availability stays high but <strong>Error Trend</strong> rises, the page may still be loading while producing unhealthy browser behavior.</li>
+        <li>If <strong>P95</strong> or <strong>P99</strong> spike while P50 stays normal, the service is inconsistent rather than uniformly slow.</li>
+        <li>If the <strong>Run Diagnostics</strong> section shows script failures or page errors, compare that with the monitor’s failure settings before deciding whether to tighten or relax the monitor definition.</li>
       </ul>
       <h3>Four Golden Signals In This Portal</h3>
       <ul class="help-bullet-list">
@@ -423,6 +507,36 @@ Port: 6379</pre>
         <strong>Tip:</strong>
         <p>If a browser page loads but still feels broken, look at the error trend and the session diagnostics rather than only the high-level availability line.</p>
       </div>
+    `,
+  },
+  {
+    id: "apm-workspace",
+    section: "operations",
+    title: "Application Performance Management",
+    summary: "Use trace-style views to inspect one monitor run in detail.",
+    keywords: ["apm", "application performance management", "trace", "span", "flame graph", "metadata"],
+    content: () => `
+      <h3>What This Page Is For</h3>
+      <p>The Application Performance Management page helps you inspect a <strong>single monitor run</strong> much more deeply than the regular dashboards. It is useful when you want to understand not only whether a run passed or failed, but <em>where the time went</em> and <em>which internal steps contributed to the outcome</em>.</p>
+      <h3>How To Use It</h3>
+      <ol class="help-numbered-list">
+        <li>Select a monitor from the left side.</li>
+        <li>Select a specific test run for that monitor.</li>
+        <li>Use <strong>Flame Graph</strong> to see an execution-style timeline of the inferred trace and spans.</li>
+        <li>Use <strong>Span List</strong> when you want a cleaner table view of every span that was captured or inferred for that run.</li>
+        <li>Select a span to inspect its Overview, Infrastructure, Metrics, Logs, Network, Processes, SQL or DB details, Tags, and Error state.</li>
+      </ol>
+      <div class="help-callout">
+        <strong>Important:</strong>
+        <p>This first version builds the trace view from the telemetry the monitor already captures. Browser runs are the richest because they already record journey steps, page performance, network activity, console messages, and page errors.</p>
+      </div>
+      <h3>What To Expect By Monitor Type</h3>
+      <ul class="help-bullet-list">
+        <li><strong>Browser monitors</strong> show the most detailed spans, including navigation, journey steps, and request-level network spans.</li>
+        <li><strong>HTTP and API monitors</strong> show request and validation-style spans.</li>
+        <li><strong>Database monitors</strong> show connection and validation-style spans, and the SQL section is reserved for richer future query capture.</li>
+        <li><strong>DNS, auth, and generic monitors</strong> still render useful timing and metadata, but with fewer inferred spans.</li>
+      </ul>
     `,
   },
   {
@@ -451,9 +565,11 @@ Port: 6379</pre>
     id: "administration-workspace",
     section: "administration",
     title: "Administration Workspace",
-    summary: "Users, roles, profile settings, email, telemetry, scaling, and service configuration.",
+    summary: "Users, roles, profile settings, Slack and email notifications, telemetry, scaling, and service configuration.",
     keywords: ["administration", "users", "roles", "read only", "read write", "admin", "service configuration"],
     content: () => `
+      <h3>What Administration Is For</h3>
+      <p>Administration is where you manage the platform itself rather than a single monitor. If Monitors define <em>what</em> to test, Administration defines <em>how the platform runs</em>, <em>who can use it</em>, and <em>where the platform stores and sends its operational data</em>.</p>
       <h3>User Roles</h3>
       <div class="help-example-grid">
         <article class="help-example-card">
@@ -466,23 +582,32 @@ Port: 6379</pre>
         </article>
         <article class="help-example-card">
           <h4>Administrator</h4>
-          <p>Full access to users, telemetry, email, auth, scaling, container management, and other platform settings.</p>
+          <p>Full access to users, telemetry, Slack and email notifications, auth, scaling, container management, and other platform settings.</p>
         </article>
       </div>
       <h3>Service Configuration Areas</h3>
       <ul class="help-bullet-list">
-        <li>Telemetry storage for PostgreSQL and MinIO or OCI object storage</li>
-        <li>Email notification provider settings and optional local email service provisioning</li>
-        <li>Portal authentication settings and OCI auth scaffolding</li>
-        <li>UI scaling controls for Docker-based dashboard replicas and sticky/session-aware access</li>
-        <li>Cluster And Containers controls for peer definitions, node status, container scope, and container lifecycle</li>
+        <li><strong>Telemetry storage</strong> for PostgreSQL and MinIO or OCI object storage</li>
+        <li><strong>Email notifications</strong> for external email providers or a locally provisioned email service</li>
+        <li><strong>Slack notifications</strong> for webhook-based delivery into channels, shared alert streams, or on-call rooms</li>
+        <li><strong>Portal authentication</strong> for current sign-in behavior and future OCI auth integration</li>
+        <li><strong>UI scaling</strong> for Docker-based dashboard replicas and session-aware access</li>
+        <li><strong>Cluster And Containers</strong> for peer definitions, node status, container scope, and container lifecycle</li>
       </ul>
       <h3>Administration Page Layout</h3>
       <ul class="help-bullet-list">
         <li><strong>User Administration</strong> is for accounts, access levels, and profile-related governance.</li>
-        <li><strong>Application Configuration</strong> is for telemetry, email, auth, scaling, and cloud integration settings.</li>
+        <li><strong>Application Configuration</strong> is for telemetry, Slack and email notifications, auth, scaling, and cloud integration settings.</li>
         <li><strong>Cluster And Containers</strong> is for monitoring-node configuration, live cluster status, and container management.</li>
       </ul>
+      <h3>How To Use Administration Safely</h3>
+      <ol class="help-numbered-list">
+        <li>Get at least one monitor working first.</li>
+        <li>Turn on telemetry storage next so the platform can retain meaningful history.</li>
+        <li>Configure Slack or email notifications after storage so you can validate alerts against real data.</li>
+        <li>Enable UI scaling only when dashboard demand justifies it.</li>
+        <li>Adjust cluster and container settings only when you understand how the monitoring nodes are sharing work.</li>
+      </ol>
     `,
   },
   {
@@ -748,7 +873,17 @@ async function api(path, options = {}) {
   });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(body.detail || `Request failed: ${response.status}`);
+    const detail = body?.detail;
+    const message = typeof detail === "string"
+      ? detail
+      : Array.isArray(detail)
+        ? detail
+            .map((item) => (typeof item === "string" ? item : item?.msg || item?.message || JSON.stringify(item)))
+            .join(", ")
+        : detail && typeof detail === "object"
+          ? detail.message || detail.msg || JSON.stringify(detail)
+          : `Request failed: ${response.status}`;
+    throw new Error(message);
   }
   const type = response.headers.get("content-type") || "";
   return type.includes("application/json") ? response.json() : response.text();
@@ -1404,6 +1539,113 @@ function hydratePlotlyCharts(root = document) {
         xaxis: { gridcolor: palette.line, color: palette.muted },
         yaxis: { gridcolor: palette.line, color: palette.muted, title: { text: "Errors", font: { color: palette.muted, size: 10 } } },
       };
+    } else if (kind === "apm-flame") {
+      const spans = Array.isArray(payload.spans) ? payload.spans : [];
+      traces = [{
+        x: spans.map((span) => Number(span.durationMs || 0)),
+        y: spans.map((span) => span.name || "Span"),
+        base: spans.map((span) => Number(span.startMs || 0)),
+        customdata: spans.map((span) => [span.kind || "span", span.status || "healthy"]),
+        type: "bar",
+        orientation: "h",
+        marker: {
+          color: spans.map((span) => span.status === "unhealthy" ? palette.red : span.kind === "network" ? "#2563eb" : span.kind === "navigation" ? "#7c3aed" : palette.green),
+        },
+        hovertemplate: "%{y}<br>Start %{base:.0f} ms<br>Duration %{x:.0f} ms<br>Kind %{customdata[0]}<br>Status %{customdata[1]}<extra></extra>",
+      }];
+      layout = {
+        ...layout,
+        height: Math.max(240, spans.length * 28),
+        margin: { l: 180, r: 18, t: 8, b: 28 },
+        xaxis: { gridcolor: palette.line, color: palette.muted, title: { text: "Elapsed Time (ms)", font: { color: palette.muted, size: 10 } } },
+        yaxis: { autorange: "reversed", color: palette.muted, fixedrange: true },
+      };
+    } else if (kind === "path-e2e") {
+      traces = [
+        {
+          x: points.map((point) => point.query),
+          y: points.map((point) => Number(point.latency_ms || 0)),
+          type: "scatter",
+          mode: "lines+markers",
+          name: "Latency (ms)",
+          line: { color: "#2563eb", width: 3 },
+          marker: { size: 8, color: points.map((point) => point.success ? palette.green : palette.red) },
+          hovertemplate: "Query %{x}<br>Latency %{y:.2f} ms<extra></extra>",
+        },
+        {
+          x: points.map((point) => point.query),
+          y: points.map((point) => Number(point.packet_loss_pct || 0)),
+          type: "scatter",
+          mode: "lines+markers",
+          name: "Packet Loss (%)",
+          yaxis: "y2",
+          line: { color: palette.red, width: 2, dash: "dot" },
+          marker: { size: 6, color: palette.red },
+          hovertemplate: "Query %{x}<br>Packet Loss %{y:.2f}%<extra></extra>",
+        },
+      ];
+      layout = {
+        ...layout,
+        height: payload.height || 220,
+        legend: { orientation: "h", x: 0, y: 1.14, font: { color: palette.muted, size: 10 } },
+        xaxis: { gridcolor: palette.line, color: palette.muted, title: { text: "Query", font: { color: palette.muted, size: 10 } } },
+        yaxis: { gridcolor: palette.line, color: palette.muted, title: { text: "Latency (ms)", font: { color: palette.muted, size: 10 } } },
+        yaxis2: { overlaying: "y", side: "right", showgrid: false, color: palette.muted, title: { text: "Packet Loss (%)", font: { color: palette.muted, size: 10 } } },
+      };
+    } else if (kind === "path-hop") {
+      traces = [{
+        x: points.map((point) => `Hop ${point.hop}`),
+        y: points.map((point) => Number(point.latency_ms || 0)),
+        type: "bar",
+        marker: {
+          color: points.map((point) => {
+            if (point.timeout) return palette.red;
+            if (Number(point.latency_ms || 0) >= Number(payload.criticalMs || 200)) return palette.red;
+            if (Number(point.latency_ms || 0) >= Number(payload.warningMs || 80)) return palette.amber;
+            return palette.green;
+          }),
+        },
+        customdata: points.map((point) => [point.address || "*", point.timeout ? "timeout" : "reachable", Number(point.packet_loss_pct || 0)]),
+        hovertemplate: "%{x}<br>Latency %{y:.2f} ms<br>Address %{customdata[0]}<br>Status %{customdata[1]}<br>Packet Loss %{customdata[2]:.2f}%<extra></extra>",
+      }];
+      layout = {
+        ...layout,
+        height: payload.height || 220,
+        xaxis: { gridcolor: palette.line, color: palette.muted, title: { text: "Hop", font: { color: palette.muted, size: 10 } } },
+        yaxis: { gridcolor: palette.line, color: palette.muted, title: { text: "Latency (ms)", font: { color: palette.muted, size: 10 } } },
+      };
+    } else if (kind === "path-hop-history") {
+      traces = [
+        {
+          x: points.map((point) => new Date(Number(point.timestamp || 0) * 1000)),
+          y: points.map((point) => Number(point.latency_ms || 0)),
+          type: "scatter",
+          mode: "lines+markers",
+          name: "Hop Latency (ms)",
+          line: { color: "#2563eb", width: 3 },
+          marker: { size: 8, color: points.map((point) => point.timeout ? palette.red : palette.green) },
+          hovertemplate: "%{x}<br>Latency %{y:.2f} ms<extra></extra>",
+        },
+        {
+          x: points.map((point) => new Date(Number(point.timestamp || 0) * 1000)),
+          y: points.map((point) => Number(point.packet_loss_pct || 0)),
+          type: "scatter",
+          mode: "lines+markers",
+          name: "Hop Packet Loss (%)",
+          yaxis: "y2",
+          line: { color: palette.red, width: 2, dash: "dot" },
+          marker: { size: 6, color: palette.red },
+          hovertemplate: "%{x}<br>Packet Loss %{y:.2f}%<extra></extra>",
+        },
+      ];
+      layout = {
+        ...layout,
+        height: payload.height || 220,
+        legend: { orientation: "h", x: 0, y: 1.14, font: { color: palette.muted, size: 10 } },
+        xaxis: { gridcolor: palette.line, color: palette.muted },
+        yaxis: { gridcolor: palette.line, color: palette.muted, title: { text: "Latency (ms)", font: { color: palette.muted, size: 10 } } },
+        yaxis2: { overlaying: "y", side: "right", showgrid: false, color: palette.muted, title: { text: "Packet Loss (%)", font: { color: palette.muted, size: 10 } } },
+      };
     } else {
       return;
     }
@@ -1562,6 +1804,7 @@ function checkCategoryLabel(type) {
     generic: "Generic",
     database: "Database",
     browser: "Browser",
+    network_path: "Network Path",
   };
   return labels[type] || String(type || "Other").toUpperCase();
 }
@@ -1662,8 +1905,9 @@ function renderSidebar(checks, containersData) {
           currentPath.startsWith("/monitors/"));
       const isHomeLink = href === "/" && currentPath === "/";
       const isDashboardsLink = href === "/dashboards" && (currentPath === "/dashboards" || currentPath.startsWith("/dashboards/"));
+      const isApmLink = href === "/apm" && (currentPath === "/apm" || currentPath.startsWith("/apm/"));
       const isAdminLink = href === "/admin" && (currentPath === "/admin" || currentPath.startsWith("/admin/"));
-      link.classList.toggle("active", visible && (isHomeLink || isDashboardsLink || isAdminLink || href === currentPath || isMonitorsLink));
+      link.classList.toggle("active", visible && (isHomeLink || isDashboardsLink || isApmLink || isAdminLink || href === currentPath || isMonitorsLink));
     }
   });
 }
@@ -1768,6 +2012,10 @@ function renderAdvancedMonitorHomePage() {
             <h4>Browser Health Monitor</h4>
             <p>Create a browser-focused synthetic monitoring workflow.</p>
           </a>
+          <a class="guide-card" href="/monitors/new/advanced/network-path-monitor" data-link>
+            <h4>Network Path Monitor</h4>
+            <p>Design a synthetic network path workflow for TCP, UDP, and ICMP route visibility.</p>
+          </a>
           <a class="guide-card" href="/monitors/new/advanced/real-user-monitoring" data-link>
             <h4>Real User Monitoring</h4>
             <p>Prepare a workflow for capturing real user monitoring data and experiences.</p>
@@ -1780,6 +2028,260 @@ function renderAdvancedMonitorHomePage() {
       </section>
     </div>
   `;
+}
+
+function renderNetworkPathMonitorPage() {
+  renderNetworkPathMonitorBuilder(
+    {
+      name: "Network Path Monitor",
+      type: "network_path",
+      enabled: true,
+      interval_seconds: 300,
+      timeout_seconds: 30,
+      status: "unknown",
+      url: "",
+      host: "",
+      port: 443,
+      network_path: {
+        request_type: "tcp",
+        source_service: "",
+        destination_service: "",
+        max_ttl: 30,
+        e2e_queries: 10,
+        traceroute_queries: 1,
+        tcp_traceroute_strategy: "sack",
+        latency_operator_1: "avg",
+        latency_operator_2: "<=",
+        latency_value: 250,
+        packet_loss_operator: "<=",
+        packet_loss_value: 1,
+        jitter_operator: "<=",
+        jitter_value: 10,
+        hops_operator_1: "avg",
+        hops_operator_2: "<=",
+        hops_value: 12,
+        alert_window_minutes: 5,
+        n_locations: 1,
+        total_locations: 3,
+        tags: [],
+      },
+    },
+    "create",
+    state.networkPathMonitorBuilder.lastTestResult
+  );
+}
+
+function networkPathMonitorPreviewMarkup(result) {
+  const details = result?.details || {};
+  const target = details.target || {};
+  const stats = details.stats || {};
+  const latency = stats.latency_ms || {};
+  const networkHops = stats.network_hops || {};
+  const probe = details.probe || {};
+  const assertions = Array.isArray(details.assertions) ? details.assertions : [];
+  const traces = Array.isArray(details.path?.traces) ? details.path.traces : [];
+  const firstTrace = traces[0] || {};
+  const hops = Array.isArray(firstTrace.hops) ? firstTrace.hops : [];
+  return `
+    <aside class="panel monitor-builder-preview" id="network-path-builder-preview">
+      <div class="panel-head">
+        <h3>Live Path Console</h3>
+        <p>${result ? "Latest path test output, hop data, and assertion results." : "Run a path test and this panel will fill with latency, packet loss, jitter, traceroute hops, and assertion details."}</p>
+      </div>
+      ${
+        result
+          ? `
+            <div class="builder-preview-stack">
+              <div class="guide-card compact-card">
+                <h4>Latest Outcome</h4>
+                <p>${escapeHtml(result.message || "No message")}</p>
+                <div class="status-meta">
+                  <span>${statusLabel(result.success ? "healthy" : "unhealthy")}</span>
+                  <span>${formatDuration(result.duration_ms)}</span>
+                  <span>${escapeHtml((details.request_type || "tcp").toUpperCase())}</span>
+                </div>
+              </div>
+              <div class="guide-card compact-card">
+                <h4>Target</h4>
+                <p>${escapeHtml(target.display || target.host || "Unknown target")}</p>
+                <div class="status-meta">
+                  <span>Host: ${escapeHtml(target.host || "n/a")}</span>
+                  <span>Port: ${escapeHtml(target.port ?? "n/a")}</span>
+                </div>
+              </div>
+              <div class="guide-card">
+                <h4>Network Summary</h4>
+                <pre class="mono builder-preview-block">${escapeHtml(JSON.stringify({
+                  latency_ms: latency,
+                  packet_loss_pct: stats.packet_loss_pct,
+                  jitter_ms: stats.jitter_ms,
+                  network_hops: networkHops,
+                }, null, 2))}</pre>
+              </div>
+              <div class="guide-card ${assertions.length ? "" : "hidden"}">
+                <h4>Assertion Results</h4>
+                <pre class="mono builder-preview-block">${escapeHtml(
+                  assertions.map((item) => `${item.success ? "PASS" : "FAIL"}: ${item.message || item.name}`).join("\n")
+                )}</pre>
+              </div>
+              <div class="guide-card">
+                <h4>Traceroute Hops</h4>
+                <pre class="mono builder-preview-block">${escapeHtml(
+                  hops.length
+                    ? hops.map((hop) => `Hop ${hop.hop}: ${hop.address || "*"} | avg ${hop.avg_latency_ms ?? "n/a"} ms`).join("\n")
+                    : JSON.stringify(firstTrace, null, 2)
+                )}</pre>
+              </div>
+              <div class="guide-card">
+                <h4>Probe Details</h4>
+                <pre class="mono builder-preview-block">${escapeHtml(JSON.stringify(probe, null, 2))}</pre>
+              </div>
+            </div>
+          `
+          : `
+            <div class="guide-card">
+              <h4>No Test Yet</h4>
+              <p>Define the target, run a path test, and this panel will show the traceroute, latency, packet loss, jitter, and assertion outcomes.</p>
+            </div>
+          `
+      }
+    </aside>
+  `;
+}
+
+function networkPathMonitorBuilderMarkup(check, mode = "create", testResult = null) {
+  const isNew = mode === "create";
+  const config = check.network_path || {};
+  const targetValue = check.url || check.host || "";
+  return `
+    <div class="monitor-builder-layout">
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Network Path Monitor Builder</h3>
+          <p>Define a route-aware synthetic monitor, test the path live, tune the assertions, and then save it once the network output looks right.</p>
+        </div>
+
+        <form class="check-form monitor-builder-form" id="network-path-monitor-form" data-original-name="${escapeHtml(isNew ? "" : (check.name || ""))}" data-original-id="${escapeHtml(isNew ? "" : (check.id || ""))}">
+          <details class="accordion-item" open>
+            <summary class="accordion-summary">
+              <div>
+                <strong>1. Define The Network Request</strong>
+                <div class="status-meta">
+                  <span>Choose TCP, UDP, or ICMP and the target route</span>
+                </div>
+              </div>
+            </summary>
+            <div class="accordion-body builder-section-grid">
+              <label><span title="Choose the probe type the monitor should send into the network path.">Request Type</span><select name="request_type"><option value="tcp" ${config.request_type === "tcp" ? "selected" : ""}>TCP</option><option value="udp" ${config.request_type === "udp" ? "selected" : ""}>UDP</option><option value="icmp" ${config.request_type === "icmp" ? "selected" : ""}>ICMP</option></select></label>
+              <label><span title="The hostname, IP address, or URL you want the path test to query.">Host Or URL</span><input name="target" value="${escapeHtml(targetValue)}" placeholder="finance.yahoo.com or https://finance.yahoo.com" /></label>
+              <label><span title="Port is required for most TCP tests and optional for UDP and ICMP depending on how you want the probe to behave.">Port</span><input name="port" type="number" min="1" value="${escapeHtml(check.port || "")}" placeholder="443" /></label>
+              <label><span title="This label is shown for the synthetic source in the path visualization.">Source Service</span><input name="source_service" value="${escapeHtml(config.source_service || "")}" placeholder="Synthetic Runner - Phoenix" /></label>
+              <label><span title="This label is shown for the destination in the path visualization.">Destination Service</span><input name="destination_service" value="${escapeHtml(config.destination_service || "")}" placeholder="Public Finance Edge" /></label>
+              <p class="form-note">Use TCP to mimic application reachability, UDP for connectionless services, and ICMP for classic reachability plus path analysis.</p>
+            </div>
+          </details>
+
+          <details class="accordion-item">
+            <summary class="accordion-summary">
+              <div>
+                <strong>2. Configure Path Testing</strong>
+                <div class="status-meta">
+                  <span>Traceroute depth and end-to-end probe volume</span>
+                </div>
+              </div>
+            </summary>
+            <div class="accordion-body builder-section-grid">
+              <label><span title="Maximum hop count the outgoing probe packets are allowed to travel before the route is considered exhausted.">Max TTL</span><input name="max_ttl" type="number" min="1" value="${escapeHtml(config.max_ttl || 30)}" /></label>
+              <label><span title="How many end-to-end packets should be sent to the destination to measure latency, jitter, and packet loss.">E2E Queries</span><input name="e2e_queries" type="number" min="1" value="${escapeHtml(config.e2e_queries || 10)}" /></label>
+              <label><span title="How many traceroute path measurements should be executed and aggregated for each monitor run.">Traceroute Queries</span><input name="traceroute_queries" type="number" min="1" value="${escapeHtml(config.traceroute_queries || 1)}" /></label>
+              <label><span title="For TCP path testing, choose how the traceroute packets should behave so they better match modern application traffic patterns.">TCP Traceroute Strategy</span><select name="tcp_traceroute_strategy"><option value="sack" ${config.tcp_traceroute_strategy === "sack" ? "selected" : ""}>Selective Acknowledgement (SACK)</option><option value="syn" ${config.tcp_traceroute_strategy === "syn" ? "selected" : ""}>Synchronize (SYN)</option><option value="force_sack" ${config.tcp_traceroute_strategy === "force_sack" ? "selected" : ""}>Force SACK</option></select></label>
+              <div class="button-row">
+                <button type="button" class="secondary" id="test-network-path-monitor-btn">Test Network Path</button>
+              </div>
+            </div>
+          </details>
+
+          <details class="accordion-item ${testResult ? "" : "builder-locked"}">
+            <summary class="accordion-summary">
+              <div>
+                <strong>3. Define Assertions</strong>
+                <div class="status-meta">
+                  <span>Latency, packet loss, jitter, and hops</span>
+                </div>
+              </div>
+            </summary>
+            <div class="accordion-body builder-section-grid">
+              <label><span title="Choose whether you want to assert average, minimum, or maximum latency.">Latency Operator 1</span><select name="latency_operator_1"><option value="avg" ${config.latency_operator_1 === "avg" ? "selected" : ""}>avg</option><option value="max" ${config.latency_operator_1 === "max" ? "selected" : ""}>max</option><option value="min" ${config.latency_operator_1 === "min" ? "selected" : ""}>min</option></select></label>
+              <label><span title="Choose how the selected latency value should be evaluated.">Latency Operator 2</span><select name="latency_operator_2"><option value="is" ${config.latency_operator_2 === "is" ? "selected" : ""}>is</option><option value="<" ${config.latency_operator_2 === "<" ? "selected" : ""}><</option><option value="<=" ${config.latency_operator_2 === "<=" ? "selected" : ""}><=</option><option value=">" ${config.latency_operator_2 === ">" ? "selected" : ""}>></option><option value=">=" ${config.latency_operator_2 === ">=" ? "selected" : ""}>>=</option></select></label>
+              <label><span title="Latency threshold in milliseconds.">Latency Value</span><input name="latency_value" type="number" min="0" value="${escapeHtml(config.latency_value ?? "")}" placeholder="250" /></label>
+              <label><span title="Packet loss is measured as a percentage from 0 to 100.">Packet Loss Operator</span><select name="packet_loss_operator"><option value="is" ${config.packet_loss_operator === "is" ? "selected" : ""}>is</option><option value="<" ${config.packet_loss_operator === "<" ? "selected" : ""}><</option><option value="<=" ${config.packet_loss_operator === "<=" ? "selected" : ""}><=</option><option value=">" ${config.packet_loss_operator === ">" ? "selected" : ""}>></option><option value=">=" ${config.packet_loss_operator === ">=" ? "selected" : ""}>>=</option></select></label>
+              <label><span title="Expected packet loss threshold percentage.">Packet Loss Value</span><input name="packet_loss_value" type="number" min="0" max="100" value="${escapeHtml(config.packet_loss_value ?? "")}" placeholder="1" /></label>
+              <label><span title="Jitter reflects how inconsistent packet timing is from packet to packet.">Jitter Operator</span><select name="jitter_operator"><option value="is" ${config.jitter_operator === "is" ? "selected" : ""}>is</option><option value="<" ${config.jitter_operator === "<" ? "selected" : ""}><</option><option value="<=" ${config.jitter_operator === "<=" ? "selected" : ""}><=</option><option value=">" ${config.jitter_operator === ">" ? "selected" : ""}>></option><option value=">=" ${config.jitter_operator === ">=" ? "selected" : ""}>>=</option></select></label>
+              <label><span title="Expected jitter threshold in milliseconds.">Jitter Value</span><input name="jitter_value" type="number" min="0" step="0.1" value="${escapeHtml(config.jitter_value ?? "")}" placeholder="10.0" /></label>
+              <label><span title="Choose whether you care about the average, minimum, or maximum observed hop count.">Network Hops Operator 1</span><select name="hops_operator_1"><option value="avg" ${config.hops_operator_1 === "avg" ? "selected" : ""}>avg</option><option value="max" ${config.hops_operator_1 === "max" ? "selected" : ""}>max</option><option value="min" ${config.hops_operator_1 === "min" ? "selected" : ""}>min</option></select></label>
+              <label><span title="Choose how hop count should be evaluated.">Network Hops Operator 2</span><select name="hops_operator_2"><option value="is" ${config.hops_operator_2 === "is" ? "selected" : ""}>is</option><option value="<" ${config.hops_operator_2 === "<" ? "selected" : ""}><</option><option value="<=" ${config.hops_operator_2 === "<=" ? "selected" : ""}><=</option><option value=">" ${config.hops_operator_2 === ">" ? "selected" : ""}>></option><option value=">=" ${config.hops_operator_2 === ">=" ? "selected" : ""}>>=</option></select></label>
+              <label><span title="Expected hop-count threshold.">Network Hops Value</span><input name="hops_value" type="number" min="0" value="${escapeHtml(config.hops_value ?? "")}" placeholder="12" /></label>
+            </div>
+          </details>
+
+          <details class="accordion-item">
+            <summary class="accordion-summary">
+              <div>
+                <strong>4. Set Frequency And Alert Conditions</strong>
+                <div class="status-meta">
+                  <span>How often the test runs and how multi-location alerts should behave</span>
+                </div>
+              </div>
+            </summary>
+            <div class="accordion-body builder-section-grid">
+              <label><span title="How often the network path monitor should run.">Test Frequency (seconds)</span><input name="interval_seconds" type="number" min="10" value="${escapeHtml(check.interval_seconds || 300)}" /></label>
+              <label><span title="How long the full path test is allowed to run before timing out.">Timeout Seconds</span><input name="timeout_seconds" type="number" min="1" value="${escapeHtml(check.timeout_seconds || 30)}" /></label>
+              <label><span title="Alerting can look at sustained failures over time instead of a single failed run.">Alert Window (minutes)</span><input name="alert_window_minutes" type="number" min="1" value="${escapeHtml(config.alert_window_minutes || 5)}" /></label>
+              <label><span title="At least this many locations must be in failure at the same moment during the window.">n Locations In Failure</span><input name="n_locations" type="number" min="1" value="${escapeHtml(config.n_locations || 1)}" /></label>
+              <label><span title="Out of this total number of monitored locations, at least n must fail to trigger the alert.">N Total Locations</span><input name="total_locations" type="number" min="1" value="${escapeHtml(config.total_locations || 3)}" /></label>
+              <p class="form-note">This alert model is intended for regional and path-specific issues where one temporary failed path does not always mean the entire service is unhealthy.</p>
+            </div>
+          </details>
+
+          <details class="accordion-item">
+            <summary class="accordion-summary">
+              <div>
+                <strong>5. Configure The Monitor</strong>
+                <div class="status-meta">
+                  <span>Name, tags, and lifecycle</span>
+                </div>
+              </div>
+            </summary>
+            <div class="accordion-body builder-section-grid">
+              <label><span title="The monitor name shown throughout the portal.">Name</span><input name="name" value="${escapeHtml(check.name || "Network Path Monitor")}" /></label>
+              <label><span title="Optional tags help you group monitors by environment, team, region, or service family. Separate multiple tags with commas.">Tags</span><input name="tags" value="${escapeHtml(csv(config.tags || []))}" placeholder="env:prod, team:network, region:global" /></label>
+              <label><span title="Whether the monitor should begin running immediately after it is saved.">Enabled</span><select name="enabled"><option value="true" ${check.enabled !== false ? "selected" : ""}>Enabled</option><option value="false" ${check.enabled === false ? "selected" : ""}>Disabled</option></select></label>
+            </div>
+          </details>
+
+          <div class="button-row">
+            ${isNew ? `<button type="button" class="secondary" id="abandon-network-path-builder-btn">Abandon</button>` : ""}
+            <button type="button" class="secondary" id="test-network-path-workflow-btn">Test Full Monitor Workflow</button>
+            <button type="submit">${isNew ? "Create Network Path Monitor" : "Save Network Path Monitor"}</button>
+          </div>
+          <p class="form-status network-path-builder-status" id="network-path-monitor-status"></p>
+        </form>
+      </section>
+
+      ${networkPathMonitorPreviewMarkup(testResult)}
+    </div>
+  `;
+}
+
+function renderNetworkPathMonitorBuilder(check, mode = "create", testResult = null) {
+  setWorkspaceHeader("Network Path Monitor", "Build and test route-aware synthetic monitors with live path telemetry, packet health, and hop-aware assertions.", [
+    { label: "Monitors", href: "/monitors" },
+    { label: "Add Monitor", href: "/monitors/new" },
+    { label: "Advanced Monitor", href: "/monitors/new/advanced" },
+    { label: "Network Path Monitor" },
+  ]);
+  document.getElementById("overview-cards").innerHTML = "";
+  document.getElementById("app-root").innerHTML = networkPathMonitorBuilderMarkup(check, mode, testResult);
 }
 
 function renderAdvancedMonitorSubpage(title, description) {
@@ -2465,7 +2967,6 @@ function renderDashboardsPage(checks, checkMetrics, recentResults = []) {
             const latest = latestByCheck[monitorKey(check)];
             const checkResults = monitorResults(check, recentResults);
             const recentFailures = checkResults.filter((result) => !result.success).slice(0, 3);
-            const avgLatency = averageDuration(points);
             const p50Latency = percentileDuration(points, 50);
             const p95Latency = percentileDuration(points, 95);
             const errorRate = errorRatePercent(points);
@@ -2507,7 +3008,6 @@ function renderDashboardsPage(checks, checkMetrics, recentResults = []) {
                 </div>
                 <div class="dashboard-card-stats">
                   <div class="compact-card"><h4>Availability</h4><p>${formatPercent(availability)}</p></div>
-                  <div class="compact-card"><h4>Avg Latency</h4><p>${formatDuration(avgLatency)}</p></div>
                   <div class="compact-card"><h4>P50 Latency</h4><p>${formatDuration(p50Latency)}</p></div>
                   <div class="compact-card"><h4>Error Rate</h4><p>${formatPercent(errorRate)}</p></div>
                   <div class="compact-card"><h4>P95 Latency</h4><p>${formatDuration(p95Latency)}</p></div>
@@ -2701,10 +3201,1288 @@ function monitorTroubleshootingHints(check, latest, failures) {
   }
   if (failures.length) {
     hints.push("Open the dedicated monitor page to replay the monitor immediately and compare the new result with the latest failure snapshots.");
+  } else if (check?.type === "network_path") {
+    const path = details.path || {};
+    const hops = Array.isArray(path.hops) ? path.hops : [];
+    const stats = details.stats || {};
+    const latencyStats = stats.latency_ms || {};
+    const packetLossPct = Number(stats.packet_loss_pct || 0);
+    const jitterMs = Number(stats.jitter_ms || 0);
+    const networkHops = stats.network_hops || {};
+    const probe = details.probe || {};
+    const attempts = Array.isArray(probe.attempts) ? probe.attempts : [];
+    const traceDuration = Math.max(1, Math.round(totalDuration * 0.65));
+    pushSpan({
+      id: `${traceId}:path`,
+      parentId: `${traceId}:root`,
+      name: "Network Path Execution",
+      kind: "network_path",
+      startMs: 0,
+      durationMs: traceDuration,
+      status: result?.success ? "healthy" : "unhealthy",
+      host: details.target?.display || check?.host || check?.url || "",
+      tags: [
+        ["request_type", details.request_type || check?.network_path?.request_type || "tcp"],
+        ["target", details.target?.display || check?.host || check?.url || "n/a"],
+        ["source_service", details.target?.source_service || "n/a"],
+        ["destination_service", details.target?.destination_service || "n/a"],
+      ],
+      runtimeMetrics: {
+        latency_avg_ms: Number(latencyStats.avg || 0),
+        latency_max_ms: Number(latencyStats.max || 0),
+        latency_min_ms: Number(latencyStats.min || 0),
+        packet_loss_pct: packetLossPct,
+        jitter_ms: jitterMs,
+        hop_avg: Number(networkHops.avg || 0),
+      },
+      logs: result?.message ? [result.message] : [],
+      error: result?.success ? "" : (result?.message || ""),
+      network: hops.map((hop) => ({
+        method: String(details.request_type || check?.network_path?.request_type || "tcp").toUpperCase(),
+        url: hop.address || `Hop ${hop.hop}`,
+        status: hop.timeout ? "timeout" : "reachable",
+        duration_ms: Number(hop.avg_latency_ms || 0),
+        resource_type: "hop",
+        failure: hop.timeout ? "timeout" : "",
+      })),
+      infrastructure: {
+        hop_count: hops.length,
+        traceroute_queries: Number(details.queries?.traceroute_queries || 0),
+        e2e_queries: Number(details.queries?.e2e_queries || 0),
+      },
+    });
+    pushSpan({
+      id: `${traceId}:e2e`,
+      parentId: `${traceId}:path`,
+      name: "End To End Metrics",
+      kind: "metrics",
+      startMs: 0,
+      durationMs: Math.max(1, Math.round(traceDuration * 0.55)),
+      status: result?.success ? "healthy" : "unhealthy",
+      runtimeMetrics: {
+        attempts: attempts.length,
+        successes: Number(probe.successes || 0),
+        failures: Number(probe.failures || 0),
+        packet_loss_pct: packetLossPct,
+        jitter_ms: jitterMs,
+      },
+      logs: (probe.failure_messages || []).slice(0, 10),
+    });
+    hops.forEach((hop, index) => {
+      pushSpan({
+        id: `${traceId}:hop:${index}`,
+        parentId: `${traceId}:path`,
+        name: `Hop ${hop.hop}: ${hop.address || "*"}`,
+        kind: "hop",
+        startMs: Math.min(index * 16, Math.max(traceDuration - 8, 0)),
+        durationMs: Math.max(4, Number(hop.avg_latency_ms || 4)),
+        status: hop.timeout ? "unhealthy" : "healthy",
+        host: hop.address || "",
+        tags: [
+          ["hop", hop.hop],
+          ["address", hop.address || "*"],
+          ["timeout", hop.timeout ? "true" : "false"],
+        ],
+        runtimeMetrics: {
+          hop_ttl: Number(hop.hop || index + 1),
+          avg_latency_ms: Number(hop.avg_latency_ms || 0),
+          traversed_count: Array.isArray(hop.latencies_ms) ? hop.latencies_ms.length : 0,
+        },
+        network: [{
+          method: String(details.request_type || check?.network_path?.request_type || "tcp").toUpperCase(),
+          url: hop.address || `Hop ${hop.hop}`,
+          status: hop.timeout ? "timeout" : "reachable",
+          duration_ms: Number(hop.avg_latency_ms || 0),
+          resource_type: "hop",
+          failure: hop.timeout ? "timeout" : "",
+        }],
+        error: hop.timeout ? "Hop timed out" : "",
+      });
+    });
   } else {
     hints.push("This monitor has no recent failures. Use this dashboard to watch trend changes before they become incidents.");
   }
   return hints;
+}
+
+function apmRunKey(result) {
+  return String(Number(result?.timestamp || 0));
+}
+
+function normalizeApmCheckSelection(checks) {
+  const current = state.apmWorkspace.selectedCheckKey;
+  const match = checks.find((check) => monitorKey(check) === current);
+  if (match) return match;
+  const next = checks[0] || null;
+  state.apmWorkspace.selectedCheckKey = next ? monitorKey(next) : "";
+  return next;
+}
+
+function normalizeApmRunSelection(results) {
+  const current = state.apmWorkspace.selectedRunKey;
+  const match = results.find((result) => apmRunKey(result) === current);
+  if (match) return match;
+  const next = results[0] || null;
+  state.apmWorkspace.selectedRunKey = next ? apmRunKey(next) : "";
+  return next;
+}
+
+function inferApmTrace(check, result) {
+  const details = result?.details || {};
+  const totalDuration = Math.max(1, Number(result?.duration_ms || 0));
+  const traceId = `${monitorKey(check)}-${apmRunKey(result)}`;
+  const browserNetwork = Array.isArray(details.network) ? details.network : [];
+  const requestNetworkEntries = Array.isArray(details.network?.entries) ? details.network.entries : [];
+  const requestNetworkSummary = details.network?.summary || {};
+  const requestNetworkProbe = details.network?.probe || {};
+  const spans = [];
+  const pushSpan = (span) => spans.push({
+    logs: [],
+    tags: [],
+    infrastructure: {},
+    runtimeMetrics: {},
+    network: [],
+    processes: [],
+    sqlQueries: [],
+    ...span,
+  });
+  pushSpan({
+    id: `${traceId}:root`,
+    parentId: null,
+    name: check?.name || "Monitor Run",
+    kind: "trace",
+    startMs: 0,
+    durationMs: totalDuration,
+    status: result?.success ? "healthy" : "unhealthy",
+    host: details.host || check?.host || check?.url || "",
+    tags: [
+      ["monitor.name", check?.name || "Unknown monitor"],
+      ["monitor.type", check?.type || result?.check_type || "unknown"],
+      ["timestamp", fmtTime(result?.timestamp)],
+      ["message", result?.message || ""],
+    ],
+    error: result?.success ? "" : (result?.message || ""),
+    logs: result?.message ? [result.message] : [],
+    runtimeMetrics: {
+      duration_ms: totalDuration,
+      success: Boolean(result?.success),
+      error_count: resultErrorCount(result),
+    },
+    infrastructure: {
+      assigned_node_id: check?.assigned_node_id || "auto",
+      check_type: check?.type || result?.check_type || "unknown",
+      target: check?.url || check?.host || "n/a",
+    },
+    network: check?.type === "browser" ? browserNetwork.slice(0, 25) : requestNetworkEntries,
+  });
+
+  if (check?.type === "browser") {
+    const performance = details.performance || {};
+    const steps = Array.isArray(details.steps) ? details.steps : [];
+    const network = browserNetwork;
+    const consoleLogs = Array.isArray(details.console) ? details.console : [];
+    const pageErrors = Array.isArray(details.page_errors) ? details.page_errors : [];
+    const loadDuration = Number(performance.loadMs || performance.domContentLoadedMs || Math.min(totalDuration, 5000));
+    pushSpan({
+      id: `${traceId}:navigation`,
+      parentId: `${traceId}:root`,
+      name: "Browser Navigation",
+      kind: "navigation",
+      startMs: 0,
+      durationMs: Math.min(totalDuration, Math.max(1, loadDuration)),
+      status: result?.success ? "healthy" : "unhealthy",
+      host: details.final_url || check?.url || "",
+      tags: [
+        ["wait_until", check?.browser?.wait_until || "load"],
+        ["title", details.title || ""],
+        ["final_url", details.final_url || ""],
+      ],
+      runtimeMetrics: {
+        dom_content_loaded_ms: Number(performance.domContentLoadedMs || 0),
+        load_ms: Number(performance.loadMs || 0),
+        resource_count: Number(performance.resourceCount || 0),
+        transfer_size: Number(performance.transferSize || 0),
+      },
+      logs: consoleLogs.slice(-10).map((entry) => `${entry.type || "log"}: ${entry.text || ""}`),
+      error: pageErrors[0] || "",
+      network: network.slice(0, 15),
+      processes: [{ name: "chromium", mode: check?.browser?.javascript_enabled === false ? "scripts_disabled" : "scripts_enabled", state: "captured" }],
+    });
+
+    let offset = Math.min(totalDuration * 0.15, 1000);
+    steps.forEach((step, index) => {
+      const duration = Math.max(1, Number(step.duration_ms || 1));
+      pushSpan({
+        id: `${traceId}:step:${index}`,
+        parentId: `${traceId}:root`,
+        name: step.name || `Step ${index + 1}`,
+        kind: step.action || "step",
+        startMs: Math.min(offset, Math.max(totalDuration - duration, 0)),
+        durationMs: Math.min(duration, totalDuration),
+        status: step.success === false ? "unhealthy" : "healthy",
+        tags: [["action", step.action || "step"], ["message", step.message || ""]],
+        logs: step.message ? [step.message] : [],
+        error: step.success === false ? (step.message || "Step failed") : "",
+      });
+      offset += duration + 12;
+    });
+
+    network.slice(0, 20).forEach((entry, index) => {
+      const duration = Math.max(1, Number(entry.duration_ms || 1));
+      pushSpan({
+        id: `${traceId}:network:${index}`,
+        parentId: `${traceId}:navigation`,
+        name: `${entry.method || "GET"} ${entry.resource_type || "request"}`,
+        kind: "network",
+        startMs: Math.min(index * 24, Math.max(totalDuration - duration, 0)),
+        durationMs: Math.min(duration, totalDuration),
+        status: entry.failure || entry.ok === false ? "unhealthy" : "healthy",
+        tags: [["url", entry.url || ""], ["status", entry.status ?? "n/a"], ["resource_type", entry.resource_type || "unknown"]],
+        network: [entry],
+        error: entry.failure || "",
+      });
+    });
+  } else {
+    const requestInfo = details.request || {};
+    const responseInfo = details.response || {};
+    const responseAnalysis = responseInfo.analysis || {};
+    const redirects = Array.isArray(details.redirects) ? details.redirects : [];
+    const requestDuration = Math.max(1, Math.round(totalDuration * 0.75));
+    const dnsDuration = Math.max(0, Number(requestNetworkProbe.dns?.duration_ms || 0));
+    const connectDuration = Math.max(0, Number(requestNetworkProbe.connect?.duration_ms || 0));
+    const tlsDuration = Math.max(0, Number(requestNetworkProbe.tls?.duration_ms || 0));
+    const ttfbDuration = Math.max(0, Number(requestNetworkSummary.ttfb_ms || 0));
+    const downloadDuration = Math.max(0, Number(requestNetworkSummary.download_ms || 0));
+    pushSpan({
+      id: `${traceId}:request`,
+      parentId: `${traceId}:root`,
+      name: `${String(requestInfo.method || check?.request_method || check?.type || "Request").toUpperCase()} Request`,
+      kind: "request",
+      startMs: 0,
+      durationMs: requestDuration,
+      status: result?.success ? "healthy" : "unhealthy",
+      host: details.host || check?.host || requestInfo.url || check?.url || "",
+      tags: [["target", requestInfo.url || check?.url || check?.host || ""], ["status", details.status_code ?? details.authenticated_status ?? "n/a"]],
+      runtimeMetrics: {
+        duration_ms: requestDuration,
+        status_code: Number(details.status_code || details.authenticated_status || 0),
+        redirect_count: redirects.length,
+      },
+      logs: [
+        ...(result?.message ? [result.message] : []),
+        ...(redirects.length ? [`Redirect chain length: ${redirects.length}`] : []),
+      ],
+      error: result?.success ? "" : (result?.message || ""),
+      network: requestInfo.url ? [{ method: requestInfo.method || check?.request_method || "GET", url: requestInfo.url, status: details.status_code || details.authenticated_status || null, duration_ms: requestDuration, ok: result?.success }] : [],
+      sqlQueries: check?.type === "database" ? [{ engine: details.database_engine || check?.database_engine || "database", database: details.database_name || check?.database_name || "", statement: "Connection probe" }] : [],
+      infrastructure: {
+        host: details.host || check?.host || "",
+        port: details.port || check?.port || "",
+      },
+    });
+    redirects.forEach((redirect, index) => {
+      pushSpan({
+        id: `${traceId}:redirect:${index}`,
+        parentId: `${traceId}:request`,
+        name: `Redirect ${index + 1}`,
+        kind: "redirect",
+        startMs: Math.min(index * 18, Math.max(requestDuration - 5, 0)),
+        durationMs: 5,
+        status: "healthy",
+        tags: [
+          ["status_code", redirect.status_code ?? "n/a"],
+          ["url", redirect.url || ""],
+          ["location", redirect.location || ""],
+        ],
+      });
+    });
+    if (dnsDuration > 0) {
+      pushSpan({
+        id: `${traceId}:dns`,
+        parentId: `${traceId}:request`,
+        name: "DNS Resolution",
+        kind: "dns",
+        startMs: 0,
+        durationMs: dnsDuration,
+        status: "healthy",
+        tags: [["host", requestNetworkProbe.host || ""], ["addresses", (requestNetworkProbe.dns?.addresses || []).join(", ")]],
+        runtimeMetrics: {
+          duration_ms: dnsDuration,
+          record_count: Number(requestNetworkProbe.dns?.record_count || 0),
+        },
+      });
+    }
+    if (connectDuration > 0) {
+      pushSpan({
+        id: `${traceId}:connect`,
+        parentId: `${traceId}:request`,
+        name: "TCP Connect",
+        kind: "connect",
+        startMs: dnsDuration,
+        durationMs: connectDuration,
+        status: "healthy",
+        tags: [["host", requestNetworkProbe.host || ""], ["port", requestNetworkProbe.port || ""]],
+        runtimeMetrics: { duration_ms: connectDuration },
+      });
+    }
+    if (tlsDuration > 0) {
+      pushSpan({
+        id: `${traceId}:tls`,
+        parentId: `${traceId}:request`,
+        name: "TLS Handshake",
+        kind: "tls",
+        startMs: dnsDuration + connectDuration,
+        durationMs: tlsDuration,
+        status: "healthy",
+        tags: [["version", requestNetworkProbe.tls?.version || "n/a"], ["cipher", requestNetworkProbe.tls?.cipher || "n/a"], ["alpn", requestNetworkProbe.tls?.alpn_protocol || "n/a"]],
+        runtimeMetrics: { duration_ms: tlsDuration },
+      });
+    }
+    if (ttfbDuration > 0) {
+      pushSpan({
+        id: `${traceId}:ttfb`,
+        parentId: `${traceId}:request`,
+        name: "Time To First Byte",
+        kind: "ttfb",
+        startMs: dnsDuration + connectDuration + tlsDuration,
+        durationMs: ttfbDuration,
+        status: result?.success ? "healthy" : "unhealthy",
+        runtimeMetrics: { duration_ms: ttfbDuration },
+      });
+    }
+    if (downloadDuration > 0) {
+      pushSpan({
+        id: `${traceId}:download`,
+        parentId: `${traceId}:request`,
+        name: "Response Download",
+        kind: "download",
+        startMs: dnsDuration + connectDuration + tlsDuration + ttfbDuration,
+        durationMs: downloadDuration,
+        status: result?.success ? "healthy" : "unhealthy",
+        runtimeMetrics: { duration_ms: downloadDuration, response_bytes: Number(requestNetworkSummary.response_bytes || 0) },
+      });
+    }
+    if (requestNetworkSummary && Object.keys(requestNetworkSummary).length) {
+      pushSpan({
+        id: `${traceId}:network-summary`,
+        parentId: `${traceId}:request`,
+        name: "Network Timing",
+        kind: "network",
+        startMs: 0,
+        durationMs: Math.max(1, Number(requestNetworkSummary.total_ms || requestDuration)),
+        status: result?.success ? "healthy" : "unhealthy",
+        tags: [
+          ["scheme", requestNetworkSummary.scheme || "n/a"],
+          ["http_version", requestNetworkSummary.http_version || "n/a"],
+          ["redirects", requestNetworkSummary.redirects ?? 0],
+          ["server", requestNetworkSummary.server || "n/a"],
+          ["content_type", requestNetworkSummary.content_type || "n/a"],
+          ["cache_control", requestNetworkSummary.cache_control || "n/a"],
+        ],
+        runtimeMetrics: {
+          ttfb_ms: Number(requestNetworkSummary.ttfb_ms || 0),
+          download_ms: Number(requestNetworkSummary.download_ms || 0),
+          total_ms: Number(requestNetworkSummary.total_ms || requestDuration),
+          response_bytes: Number(requestNetworkSummary.response_bytes || 0),
+          request_body_bytes: Number(requestNetworkSummary.request_body_bytes || 0),
+          request_headers_count: Number(requestNetworkSummary.request_headers_count || 0),
+          response_headers_count: Number(requestNetworkSummary.response_headers_count || 0),
+        },
+        network: requestNetworkEntries,
+      });
+    }
+    pushSpan({
+      id: `${traceId}:response-analysis`,
+      parentId: `${traceId}:request`,
+      name: "Response Analysis",
+      kind: "response",
+      startMs: Math.max(0, requestDuration - Math.max(10, downloadDuration || 10)),
+      durationMs: Math.max(10, downloadDuration || 10),
+      status: result?.success ? "healthy" : "unhealthy",
+      tags: [
+        ["content_type", responseAnalysis.content_type || requestNetworkSummary.content_type || "n/a"],
+        ["json_kind", responseAnalysis.json_kind || "n/a"],
+        ["html_title", responseAnalysis.html_title || "n/a"],
+      ],
+      runtimeMetrics: {
+        response_bytes: Number(responseAnalysis.bytes || requestNetworkSummary.response_bytes || 0),
+        response_characters: Number(responseAnalysis.characters || 0),
+        response_lines: Number(responseAnalysis.line_count || 0),
+      },
+      logs: [
+        responseAnalysis.is_json ? "JSON response detected" : "JSON response not detected",
+        responseAnalysis.is_html ? "HTML response detected" : "HTML response not detected",
+        responseAnalysis.is_xml ? "XML response detected" : "XML response not detected",
+        responseAnalysis.json_keys?.length ? `Top JSON keys: ${responseAnalysis.json_keys.join(", ")}` : "",
+      ].filter(Boolean),
+    });
+    pushSpan({
+      id: `${traceId}:validation`,
+      parentId: `${traceId}:root`,
+      name: "Assertions And Validation",
+      kind: "validation",
+      startMs: requestDuration,
+      durationMs: Math.max(1, totalDuration - requestDuration),
+      status: result?.success ? "healthy" : "unhealthy",
+      tags: [["message", result?.message || ""]],
+      logs: result?.message ? [result.message] : [],
+      error: result?.success ? "" : (result?.message || ""),
+    });
+  }
+
+  const preferredSpanId = check?.type === "browser"
+    ? `${traceId}:navigation`
+    : check?.type === "network_path"
+      ? `${traceId}:path`
+    : check?.type === "http" || check?.type === "api"
+      ? `${traceId}:request`
+      : `${traceId}:root`;
+  const selectedSpan =
+    spans.find((span) => span.id === state.apmWorkspace.selectedSpanId)
+    || spans.find((span) => span.id === preferredSpanId)
+    || spans[0]
+    || null;
+  state.apmWorkspace.selectedSpanId = selectedSpan?.id || "";
+  return { traceId, spans, selectedSpan };
+}
+
+function apmFlameFallbackMarkup(spans = [], totalDuration = 1) {
+  return `
+    <div class="apm-flame-fallback">
+      ${spans.map((span) => `
+        <div class="apm-flame-row">
+          <div class="apm-flame-label">${escapeHtml(span.name)}</div>
+          <div class="apm-flame-track">
+            <div class="apm-flame-bar ${escapeHtml(span.status || "healthy")}" style="margin-left:${Math.max(0, (Number(span.startMs || 0) / Math.max(totalDuration, 1)) * 100)}%; width:${Math.max(6, (Number(span.durationMs || 0) / Math.max(totalDuration, 1)) * 100)}%"></div>
+          </div>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function apmFlameGraphMarkup(spans = []) {
+  const totalDuration = Math.max(...spans.map((span) => Number(span.startMs || 0) + Number(span.durationMs || 0)), 1);
+  return plotlyHostMarkup("apm-flame", { spans, totalDuration }, apmFlameFallbackMarkup(spans, totalDuration), "plotly-apm-flame");
+}
+
+function networkPathHopStatusClass(hop, warningMs, criticalMs) {
+  if (!hop || hop.timeout) return "unhealthy";
+  const packetLossPct = Number(hop.packet_loss_pct || 0);
+  if (packetLossPct >= 50) return "critical";
+  if (packetLossPct >= 10) return "warning";
+  const latency = Number(hop.avg_latency_ms || 0);
+  if (latency >= Number(criticalMs || 0)) return "critical";
+  if (latency >= Number(warningMs || 0)) return "warning";
+  return "healthy";
+}
+
+function networkPathColorLabel(status) {
+  if (status === "critical") return "Critical";
+  if (status === "warning") return "Warning";
+  if (status === "unhealthy") return "Timeout";
+  return "Healthy";
+}
+
+function networkPathSvgPalette(status, role = "hop") {
+  const dark = document.body?.dataset?.theme === "dark";
+  const base = dark
+    ? { fill: "#1f2937", stroke: "#475569", title: "#f8fafc", subtitle: "#cbd5e1", metric: "#f8fafc" }
+    : { fill: "#fff8ec", stroke: "rgba(28, 36, 51, 0.14)", title: "#1c2433", subtitle: "#5d6678", metric: "#1c2433" };
+  if (role === "source" || role === "destination") {
+    return dark
+      ? { fill: "#1e293b", stroke: "#64748b", title: "#f8fafc", subtitle: "#cbd5e1", metric: "#f8fafc" }
+      : { fill: "#f5f7fb", stroke: "rgba(100, 116, 139, 0.28)", title: "#1c2433", subtitle: "#5d6678", metric: "#1c2433" };
+  }
+  if (status === "healthy") {
+    return dark
+      ? { fill: "rgba(20, 128, 74, 0.24)", stroke: "rgba(74, 222, 128, 0.55)", title: "#f0fdf4", subtitle: "#bbf7d0", metric: "#f0fdf4" }
+      : { fill: "rgba(20, 128, 74, 0.10)", stroke: "rgba(20, 128, 74, 0.28)", title: "#14532d", subtitle: "#166534", metric: "#14532d" };
+  }
+  if (status === "warning") {
+    return dark
+      ? { fill: "rgba(181, 122, 0, 0.24)", stroke: "rgba(250, 204, 21, 0.58)", title: "#fffbeb", subtitle: "#fde68a", metric: "#fffbeb" }
+      : { fill: "rgba(181, 122, 0, 0.12)", stroke: "rgba(181, 122, 0, 0.32)", title: "#78350f", subtitle: "#92400e", metric: "#78350f" };
+  }
+  if (status === "critical" || status === "unhealthy") {
+    return dark
+      ? { fill: "rgba(180, 35, 24, 0.24)", stroke: "rgba(248, 113, 113, 0.58)", title: "#fef2f2", subtitle: "#fecaca", metric: "#fef2f2" }
+      : { fill: "rgba(180, 35, 24, 0.10)", stroke: "rgba(180, 35, 24, 0.30)", title: "#7f1d1d", subtitle: "#991b1b", metric: "#7f1d1d" };
+  }
+  return base;
+}
+
+function routeNodeKey(node) {
+  const hop = Number(node?.hop || 0);
+  const address = String(node?.address || "unknown")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return `hop-${hop}-${address || "unknown"}`;
+}
+
+function networkPathWrapText(value, maxChars = 24, maxLines = 2) {
+  const text = String(value || "").trim();
+  if (!text) return [];
+  const sourceTokens = /\s/.test(text)
+    ? text.split(/\s+/)
+    : (text.match(new RegExp(`.{1,${Math.max(4, maxChars)}}`, "g")) || [text]);
+  const lines = [];
+  let current = "";
+  sourceTokens.forEach((token) => {
+    const candidate = current ? `${current} ${token}` : token;
+    if (candidate.length <= maxChars) {
+      current = candidate;
+      return;
+    }
+    if (current) {
+      lines.push(current);
+      current = token;
+    } else {
+      lines.push(token.slice(0, maxChars));
+      current = token.slice(maxChars);
+    }
+  });
+  if (current) {
+    lines.push(current);
+  }
+  if (lines.length <= maxLines) {
+    return lines;
+  }
+  const clipped = lines.slice(0, maxLines);
+  clipped[maxLines - 1] = `${clipped[maxLines - 1].slice(0, Math.max(1, maxChars - 1)).replace(/\s+$/g, "")}…`;
+  return clipped;
+}
+
+function networkPathSvgTextMarkup({ x, y, className, fill, lines, lineHeight = 14, anchor = "start" }) {
+  if (!lines?.length) return "";
+  return `
+    <text x="${x}" y="${y}" text-anchor="${anchor}" class="${className}" style="fill:${fill}">
+      ${lines.map((line, index) => `
+        <tspan x="${x}" dy="${index === 0 ? 0 : lineHeight}">${escapeHtml(line)}</tspan>
+      `).join("")}
+    </text>
+  `;
+}
+
+function buildNetworkPathRouteGraph(details, warningMs, criticalMs) {
+  const traces = Array.isArray(details?.path?.traces) ? details.path.traces : [];
+  const aggregatedHops = Array.isArray(details?.path?.hops) ? details.path.hops : [];
+  const totalTraces = Math.max(traces.length, 1);
+  const source = {
+    id: "source",
+    hop: 0,
+    label: details?.target?.source_service || "Source",
+    address: details?.target?.host || "source",
+    role: "source",
+    avg_latency_ms: 0,
+    packet_loss_pct: 0,
+    traversed_count: totalTraces,
+    timeout_count: 0,
+  };
+  const destination = {
+    id: "destination",
+    hop: Number((details?.path?.hops || []).length || 0) + 1,
+    label: details?.target?.destination_service || details?.target?.display || "Destination",
+    address: details?.target?.display || details?.target?.host || "destination",
+    role: "destination",
+    avg_latency_ms: Number((details?.stats?.latency_ms || {}).avg || 0),
+    packet_loss_pct: Number(details?.stats?.packet_loss_pct || 0),
+    traversed_count: totalTraces,
+    timeout_count: 0,
+  };
+  const nodeMap = new Map();
+  const edgeMap = new Map();
+
+  const touchEdge = (fromId, toId, latencyMs = null) => {
+    const key = `${fromId}->${toId}`;
+    if (!edgeMap.has(key)) {
+      edgeMap.set(key, { id: key, fromId, toId, traversedCount: 0, latencies: [] });
+    }
+    const edge = edgeMap.get(key);
+    edge.traversedCount += 1;
+    if (latencyMs != null && !Number.isNaN(Number(latencyMs))) {
+      edge.latencies.push(Number(latencyMs));
+    }
+  };
+
+  const ensureHopNode = (hop, fallbackIndex = 0) => {
+    const key = routeNodeKey(hop);
+    if (!nodeMap.has(key)) {
+      nodeMap.set(key, {
+        id: key,
+        hop: Number(hop.hop || fallbackIndex + 1),
+        label: `Hop ${Number(hop.hop || fallbackIndex + 1)}`,
+        address: hop.address || "*",
+        role: "hop",
+        latencies_ms: [],
+        traversed_count: 0,
+        timeout_count: 0,
+        raw_samples: [],
+      });
+    }
+    return nodeMap.get(key);
+  };
+
+  traces.forEach((trace) => {
+    const hops = Array.isArray(trace?.hops) ? trace.hops : [];
+    let previousId = source.id;
+    let previousLatency = 0;
+    hops.forEach((hop, index) => {
+      const node = ensureHopNode(hop, index);
+      node.traversed_count += 1;
+      node.timeout_count += hop.timeout ? 1 : 0;
+      node.raw_samples.push(hop.raw);
+      node.latencies_ms.push(...(Array.isArray(hop.latencies_ms) ? hop.latencies_ms.map((value) => Number(value)) : []));
+      const hopLatency = Number(hop.avg_latency_ms || 0);
+      const edgeLatency = hopLatency > 0 ? Math.max(0, hopLatency - previousLatency) : null;
+      touchEdge(previousId, node.id, edgeLatency);
+      previousId = node.id;
+      previousLatency = hopLatency > 0 ? hopLatency : previousLatency;
+    });
+    const destinationLatency = Number(details?.stats?.latency_ms?.avg || 0);
+    const destinationEdgeLatency = destinationLatency > 0 ? Math.max(0, destinationLatency - previousLatency) : null;
+    touchEdge(previousId, destination.id, destinationEdgeLatency);
+  });
+
+  if (!traces.length && aggregatedHops.length) {
+    let previousId = source.id;
+    let previousLatency = 0;
+    aggregatedHops.forEach((hop, index) => {
+      const node = ensureHopNode(hop, index);
+      node.traversed_count = Math.max(Number(node.traversed_count || 0), Number(hop.traversed_count || 0));
+      node.timeout_count = Math.max(Number(node.timeout_count || 0), Number(hop.timeout_count || 0));
+      node.raw_samples.push(hop.raw);
+      node.latencies_ms.push(...(Array.isArray(hop.latencies_ms) ? hop.latencies_ms.map((value) => Number(value)) : []));
+      const hopLatency = Number(hop.avg_latency_ms || 0);
+      const edgeLatency = hopLatency > 0 ? Math.max(0, hopLatency - previousLatency) : null;
+      touchEdge(previousId, node.id, edgeLatency);
+      previousId = node.id;
+      previousLatency = hopLatency > 0 ? hopLatency : previousLatency;
+    });
+    const destinationLatency = Number(details?.stats?.latency_ms?.avg || 0);
+    const destinationEdgeLatency = destinationLatency > 0 ? Math.max(0, destinationLatency - previousLatency) : null;
+    touchEdge(previousId, destination.id, destinationEdgeLatency);
+  }
+
+  const hopNodes = Array.from(nodeMap.values())
+    .map((node) => ({
+      ...node,
+      avg_latency_ms: node.latencies_ms.length
+        ? Number((node.latencies_ms.reduce((sum, value) => sum + Number(value || 0), 0) / node.latencies_ms.length).toFixed(2))
+        : null,
+      packet_loss_pct: Number((((totalTraces - node.traversed_count) / Math.max(totalTraces, 1)) * 100).toFixed(2)),
+      raw: node.raw_samples.find(Boolean) || "",
+      status: networkPathHopStatusClass(
+        {
+          timeout: node.traversed_count === 0,
+          avg_latency_ms: node.latencies_ms.length
+            ? node.latencies_ms.reduce((sum, value) => sum + Number(value || 0), 0) / node.latencies_ms.length
+            : null,
+          packet_loss_pct: ((totalTraces - node.traversed_count) / Math.max(totalTraces, 1)) * 100,
+        },
+        warningMs,
+        criticalMs
+      ),
+    }))
+    .sort((left, right) => (left.hop - right.hop) || String(left.address || "").localeCompare(String(right.address || "")));
+
+  const grouped = new Map();
+  hopNodes.forEach((node) => {
+    if (!grouped.has(node.hop)) {
+      grouped.set(node.hop, []);
+    }
+    grouped.get(node.hop).push(node);
+  });
+
+  const columns = [
+    { key: "source", hop: 0, label: "Source", nodes: [source] },
+    ...Array.from(grouped.keys()).sort((a, b) => a - b).map((hop) => ({
+      key: `hop-${hop}`,
+      hop,
+      label: `TTL ${hop}`,
+      nodes: grouped.get(hop) || [],
+    })),
+    { key: "destination", hop: destination.hop, label: "Destination", nodes: [destination] },
+  ];
+
+  const nodeById = new Map([[source.id, source], [destination.id, destination], ...hopNodes.map((node) => [node.id, node])]);
+  const edges = Array.from(edgeMap.values()).map((edge) => ({
+    ...edge,
+    avgLatencyMs: edge.latencies.length
+      ? Number((edge.latencies.reduce((sum, value) => sum + Number(value || 0), 0) / edge.latencies.length).toFixed(2))
+      : null,
+    label: edge.latencies.length
+      ? `${Number((edge.latencies.reduce((sum, value) => sum + Number(value || 0), 0) / edge.latencies.length).toFixed(1))} ms\n${edge.traversedCount}/${totalTraces}`
+      : `${edge.traversedCount}/${totalTraces}`,
+  }));
+
+  return {
+    totalTraces,
+    source,
+    destination,
+    columns,
+    edges,
+    hopNodes,
+    nodeById,
+  };
+}
+
+function networkPathSelectedHop(hops = []) {
+  const selected = hops.find((hop) => routeNodeKey(hop) === state.apmWorkspace.selectedHopId);
+  if (selected) return selected;
+  const first = hops[0] || null;
+  state.apmWorkspace.selectedHopId = first ? routeNodeKey(first) : "";
+  return first;
+}
+
+function networkPathRouteMapMarkup(graph, warningMs, criticalMs) {
+  const columnWidth = 252;
+  const rowHeight = 188;
+  const columnGap = 84;
+  const leftPadding = 38;
+  const topPadding = 30;
+  const maxNodes = Math.max(...graph.columns.map((column) => column.nodes.length), 1);
+  const width = Math.max(900, leftPadding * 2 + graph.columns.length * columnWidth + Math.max(graph.columns.length - 1, 0) * columnGap);
+  const height = Math.max(420, topPadding * 2 + maxNodes * rowHeight + 96);
+  const positions = new Map();
+  graph.columns.forEach((column, columnIndex) => {
+    const columnHeight = column.nodes.length * rowHeight;
+    const offsetY = topPadding + Math.max(0, ((maxNodes * rowHeight) - columnHeight) / 2);
+    column.nodes.forEach((node, nodeIndex) => {
+      positions.set(node.id, {
+        x: leftPadding + columnIndex * (columnWidth + columnGap),
+        y: offsetY + nodeIndex * rowHeight,
+        width: 196,
+        height: 138,
+      });
+    });
+  });
+  const selectedHop = networkPathSelectedHop(graph.hopNodes);
+
+  const fallback = `
+    <div class="apm-path-map-wrap">
+      <div class="apm-path-legend">
+        <span><i class="healthy"></i> Healthy path edge</span>
+        <span><i class="warning"></i> Warning latency / packet loss</span>
+        <span><i class="critical"></i> Critical latency / packet loss</span>
+      </div>
+      <div class="apm-path-focus ${selectedHop ? networkPathHopStatusClass(selectedHop, warningMs, criticalMs) : "empty"}">
+        ${selectedHop ? `
+          <div class="apm-path-focus-copy">
+            <span class="apm-path-focus-eyebrow">Selected hop</span>
+            <strong>${escapeHtml(`Hop ${selectedHop.hop} · ${selectedHop.address || "*"}`)}</strong>
+            <p>${escapeHtml(selectedHop.raw || "The selected route hop is aggregated across traceroute queries for this run.")}</p>
+          </div>
+          <div class="apm-path-focus-stats">
+            <span><strong>${escapeHtml(`${Number(selectedHop.avg_latency_ms || 0).toFixed(2)} ms`)}</strong><small>Latency</small></span>
+            <span><strong>${escapeHtml(`${Number(selectedHop.packet_loss_pct || 0).toFixed(2)}%`)}</strong><small>Packet loss</small></span>
+            <span><strong>${escapeHtml(String(Number(selectedHop.traversed_count || 0)))}</strong><small>Traversed</small></span>
+          </div>
+        ` : `
+          <div class="apm-path-focus-copy">
+            <span class="apm-path-focus-eyebrow">Route inspector</span>
+            <strong>Select any hop in the path</strong>
+            <p>Click a route node to inspect its latency, packet loss, TTL position, and traversal count.</p>
+          </div>
+        `}
+      </div>
+      <svg class="apm-path-map" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" aria-label="Aggregated network path map">
+        <defs>
+          <marker id="apm-path-arrow-healthy" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="rgba(20, 128, 74, 0.82)"></path>
+          </marker>
+          <marker id="apm-path-arrow-warning" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="rgba(181, 122, 0, 0.86)"></path>
+          </marker>
+          <marker id="apm-path-arrow-critical" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="rgba(180, 35, 24, 0.86)"></path>
+          </marker>
+        </defs>
+        <rect x="6" y="26" width="${width - 12}" height="${height - 36}" rx="24" class="apm-path-map-backdrop"></rect>
+        ${graph.columns.map((column) => {
+          const firstNode = column.nodes[0];
+          const position = firstNode ? positions.get(firstNode.id) : { x: leftPadding, y: topPadding };
+          return `
+            <text x="${position.x + 10}" y="16" class="apm-path-column-label">${escapeHtml(column.label)}</text>
+          `;
+        }).join("")}
+        ${graph.edges.map((edge) => {
+          const from = positions.get(edge.fromId);
+          const to = positions.get(edge.toId);
+          if (!from || !to) return "";
+          const x1 = from.x + from.width;
+          const y1 = from.y + from.height / 2;
+          const x2 = to.x;
+          const y2 = to.y + to.height / 2;
+          const controlX = (x1 + x2) / 2;
+          const targetNode = graph.nodeById.get(edge.toId);
+          const status = networkPathHopStatusClass(targetNode, warningMs, criticalMs);
+          const labelX = controlX;
+          const labelY = ((y1 + y2) / 2) - 8;
+          const markerId = status === "critical" || status === "unhealthy"
+            ? "apm-path-arrow-critical"
+            : status === "warning"
+              ? "apm-path-arrow-warning"
+              : "apm-path-arrow-healthy";
+          return `
+            <g>
+              <path d="M ${x1} ${y1} C ${controlX} ${y1}, ${controlX} ${y2}, ${x2} ${y2}" class="apm-path-edge ${escapeHtml(status)}" marker-end="url(#${markerId})"></path>
+              <rect x="${labelX - 34}" y="${labelY - 18}" width="68" height="36" rx="14" class="apm-path-edge-badge ${escapeHtml(status)}"></rect>
+              <text x="${labelX}" y="${labelY - 3}" text-anchor="middle" class="apm-path-edge-text">${escapeHtml(edge.avgLatencyMs != null ? `${Number(edge.avgLatencyMs).toFixed(0)} ms` : "n/a")}</text>
+              <text x="${labelX}" y="${labelY + 12}" text-anchor="middle" class="apm-path-edge-subtext">${escapeHtml(`${edge.traversedCount}/${graph.totalTraces}`)}</text>
+            </g>
+          `;
+        }).join("")}
+        ${graph.columns.flatMap((column) => column.nodes).map((node) => {
+          const position = positions.get(node.id);
+          if (!position) return "";
+          const status = node.role === "hop" ? networkPathHopStatusClass(node, warningMs, criticalMs) : "endpoint";
+          const active = node.role === "hop" && routeNodeKey(node) === state.apmWorkspace.selectedHopId;
+          const palette = networkPathSvgPalette(status, node.role);
+          const titleLines = networkPathWrapText(node.role === "hop" ? node.label : node.label, 18, 2);
+          const addressLines = networkPathWrapText(node.address || "", 22, 2);
+          const roleLines = node.role === "source"
+            ? ["Source service"]
+            : node.role === "destination"
+              ? ["Destination service"]
+              : [`TTL ${Number(node.hop || 0)}`];
+          const footerLeft = node.role === "hop"
+            ? `${Number(node.packet_loss_pct || 0).toFixed(0)}% loss`
+            : node.role === "source"
+              ? `${Number(node.traversed_count || 0)} traces`
+              : "Aggregated end-to-end";
+          const footerRight = node.role === "hop"
+            ? `${Number(node.traversed_count || 0)}x traversed`
+            : node.role === "destination"
+              ? `${graph.totalTraces} traces`
+              : "";
+          return `
+            <g class="apm-path-svg-node ${escapeHtml(status)} ${active ? "active" : ""}" ${node.role === "hop" ? `data-apm-hop-id="${escapeHtml(routeNodeKey(node))}"` : ""}>
+              <rect x="${position.x}" y="${position.y}" width="${position.width}" height="${position.height}" rx="16" class="apm-path-node-box" style="fill:${palette.fill};stroke:${active ? "#2563eb" : palette.stroke};stroke-width:${active ? 2.5 : 1.5}"></rect>
+              <rect x="${position.x + 12}" y="${position.y + 12}" width="72" height="20" rx="10" class="apm-path-node-pill"></rect>
+              <text x="${position.x + 48}" y="${position.y + 25}" text-anchor="middle" class="apm-path-node-pill-text" style="fill:${palette.subtitle}">${escapeHtml(roleLines[0])}</text>
+              ${networkPathSvgTextMarkup({
+                x: position.x + 12,
+                y: position.y + 48,
+                className: "apm-path-node-title",
+                fill: palette.title,
+                lines: titleLines,
+                lineHeight: 15,
+              })}
+              ${networkPathSvgTextMarkup({
+                x: position.x + 12,
+                y: position.y + 78,
+                className: "apm-path-node-subtitle",
+                fill: palette.subtitle,
+                lines: addressLines,
+                lineHeight: 13,
+              })}
+              <text x="${position.x + 12}" y="${position.y + 107}" class="apm-path-node-metric" style="fill:${palette.metric}">${escapeHtml(node.avg_latency_ms != null ? `${Number(node.avg_latency_ms).toFixed(0)} ms` : node.role === "destination" ? `${Number(node.avg_latency_ms || 0).toFixed(0)} ms` : "timeout")}</text>
+              <line x1="${position.x + 12}" y1="${position.y + 114}" x2="${position.x + position.width - 12}" y2="${position.y + 114}" class="apm-path-node-divider"></line>
+              <text x="${position.x + 12}" y="${position.y + 134}" class="apm-path-node-footer" style="fill:${palette.subtitle}">${escapeHtml(footerLeft)}</text>
+              <text x="${position.x + position.width - 12}" y="${position.y + 134}" text-anchor="end" class="apm-path-node-footer" style="fill:${palette.subtitle}">${escapeHtml(footerRight)}</text>
+            </g>
+          `;
+        }).join("")}
+      </svg>
+    </div>
+  `;
+  return fallback;
+}
+
+function networkPathAssertionsMarkup(check, details) {
+  const assertions = Array.isArray(details?.assertions) ? details.assertions : [];
+  const config = check?.network_path || {};
+  const stats = details?.stats || {};
+  const latencyStats = stats.latency_ms || {};
+  const hopStats = stats.network_hops || {};
+  const probe = details?.probe || {};
+  const attempts = Array.isArray(probe.attempts) ? probe.attempts : [];
+  const queryCount = Math.max(attempts.length, Number(probe.total_queries || 0), Number(details?.queries?.e2e_queries || 0));
+  const packetsReceived = Number(probe.successes || attempts.filter((attempt) => attempt.success !== false).length);
+  const formatActualValue = (name, value) => {
+    if (value == null) return "n/a";
+    if (name === "packet_loss") return `${Number(value).toFixed(2)}%`;
+    if (name === "latency" || name === "jitter") return `${Number(value).toFixed(2)} ms`;
+    if (name === "network_hops") return `${Number(value).toFixed(2)} hops`;
+    return String(value);
+  };
+  const actualByAssertion = {
+    latency: config.latency_operator_1 ? latencyStats[config.latency_operator_1] : null,
+    packet_loss: stats.packet_loss_pct,
+    jitter: stats.jitter_ms,
+    network_hops: config.hops_operator_1 ? hopStats[config.hops_operator_1] : null,
+  };
+  if (!assertions.length) {
+    return `
+      <section class="guide-card">
+        <div class="panel-head compact">
+          <h4>Assertions</h4>
+          <p>No explicit assertions were configured for this run.</p>
+        </div>
+      </section>
+    `;
+  }
+  return `
+    <section class="guide-card">
+      <div class="panel-head compact">
+        <h4>Assertions</h4>
+        <p>Aggregated across all end-to-end queries from this network path run. ${escapeHtml(`${packetsReceived} of ${Math.max(queryCount, packetsReceived)} packets were received.`)}</p>
+      </div>
+      <div class="apm-assertion-list">
+        ${assertions.map((assertion) => `
+          <div class="apm-assertion-row ${assertion.success ? "healthy" : "unhealthy"}">
+            <div>
+              <strong>${escapeHtml((assertion.name || "assertion").replace(/_/g, " "))}</strong>
+              <p>${escapeHtml(assertion.message || "")}</p>
+            </div>
+            <div class="apm-assertion-value">
+              <span>${escapeHtml(assertion.success ? "PASS" : "FAIL")}</span>
+              <strong>${escapeHtml(formatActualValue(assertion.name, actualByAssertion[assertion.name]))}</strong>
+            </div>
+          </div>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function networkPathInspectorMarkup(selectedHop, warningMs, criticalMs) {
+  if (!selectedHop) {
+    return `
+      <section class="guide-card apm-path-inspector">
+        <div class="panel-head compact">
+          <h4>Route Inspector</h4>
+          <p>Click any hop box in the route map to inspect its details.</p>
+        </div>
+      </section>
+    `;
+  }
+  const status = selectedHop.timeout ? "timeout" : networkPathColorLabel(networkPathHopStatusClass(selectedHop, warningMs, criticalMs));
+  return `
+    <section class="guide-card apm-path-inspector">
+      <div class="panel-head compact">
+        <h4>Route Inspector</h4>
+        <p>${escapeHtml(`Hop ${selectedHop.hop} | ${selectedHop.address || "*"}`)}</p>
+      </div>
+      <div class="apm-inspector-hero ${escapeHtml(status.toLowerCase())}">
+        <strong>${escapeHtml(selectedHop.address || "*")}</strong>
+        <span>${escapeHtml(status)}</span>
+      </div>
+      ${apmMetadataListMarkup([
+        ["Hop TTL", selectedHop.hop],
+        ["Latency", `${Number(selectedHop.avg_latency_ms || 0).toFixed(2)} ms`],
+        ["Packet Loss", `${Number(selectedHop.packet_loss_pct || 0).toFixed(2)}%`],
+        ["Traversed Count", Number(selectedHop.traversed_count || 0)],
+        ["Timeout Count", Number(selectedHop.timeout_count || 0)],
+        ["Status", status],
+      ])}
+      <div class="apm-inspector-note">
+        <strong>Raw Hop Sample</strong>
+        <p>${escapeHtml(selectedHop.raw || "No raw hop sample was captured.")}</p>
+      </div>
+    </section>
+  `;
+}
+
+function networkPathThresholdControlsMarkup() {
+  return `
+    <div class="apm-path-thresholds">
+      <label>
+        <span>Warning Latency (ms)</span>
+        <input id="apm-path-warning-ms" type="number" min="1" value="${escapeHtml(state.apmWorkspace.pathLatencyWarningMs)}" />
+      </label>
+      <label>
+        <span>Critical Latency (ms)</span>
+        <input id="apm-path-critical-ms" type="number" min="1" value="${escapeHtml(state.apmWorkspace.pathLatencyCriticalMs)}" />
+      </label>
+    </div>
+  `;
+}
+
+function networkPathViewMarkup(check, result, runs = []) {
+  const details = result?.details || {};
+  const path = details.path || {};
+  const hops = Array.isArray(path.hops) ? path.hops : [];
+  const stats = details.stats || {};
+  const probe = details.probe || {};
+  const attempts = Array.isArray(probe.attempts) ? probe.attempts : [];
+  const warningMs = Number(state.apmWorkspace.pathLatencyWarningMs || 80);
+  const criticalMs = Math.max(warningMs + 1, Number(state.apmWorkspace.pathLatencyCriticalMs || 200));
+  const routeGraph = buildNetworkPathRouteGraph(details, warningMs, criticalMs);
+  const selectedHop = networkPathSelectedHop(routeGraph.hopNodes);
+  const sourceLabel = details.target?.source_service || "Source";
+  const destinationLabel = details.target?.destination_service || details.target?.display || "Destination";
+  const packetsReceived = Number(probe.successes || attempts.filter((attempt) => attempt.success !== false).length);
+  const endToEndPoints = attempts.map((attempt, index) => {
+    const seen = attempts.slice(0, index + 1);
+    const failures = seen.filter((item) => !item.success).length;
+    return {
+      query: index + 1,
+      label: `Query ${index + 1}`,
+      latency_ms: Number(attempt.latency_ms || 0),
+      packet_loss_pct: Number(((failures / Math.max(seen.length, 1)) * 100).toFixed(2)),
+      success: attempt.success !== false,
+    };
+  });
+  const hopLatencyPoints = hops.map((hop, index) => ({
+    hop: Number(hop.hop || index + 1),
+    address: hop.address || "*",
+    latency_ms: Number(hop.avg_latency_ms || 0),
+    packet_loss_pct: Number(hop.packet_loss_pct || 0),
+    timeout: Boolean(hop.timeout),
+  }));
+  const hopHistoryPoints = runs
+    .map((run) => {
+      const graph = buildNetworkPathRouteGraph(run?.details || {}, warningMs, criticalMs);
+      const historyHop = selectedHop ? graph.hopNodes.find((hop) => routeNodeKey(hop) === routeNodeKey(selectedHop)) : null;
+      if (!historyHop) return null;
+      return {
+        timestamp: Number(run.timestamp || 0),
+        latency_ms: Number(historyHop.avg_latency_ms || 0),
+        packet_loss_pct: Number(historyHop.packet_loss_pct || 0),
+        timeout: Boolean(historyHop.timeout),
+      };
+    })
+    .filter(Boolean);
+  return `
+    <section class="guide-card apm-path-card">
+      <div class="panel-head">
+        <div>
+          <h4>Path View</h4>
+          <p>Inspect the route from source to destination, compare end-to-end latency and packet loss, and click any hop to drill into its route details.</p>
+        </div>
+        ${networkPathThresholdControlsMarkup()}
+      </div>
+      <div class="apm-path-topline">
+        <div class="status-meta">
+          <span>${escapeHtml(sourceLabel)}</span>
+          <span>${escapeHtml(String(details.request_type || check?.network_path?.request_type || "tcp").toUpperCase())}</span>
+          <span>${escapeHtml(destinationLabel)}</span>
+        </div>
+        <div class="status-meta">
+          <span>Packets Received ${escapeHtml(`${packetsReceived} / ${Math.max(attempts.length, packetsReceived)}`)}</span>
+          <span>P50 Latency ${escapeHtml(formatDuration((stats.latency_ms || {}).avg || 0))}</span>
+          <span>Min ${escapeHtml(formatDuration((stats.latency_ms || {}).min || 0))}</span>
+          <span>Max ${escapeHtml(formatDuration((stats.latency_ms || {}).max || 0))}</span>
+          <span>Packet Loss ${escapeHtml(`${Number(stats.packet_loss_pct || 0).toFixed(2)}%`)}</span>
+          <span>Jitter ${escapeHtml(formatDuration(Number(stats.jitter_ms || 0)))}</span>
+          <span>Hops Avg ${escapeHtml(Number((stats.network_hops || {}).avg || 0).toFixed(2))}</span>
+          <span>Hops Min ${escapeHtml(String(Number((stats.network_hops || {}).min || 0)))} </span>
+          <span>Hops Max ${escapeHtml(String(Number((stats.network_hops || {}).max || 0)))} </span>
+        </div>
+      </div>
+      <div class="apm-path-legend">
+        <span><i class="healthy"></i> Healthy latency path</span>
+        <span><i class="warning"></i> Warning threshold reached</span>
+        <span><i class="critical"></i> Critical latency or packet loss</span>
+        <span><strong>${escapeHtml(String(routeGraph.totalTraces))}</strong> traceroute queries aggregated</span>
+        <span>Click any hop to expand its route details in place</span>
+      </div>
+      <div class="apm-path-workbench">
+        ${networkPathRouteMapMarkup(routeGraph, warningMs, criticalMs)}
+      </div>
+      <div class="dashboard-detail-grid">
+        <div class="guide-card compact-card">
+          <div class="mini-panel-header">
+            <h4>End-to-end Metrics</h4>
+            <span>Latency and packet loss per query</span>
+          </div>
+          ${plotlyHostMarkup("path-e2e", { points: endToEndPoints, height: 220 }, `<div class="empty-chart-state">No end-to-end probe points were captured.</div>`, "plotly-path-e2e")}
+        </div>
+        <div class="guide-card compact-card">
+          <div class="mini-panel-header">
+            <h4>Hop-to-hop Latency</h4>
+            <span>Average latency for each hop</span>
+          </div>
+          ${plotlyHostMarkup("path-hop", { points: hopLatencyPoints, warningMs, criticalMs, height: 220 }, `<div class="empty-chart-state">No hop timing data was captured.</div>`, "plotly-path-hop")}
+        </div>
+      </div>
+      <div class="guide-card compact-card">
+        <div class="mini-panel-header">
+          <h4>Selected Hop History</h4>
+          <span>${escapeHtml(selectedHop ? `Hop ${selectedHop.hop} across recent runs` : "Choose a hop to compare it across runs")}</span>
+        </div>
+        ${plotlyHostMarkup("path-hop-history", { points: hopHistoryPoints, height: 220 }, `<div class="empty-chart-state">This hop has not been captured across enough runs to compare yet.</div>`, "plotly-path-hop-history")}
+      </div>
+      <div class="guide-card dashboard-span-full">
+        <div class="panel-head compact">
+          <h4>Hop Details</h4>
+          <p>${escapeHtml(selectedHop ? `Hop ${selectedHop.hop} | ${selectedHop.address || "*"}` : "No hop selected")}</p>
+        </div>
+        ${selectedHop ? apmMetadataListMarkup([
+          ["Hop TTL", selectedHop.hop],
+          ["Hop Address", selectedHop.address || "*"],
+          ["Hop Latency", `${Number(selectedHop.avg_latency_ms || 0).toFixed(2)} ms`],
+          ["Traversed Count", Number(selectedHop.traversed_count || 0)],
+          ["Hop Packet Loss", `${Number(selectedHop.packet_loss_pct || 0).toFixed(2)}%`],
+          ["Timeout Count", Number(selectedHop.timeout_count || 0)],
+          ["Status", selectedHop.timeout ? "timeout" : networkPathColorLabel(networkPathHopStatusClass(selectedHop, warningMs, criticalMs))],
+          ["Raw Hop", selectedHop.raw || "n/a"],
+        ]) : `<p class="subtle">Click a hop in the path view to inspect its details.</p>`}
+      </div>
+      ${networkPathAssertionsMarkup(check, details)}
+    </section>
+  `;
+}
+
+function apmMetadataListMarkup(items = []) {
+  if (!items || !items.length) {
+    return `<p class="subtle">No details were captured for this section on this run.</p>`;
+  }
+  return `
+    <dl class="apm-meta-list">
+      ${items.map(([label, value]) => `
+        <div class="apm-meta-item">
+          <dt>${escapeHtml(String(label))}</dt>
+          <dd>${escapeHtml(String(value == null || value === "" ? "n/a" : value))}</dd>
+        </div>
+      `).join("")}
+    </dl>
+  `;
+}
+
+function apmSpanTableMarkup(spans = []) {
+  return `
+    <div class="table-scroll">
+      <table class="apm-span-table">
+        <thead>
+          <tr><th>Span</th><th>Kind</th><th>Status</th><th>Start</th><th>Duration</th></tr>
+        </thead>
+        <tbody>
+          ${spans.map((span) => `
+            <tr class="${state.apmWorkspace.selectedSpanId === span.id ? "active" : ""}" data-apm-span-id="${escapeHtml(span.id)}">
+              <td>${escapeHtml(span.name)}</td>
+              <td>${escapeHtml(span.kind)}</td>
+              <td>${escapeHtml(span.status)}</td>
+              <td>${formatDuration(span.startMs)}</td>
+              <td>${formatDuration(span.durationMs)}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function apmSectionItemsForTab(span, tab) {
+  if (!span) return [];
+  if (tab === "overview") return [["Span", span.name], ["Kind", span.kind], ["Status", span.status], ["Host", span.host || "n/a"], ["Start", formatDuration(span.startMs)], ["Duration", formatDuration(span.durationMs)]];
+  if (tab === "infrastructure") return Object.entries(span.infrastructure || {});
+  if (tab === "metrics") return Object.entries(span.runtimeMetrics || {});
+  if (tab === "logs") return (span.logs || []).map((log, index) => [`Log ${index + 1}`, log]);
+  if (tab === "network") return (span.network || []).flatMap((entry, index) => {
+    const timing = entry.timing || {};
+    return [
+      [`Request ${index + 1}`, `${entry.method || "GET"} ${entry.url || ""}`],
+      [`Status ${index + 1}`, entry.status ?? (entry.ok === false ? "failed" : "n/a")],
+      [`Duration ${index + 1}`, formatDuration(entry.duration_ms)],
+      [`TTFB ${index + 1}`, timing.ttfb_ms != null ? formatDuration(timing.ttfb_ms) : "n/a"],
+      [`Download ${index + 1}`, timing.download_ms != null ? formatDuration(timing.download_ms) : "n/a"],
+      [`Type ${index + 1}`, entry.resource_type || "request"],
+      [`Started ${index + 1}`, entry.started_at ? fmtTime(entry.started_at) : "n/a"],
+      [`Failure ${index + 1}`, entry.failure || "none"],
+    ];
+  });
+  if (tab === "processes") return (span.processes || []).flatMap((entry, index) => Object.entries(entry).map(([key, value]) => [`Process ${index + 1} ${key}`, value]));
+  if (tab === "sql") return (span.sqlQueries || []).flatMap((entry, index) => Object.entries(entry).map(([key, value]) => [`Query ${index + 1} ${key}`, value]));
+  if (tab === "tags") return span.tags || [];
+  if (tab === "error") return [["Error", span.error || "No error recorded"]];
+  return [];
+}
+
+function apmResolvedSectionItems(trace, span, tab) {
+  const selectedItems = apmSectionItemsForTab(span, tab);
+  if (selectedItems.length) {
+    return selectedItems;
+  }
+  const lineage = [];
+  let current = span;
+  while (current?.parentId) {
+    const parent = trace?.spans?.find((item) => item.id === current.parentId);
+    if (!parent) break;
+    lineage.push(parent);
+    current = parent;
+  }
+  for (const candidate of lineage) {
+    const items = apmSectionItemsForTab(candidate, tab);
+    if (items.length) {
+      return [["Inherited From", candidate.name], ...items];
+    }
+  }
+  const root = trace?.spans?.find((item) => item.parentId == null) || null;
+  if (root && root !== span) {
+    const rootItems = apmSectionItemsForTab(root, tab);
+    if (rootItems.length) {
+      return [["Inherited From", root.name], ...rootItems];
+    }
+  }
+  return [];
+}
+
+function renderApmPage(checks, recentResults = []) {
+  const checksWithResults = checks.filter((check) => monitorResults(check, recentResults).length);
+  const apmChecks = checksWithResults.length ? checksWithResults : checks;
+  const selectedCheck = normalizeApmCheckSelection(apmChecks);
+  const runs = selectedCheck ? monitorResults(selectedCheck, recentResults) : [];
+  const selectedRun = normalizeApmRunSelection(runs);
+  const trace = selectedCheck && selectedRun ? inferApmTrace(selectedCheck, selectedRun) : null;
+  const detailTabs = [["overview", "Overview"], ["infrastructure", "Infrastructure"], ["metrics", "Metrics"], ["logs", "Logs"], ["network", "Network"], ["processes", "Processes"], ["sql", "SQL / DB Queries"], ["tags", "Tags"], ["error", "Error"]];
+  const selectedSpan = trace?.selectedSpan || null;
+
+  setWorkspaceHeader("Application Performance Management", "Explore trace-style views of monitor runs, inspect spans, and investigate runtime details from captured telemetry.", [
+    { label: "Application Performance Management" },
+  ]);
+  document.getElementById("app-root").innerHTML = `
+    <div class="stack">
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Application Performance Management</h3>
+          <p>Select a monitor, choose a run, and inspect inferred traces, spans, flame views, and runtime metadata for that execution.</p>
+        </div>
+        <div class="apm-layout">
+          <aside class="apm-sidebar">
+            <div class="guide-card">
+              <h4>1. Choose Monitor</h4>
+              <select id="apm-monitor-select">
+                ${apmChecks.map((check) => `<option value="${escapeHtml(monitorKey(check))}" ${selectedCheck && monitorKey(check) === monitorKey(selectedCheck) ? "selected" : ""}>${escapeHtml(check.name)} (${escapeHtml(checkCategoryLabel(check.type))})</option>`).join("")}
+              </select>
+            </div>
+            <div class="guide-card">
+              <h4>2. Choose Test Run</h4>
+              ${runs.length ? `<select id="apm-run-select">${runs.map((result) => `<option value="${escapeHtml(apmRunKey(result))}" ${selectedRun && apmRunKey(result) === apmRunKey(selectedRun) ? "selected" : ""}>${escapeHtml(fmtTime(result.timestamp))} | ${result.success ? "Healthy" : "Failed"} | ${escapeHtml(formatDuration(result.duration_ms))}</option>`).join("")}</select>` : `<p class="subtle">No runs have been captured for this monitor yet.</p>`}
+            </div>
+            ${selectedRun ? `<div class="guide-card"><h4>Run Summary</h4><div class="status-meta"><span>${selectedRun.success ? "Healthy" : "Failed"}</span><span>${escapeHtml(formatDuration(selectedRun.duration_ms))}</span><span>${escapeHtml(fmtTime(selectedRun.timestamp))}</span></div><p>${escapeHtml(selectedRun.message || "No summary message was captured for this run.")}</p></div>` : ""}
+          </aside>
+          <div class="apm-main">
+            ${trace ? `
+              <section class="guide-card">
+                <div class="panel-head">
+                  <h4>Trace Workspace</h4>
+                  <div class="button-row">
+                    <button type="button" class="${state.apmWorkspace.traceTab === "flame" ? "" : "secondary"}" data-apm-trace-tab="flame">Flame Graph</button>
+                    <button type="button" class="${state.apmWorkspace.traceTab === "spans" ? "" : "secondary"}" data-apm-trace-tab="spans">Span List</button>
+                  </div>
+                </div>
+                ${state.apmWorkspace.traceTab === "flame" ? apmFlameGraphMarkup(trace.spans) : apmSpanTableMarkup(trace.spans)}
+              </section>
+              ${selectedCheck?.type === "network_path" && selectedRun ? networkPathViewMarkup(selectedCheck, selectedRun, runs) : ""}
+              <section class="guide-card">
+                <div class="panel-head">
+                  <div><h4>Span Details</h4><p>${escapeHtml(selectedSpan?.name || "No span selected")}</p></div>
+                  <div class="button-row apm-tab-row">
+                    ${detailTabs.map(([key, label]) => `<button type="button" class="${state.apmWorkspace.detailTab === key ? "" : "secondary"}" data-apm-detail-tab="${key}">${label}</button>`).join("")}
+                  </div>
+                </div>
+                ${apmMetadataListMarkup(apmResolvedSectionItems(trace, selectedSpan, state.apmWorkspace.detailTab))}
+              </section>
+            ` : `<section class="guide-card"><h4>No APM Trace Yet</h4><p>Choose a monitor run with captured telemetry to build the trace, span, and metadata views.</p></section>`}
+          </div>
+        </div>
+      </section>
+    </div>
+  `;
 }
 
 function renderMonitorDashboardPage(check, checkMetrics, recentResults = [], activeTab = "overview", activeRange = "24h", customStart = null, customEnd = null) {
@@ -2720,7 +4498,6 @@ function renderMonitorDashboardPage(check, checkMetrics, recentResults = [], act
   const failureCount = points.filter((point) => !point.healthy).length;
   const availability = availabilityPercent(points);
   const errorRate = errorRatePercent(points);
-  const avgLatency = averageDuration(points);
   const p50Latency = percentileDuration(points, 50);
   const p95Latency = percentileDuration(points, 95);
   const p99Latency = percentileDuration(points, 99);
@@ -2886,10 +4663,6 @@ function renderMonitorDashboardPage(check, checkMetrics, recentResults = [], act
             <div class="guide-card compact-card">
               <h4>Availability</h4>
               <p>${formatPercent(availability)}</p>
-            </div>
-            <div class="guide-card compact-card">
-              <h4>Avg Latency</h4>
-              <p>${formatDuration(avgLatency)}</p>
             </div>
             <div class="guide-card compact-card">
               <h4>P50 Latency</h4>
@@ -3881,7 +5654,8 @@ function browserStepRowMarkup(step = {}, index = 0) {
   const action = step.action || "wait_for_selector";
   const title = step.name || `Step ${index + 1}`;
   const selectorSummary = step.selector || "No selector";
-  const valueSummary = step.value || "No value";
+  const sensitive = Boolean(step.sensitive);
+  const valueSummary = sensitive ? "••••••••" : (step.value || "No value");
   return `
     <details class="browser-step-row" data-browser-step>
       <summary class="accordion-summary browser-step-summary">
@@ -3915,7 +5689,11 @@ function browserStepRowMarkup(step = {}, index = 0) {
         </label>
         <label class="browser-step-value ${["fill", "press", "assert_text", "assert_url_contains", "wait_for_timeout", "navigate"].includes(action) ? "" : "hidden"}">
           <span>Value</span>
-          <input name="browser_step_value" value="${escapeHtml(step.value || "")}" placeholder="Text, key, URL fragment, or timeout ms" />
+          <input name="browser_step_value" type="${sensitive ? "password" : "text"}" value="${escapeHtml(step.value || "")}" placeholder="Text, key, URL fragment, or timeout ms" />
+        </label>
+        <label class="checkbox-field ${action === "fill" ? "" : "hidden"}">
+          <input name="browser_step_sensitive" type="checkbox" ${sensitive ? "checked" : ""} />
+          <span>Treat this step value as sensitive and keep it masked in the editor</span>
         </label>
         <label>
           <span>Timeout Seconds</span>
@@ -4522,12 +6300,14 @@ function recorderStepToBrowserStep(step, index) {
     };
   }
   if (step.event === "fill") {
+    const sensitive = Boolean(step.sensitive);
     return {
       name: `Fill ${step.selector || `field ${index + 1}`}`,
       action: "fill",
       selector: step.selector || "input",
       value: step.value || "",
       timeout_seconds: null,
+      sensitive,
     };
   }
   if (step.event === "submit") {
@@ -4613,7 +6393,8 @@ async function hydrateRecorderStorageState(payload) {
 function recorderStepMarkup(step, index) {
   const meta = [];
   if (step.selector) meta.push(step.selector);
-  if (step.value) meta.push(String(step.value).slice(0, 60));
+  if (step.display_value) meta.push(String(step.display_value).slice(0, 60));
+  else if (step.value) meta.push(step.sensitive ? "••••••••" : String(step.value).slice(0, 60));
   if (step.url) meta.push(step.url);
   return `
     <div class="status-row compact recorder-step-row">
@@ -5998,7 +7779,37 @@ function renderAdminPage(users, telemetry, portalSettings, emailSettings, uiScal
   `;
 }
 
-function renderAdminHomePage(users, telemetry, portalSettings, emailSettings, uiScaling, clusterSummary = {}) {
+function renderSlackSettingsSection(slackSettings) {
+  return `
+    <details class="accordion-item">
+      <summary class="accordion-summary">
+        <div>
+          <strong>Slack Notifications</strong>
+          <div class="status-meta">
+            <span>${slackSettings?.enabled ? "Enabled" : "Disabled"}</span>
+            <span>${escapeHtml(slackSettings?.channel || "Default webhook destination")}</span>
+          </div>
+        </div>
+      </summary>
+      <div class="accordion-body">
+        <form id="slack-settings-form" class="check-form">
+          <label><span>Enabled</span><select name="enabled"><option value="true" ${slackSettings?.enabled ? "selected" : ""}>Enabled</option><option value="false" ${!slackSettings?.enabled ? "selected" : ""}>Disabled</option></select></label>
+          <label><span>Webhook URL</span><input name="webhook_url" type="password" value="${escapeHtml(slackSettings?.webhook_url || "")}" placeholder="https://hooks.slack.com/services/..." /></label>
+          <label><span>Channel Override</span><input name="channel" value="${escapeHtml(slackSettings?.channel || "")}" placeholder="#monitoring-alerts" /></label>
+          <label><span>Display Name</span><input name="username" value="${escapeHtml(slackSettings?.username || "")}" placeholder="Service Health Portal" /></label>
+          <label><span>Icon Emoji</span><input name="icon_emoji" value="${escapeHtml(slackSettings?.icon_emoji || "")}" placeholder=":satellite_antenna:" /></label>
+          <label><span>Mention Here</span><select name="mention_here"><option value="true" ${slackSettings?.mention_here ? "selected" : ""}>Enabled</option><option value="false" ${!slackSettings?.mention_here ? "selected" : ""}>Disabled</option></select></label>
+          <label><span>Message Prefix</span><input name="message_prefix" value="${escapeHtml(slackSettings?.message_prefix || "[async-service-monitor]")}" /></label>
+          <button type="submit">Save Slack Settings</button>
+          <p class="form-note">Slack alerts are delivered through an incoming webhook. You can keep Slack and email enabled at the same time.</p>
+          <p class="form-status" id="slack-settings-status"></p>
+        </form>
+      </div>
+    </details>
+  `;
+}
+
+function renderAdminHomePage(users, telemetry, portalSettings, emailSettings, slackSettings, uiScaling, clusterSummary = {}) {
   setWorkspaceHeader("Administration", "Choose the part of the platform you want to administer.", [
     { label: "Administration" },
   ]);
@@ -6027,7 +7838,7 @@ function renderAdminHomePage(users, telemetry, portalSettings, emailSettings, ui
             <p>Set up telemetry, notifications, scaling, portal auth, and cloud integration options.</p>
             <div class="status-meta">
               <span>${telemetry?.enabled ? "Telemetry enabled" : "Telemetry disabled"}</span>
-              <span>${emailSettings?.enabled ? "Notifications enabled" : "Notifications disabled"}</span>
+              <span>${emailSettings?.enabled || slackSettings?.enabled ? "Notifications enabled" : "Notifications disabled"}</span>
               <span>${uiScaling?.enabled ? "Scaled UI enabled" : "Scaled UI disabled"}</span>
             </div>
           </a>
@@ -6168,7 +7979,7 @@ function renderAdminUsersPage(users) {
   `;
 }
 
-function renderAdminConfigPage(telemetry, portalSettings, emailSettings, uiScaling) {
+function renderAdminConfigPage(telemetry, portalSettings, emailSettings, slackSettings, uiScaling) {
   setWorkspaceHeader("Application Configuration", "Configure notifications, storage, UI scaling, and cloud integrations.", [
     { label: "Administration", href: "/admin" },
     { label: "Application Configuration" },
@@ -6180,7 +7991,7 @@ function renderAdminConfigPage(telemetry, portalSettings, emailSettings, uiScali
       <section class="panel">
         <div class="panel-head">
           <h3>Application Configuration</h3>
-          <p>Set up telemetry storage, email notifications, scaled dashboards, authentication, and OCI-ready service integrations.</p>
+          <p>Set up telemetry storage, email and Slack notifications, scaled dashboards, authentication, and OCI-ready service integrations.</p>
         </div>
         <div class="accordion">
           <details class="accordion-item">
@@ -6289,6 +8100,8 @@ function renderAdminConfigPage(telemetry, portalSettings, emailSettings, uiScali
               </form>
             </div>
           </details>
+
+          ${renderSlackSettingsSection(slackSettings)}
 
           <details class="accordion-item">
             <summary class="accordion-summary">
@@ -6486,6 +8299,7 @@ function browserMonitorPayload(form) {
     action: String(row.querySelector("select[name='browser_step_action']")?.value || "wait_for_selector"),
     selector: String(row.querySelector("input[name='browser_step_selector']")?.value || "").trim() || null,
     value: String(row.querySelector("input[name='browser_step_value']")?.value || "").trim() || null,
+    sensitive: Boolean(row.querySelector("input[name='browser_step_sensitive']")?.checked),
     timeout_seconds: row.querySelector("input[name='browser_step_timeout_seconds']")?.value
       ? Number(row.querySelector("input[name='browser_step_timeout_seconds']")?.value)
       : null,
@@ -6523,6 +8337,70 @@ function browserMonitorPayload(form) {
       storage_state_captured_at: null,
       steps,
     },
+  };
+}
+
+function networkPathMonitorPayload(form) {
+  const formData = new FormData(form);
+  const target = String(formData.get("target") || "").trim();
+  const isUrl = /^https?:\/\//i.test(target);
+  const portRaw = String(formData.get("port") || "").trim();
+  return {
+    id: form.dataset.originalId || null,
+    name: String(formData.get("name") || "Network Path Monitor").trim(),
+    type: "network_path",
+    enabled: String(formData.get("enabled")) === "true",
+    interval_seconds: Number(formData.get("interval_seconds") || 300),
+    placement_mode: "auto",
+    assigned_node_id: null,
+    timeout_seconds: Number(formData.get("timeout_seconds") || 30),
+    url: isUrl ? target : null,
+    host: isUrl ? null : target || null,
+    port: portRaw ? Number(portRaw) : null,
+    database_name: null,
+    database_engine: "postgresql",
+    request_method: "GET",
+    request_headers: [],
+    request_body: null,
+    request_body_mode: "none",
+    expected_statuses: [200],
+    expected_headers: [],
+    max_response_time_ms: null,
+    expect_authenticated_statuses: [200],
+    auth: null,
+    content: { contains: [], not_contains: [], regex: null },
+    browser: null,
+    network_path: {
+      request_type: String(formData.get("request_type") || "tcp"),
+      source_service: String(formData.get("source_service") || "").trim() || null,
+      destination_service: String(formData.get("destination_service") || "").trim() || null,
+      max_ttl: Number(formData.get("max_ttl") || 30),
+      e2e_queries: Number(formData.get("e2e_queries") || 10),
+      traceroute_queries: Number(formData.get("traceroute_queries") || 1),
+      tcp_traceroute_strategy: String(formData.get("tcp_traceroute_strategy") || "sack"),
+      latency_operator_1: String(formData.get("latency_operator_1") || "avg"),
+      latency_operator_2: String(formData.get("latency_operator_2") || "<="),
+      latency_value: String(formData.get("latency_value") || "").trim() ? Number(formData.get("latency_value")) : null,
+      packet_loss_operator: String(formData.get("packet_loss_operator") || "<="),
+      packet_loss_value: String(formData.get("packet_loss_value") || "").trim() ? Number(formData.get("packet_loss_value")) : null,
+      jitter_operator: String(formData.get("jitter_operator") || "<="),
+      jitter_value: String(formData.get("jitter_value") || "").trim() ? Number(formData.get("jitter_value")) : null,
+      hops_operator_1: String(formData.get("hops_operator_1") || "avg"),
+      hops_operator_2: String(formData.get("hops_operator_2") || "<="),
+      hops_value: String(formData.get("hops_value") || "").trim() ? Number(formData.get("hops_value")) : null,
+      alert_window_minutes: Number(formData.get("alert_window_minutes") || 5),
+      n_locations: Number(formData.get("n_locations") || 1),
+      total_locations: Number(formData.get("total_locations") || 3),
+      tags: parseCsv(formData.get("tags") || ""),
+    },
+    retry: {
+      attempts: 1,
+      delay_seconds: 0,
+      retry_on_statuses: [],
+      retry_on_timeout: true,
+      retry_on_connection_error: true,
+    },
+    alert_thresholds: alertThresholdPayload(formData),
   };
 }
 
@@ -6564,6 +8442,16 @@ function updateBrowserStepVisibility(row) {
   });
   row.querySelectorAll(".browser-step-value").forEach((node) => {
     node.classList.toggle("hidden", !["fill", "press", "assert_text", "assert_url_contains", "wait_for_timeout", "navigate"].includes(action));
+  });
+  row.querySelectorAll("input[name='browser_step_value']").forEach((node) => {
+    const sensitive = Boolean(row.querySelector("input[name='browser_step_sensitive']")?.checked);
+    node.type = sensitive ? "password" : "text";
+  });
+  row.querySelectorAll("input[name='browser_step_sensitive']").forEach((node) => {
+    const wrap = node.closest(".checkbox-field");
+    if (wrap) {
+      wrap.classList.toggle("hidden", action !== "fill");
+    }
   });
 }
 
@@ -6624,6 +8512,55 @@ function downloadJsonFile(filename, payload) {
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+}
+
+async function runNetworkPathMonitorTest() {
+  if (!hasRole("read_write")) return;
+  const form = document.getElementById("network-path-monitor-form");
+  if (!form) return;
+  const status = document.getElementById("network-path-monitor-status");
+  try {
+    setStatus(status, "Running network path test...");
+    const result = await api("/api/checks/test", {
+      method: "POST",
+      body: JSON.stringify(networkPathMonitorPayload(form)),
+    });
+    state.networkPathMonitorBuilder.lastTestResult = result;
+    const preview = document.getElementById("network-path-builder-preview");
+    if (preview) {
+      preview.outerHTML = networkPathMonitorPreviewMarkup(result);
+    }
+    document.querySelectorAll("#network-path-monitor-form .builder-locked").forEach((node) => {
+      node.classList.remove("builder-locked");
+    });
+    setStatus(
+      status,
+      `${result.success ? "Success" : "Failed"}: ${result.message} (${Math.round(Number(result.duration_ms || 0))} ms)`,
+      !result.success
+    );
+  } catch (error) {
+    setStatus(status, error.message, true);
+  }
+}
+
+async function openSavedMonitor(checkName, statusNode = null, pendingMessage = "Opening the saved monitor...") {
+  const canonicalName = String(checkName || "").trim();
+  if (!canonicalName) {
+    throw new Error("The saved monitor did not return a valid name.");
+  }
+  setStatus(statusNode, pendingMessage);
+  let lastError = null;
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    try {
+      await api(`/api/checks/${encodeURIComponent(canonicalName)}`);
+      navigate(`/monitors/${encodeURIComponent(canonicalName)}`);
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => window.setTimeout(resolve, 200));
+    }
+  }
+  throw lastError || new Error(`Check '${canonicalName}' was not found`);
 }
 
 async function runBrowserMonitorTest() {
@@ -6818,6 +8755,19 @@ function emailSettingsPayload(form) {
   };
 }
 
+function slackSettingsPayload(form) {
+  const formData = new FormData(form);
+  return {
+    enabled: String(formData.get("enabled")) === "true",
+    webhook_url: String(formData.get("webhook_url") || "") || null,
+    channel: String(formData.get("channel") || "") || null,
+    username: String(formData.get("username") || "") || null,
+    icon_emoji: String(formData.get("icon_emoji") || "") || null,
+    mention_here: String(formData.get("mention_here")) === "true",
+    message_prefix: String(formData.get("message_prefix") || "[async-service-monitor]"),
+  };
+}
+
 function hydrateEmailSettingsForm(form) {
   if (!form) return;
   const autoProvision = form.querySelector("select[name='auto_provision_local']")?.value === "true";
@@ -6936,11 +8886,13 @@ function isInteractiveRoute(path = window.location.pathname) {
   return (
     path === "/monitors" ||
     path === "/configured-monitors" ||
+    path === "/apm" ||
     path === "/guide" ||
     path === "/monitors/new" ||
     path === "/monitors/new/basic" ||
     path === "/monitors/new/advanced" ||
     path === "/monitors/new/advanced/browser-health-monitor" ||
+    path === "/monitors/new/advanced/network-path-monitor" ||
     path === "/monitors/new/advanced/real-user-monitoring" ||
     path === "/monitors/new/advanced/monitor-recorder" ||
     path.startsWith("/monitors/") ||
@@ -6951,13 +8903,24 @@ function isInteractiveRoute(path = window.location.pathname) {
 }
 
 async function renderRoute() {
-  state.session = await api("/api/session");
+  const session = await api("/api/session");
+  if (state.appVersion != null && session?.app_version != null && String(state.appVersion) !== String(session.app_version)) {
+    window.location.reload();
+    return;
+  }
+  state.session = session;
+  if (session?.app_version != null) {
+    state.appVersion = session.app_version;
+  }
   applyTheme();
   renderSessionChip();
 
   const path = window.location.pathname;
   if (path !== "/monitors/new/advanced/browser-health-monitor") {
     state.browserMonitorBuilder.lastTestResult = null;
+  }
+  if (path !== "/monitors/new/advanced/network-path-monitor" && !path.startsWith("/monitors/")) {
+    state.networkPathMonitorBuilder.lastTestResult = null;
   }
   if (path !== "/monitors/new/advanced/monitor-recorder") {
     const hasRecorderDraft =
@@ -7006,6 +8969,13 @@ async function renderRoute() {
       api("/api/results?limit=200"),
     ]);
     renderDashboardsPage(checks, checkMetrics, recentResults);
+    hydratePlotlyCharts(document.getElementById("app-root"));
+    return;
+  }
+
+  if (path === "/apm") {
+    const recentResults = await api("/api/results?limit=200");
+    renderApmPage(checks, recentResults);
     hydratePlotlyCharts(document.getElementById("app-root"));
     return;
   }
@@ -7070,15 +9040,16 @@ async function renderRoute() {
       navigate("/");
       return;
     }
-    const [users, telemetry, portalSettings, emailSettings, uiScaling, cluster] = await Promise.all([
+    const [users, telemetry, portalSettings, emailSettings, slackSettings, uiScaling, cluster] = await Promise.all([
       api("/api/users"),
       api("/api/settings/telemetry"),
       api("/api/settings/portal"),
       api("/api/settings/email"),
+      api("/api/settings/slack"),
       api("/api/settings/ui-scaling"),
       api("/api/cluster"),
     ]);
-    renderAdminHomePage(users, telemetry, portalSettings, emailSettings, uiScaling, { ...cluster, containers: containersData });
+    renderAdminHomePage(users, telemetry, portalSettings, emailSettings, slackSettings, uiScaling, { ...cluster, containers: containersData });
     return;
   }
 
@@ -7097,13 +9068,14 @@ async function renderRoute() {
       navigate("/");
       return;
     }
-    const [telemetry, portalSettings, emailSettings, uiScaling] = await Promise.all([
+    const [telemetry, portalSettings, emailSettings, slackSettings, uiScaling] = await Promise.all([
       api("/api/settings/telemetry"),
       api("/api/settings/portal"),
       api("/api/settings/email"),
+      api("/api/settings/slack"),
       api("/api/settings/ui-scaling"),
     ]);
-    renderAdminConfigPage(telemetry, portalSettings, emailSettings, uiScaling);
+    renderAdminConfigPage(telemetry, portalSettings, emailSettings, slackSettings, uiScaling);
     hydrateTelemetrySettingsForm(document.getElementById("telemetry-form"));
     hydrateEmailSettingsForm(document.getElementById("email-settings-form"));
     return;
@@ -7157,6 +9129,14 @@ async function renderRoute() {
     applyNetworkFilters();
     if (!hasRole("read_write")) {
       disableForm(document.getElementById("browser-monitor-form"), true);
+    }
+    return;
+  }
+
+  if (path === "/monitors/new/advanced/network-path-monitor") {
+    renderNetworkPathMonitorPage();
+    if (!hasRole("read_write")) {
+      disableForm(document.getElementById("network-path-monitor-form"), true);
     }
     return;
   }
@@ -7260,6 +9240,14 @@ async function renderRoute() {
       }
       return;
     }
+    if (check.type === "network_path") {
+      renderNetworkPathMonitorBuilder(check, "edit", state.networkPathMonitorBuilder.lastTestResult);
+      if (!hasRole("read_write")) {
+        disableForm(document.getElementById("network-path-monitor-form"), true);
+        setStatus(document.getElementById("network-path-monitor-status"), "Read-only access: editing is disabled for this account.");
+      }
+      return;
+    }
     setWorkspaceHeader(check.name, "Dedicated monitor page for editing, auth updates, and immediate re-checks.", [
       { label: "Monitors", href: "/monitors" },
       { label: "Configured Monitors", href: "/configured-monitors" },
@@ -7327,6 +9315,46 @@ function handleToggle(event) {
 }
 
 async function handleSubmit(event) {
+  if (event.target.id === "network-path-monitor-form") {
+    event.preventDefault();
+    if (!hasRole("read_write")) return;
+    const form = event.target;
+    const payload = networkPathMonitorPayload(form);
+    const status = document.getElementById("network-path-monitor-status");
+    const originalName = form.dataset.originalName;
+    try {
+      setStatus(status, originalName ? "Saving network path monitor..." : "Creating network path monitor...");
+      if (originalName) {
+        const response = await api(`/api/checks/${encodeURIComponent(originalName)}`, {
+          method: "PUT",
+          body: JSON.stringify(payload),
+        });
+        state.networkPathMonitorBuilder.lastTestResult = null;
+        const savedName = response?.check?.name || payload.name;
+        if (savedName !== originalName) {
+          await openSavedMonitor(savedName, status, "Network path monitor saved. Opening the saved monitor...");
+          return;
+        }
+        setStatus(status, "Network path monitor saved.");
+        await renderRoute();
+      } else {
+        const response = await api("/api/checks", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        state.networkPathMonitorBuilder.lastTestResult = null;
+        await openSavedMonitor(
+          response?.check?.name || payload.name,
+          status,
+          "Network path monitor created. Opening the saved monitor..."
+        );
+      }
+    } catch (error) {
+      setStatus(status, error.message, true);
+    }
+    return;
+  }
+
   if (event.target.id === "browser-monitor-form") {
     event.preventDefault();
     if (!hasRole("read_write")) return;
@@ -7542,6 +9570,24 @@ async function handleSubmit(event) {
         body: JSON.stringify(emailSettingsPayload(form)),
       });
       setStatus(status, result.message || "Email settings saved.");
+    } catch (error) {
+      setStatus(status, error.message, true);
+    }
+    return;
+  }
+
+  if (event.target.id === "slack-settings-form") {
+    event.preventDefault();
+    if (!hasRole("admin")) return;
+    const form = event.target;
+    const status = document.getElementById("slack-settings-status");
+    try {
+      setStatus(status, "Saving Slack settings...");
+      const result = await api("/api/settings/slack", {
+        method: "PUT",
+        body: JSON.stringify(slackSettingsPayload(form)),
+      });
+      setStatus(status, result.message || "Slack settings saved.");
     } catch (error) {
       setStatus(status, error.message, true);
     }
@@ -7772,6 +9818,16 @@ async function handleClick(event) {
     return;
   }
 
+  if (event.target.id === "test-network-path-monitor-btn") {
+    await runNetworkPathMonitorTest();
+    return;
+  }
+
+  if (event.target.id === "test-network-path-workflow-btn") {
+    await runNetworkPathMonitorTest();
+    return;
+  }
+
   const harDownload = event.target.closest("[data-download-har]");
   if (harDownload) {
     const context = state.dashboardDetailContext;
@@ -7893,6 +9949,32 @@ async function handleClick(event) {
     return;
   }
 
+  if (event.target.matches("[data-apm-trace-tab]")) {
+    state.apmWorkspace.traceTab = event.target.dataset.apmTraceTab || "flame";
+    renderRoute().catch((error) => alert(error.message));
+    return;
+  }
+
+  if (event.target.matches("[data-apm-detail-tab]")) {
+    state.apmWorkspace.detailTab = event.target.dataset.apmDetailTab || "overview";
+    renderRoute().catch((error) => alert(error.message));
+    return;
+  }
+
+  const apmSpanRow = event.target.closest("[data-apm-span-id]");
+  if (apmSpanRow) {
+    state.apmWorkspace.selectedSpanId = apmSpanRow.dataset.apmSpanId || "";
+    renderRoute().catch((error) => alert(error.message));
+    return;
+  }
+
+  const apmHopButton = event.target.closest("[data-apm-hop-id]");
+  if (apmHopButton) {
+    state.apmWorkspace.selectedHopId = apmHopButton.dataset.apmHopId || "";
+    renderRoute().catch((error) => alert(error.message));
+    return;
+  }
+
   const removeBrowserStep = event.target.closest("[data-remove-browser-step]");
   if (removeBrowserStep) {
     removeBrowserStep.closest("[data-browser-step]")?.remove();
@@ -7961,6 +10043,12 @@ async function handleClick(event) {
 
   if (event.target.id === "abandon-browser-builder-btn") {
     state.browserMonitorBuilder.lastTestResult = null;
+    navigate("/monitors/new/advanced");
+    return;
+  }
+
+  if (event.target.id === "abandon-network-path-builder-btn") {
+    state.networkPathMonitorBuilder.lastTestResult = null;
     navigate("/monitors/new/advanced");
     return;
   }
@@ -8070,10 +10158,43 @@ function handleChange(event) {
   }
 
   if (
+    event.target.matches("#apm-monitor-select") ||
+    event.target.matches("#apm-run-select") ||
     event.target.matches("#browser-monitor-form select[name='placement_mode']") ||
     event.target.matches("#monitor-recorder-form select[name='placement_mode']") ||
     event.target.matches("select[name='browser_step_action']")
   ) {
+    if (event.target.matches("#apm-monitor-select")) {
+      state.apmWorkspace.selectedCheckKey = event.target.value || "";
+      state.apmWorkspace.selectedRunKey = "";
+      state.apmWorkspace.selectedSpanId = "";
+      state.apmWorkspace.selectedHopId = "";
+      renderRoute().catch((error) => alert(error.message));
+      return;
+    }
+    if (event.target.matches("#apm-run-select")) {
+      state.apmWorkspace.selectedRunKey = event.target.value || "";
+      state.apmWorkspace.selectedSpanId = "";
+      state.apmWorkspace.selectedHopId = "";
+      renderRoute().catch((error) => alert(error.message));
+      return;
+    }
+    if (event.target.matches("#apm-path-warning-ms")) {
+      state.apmWorkspace.pathLatencyWarningMs = Math.max(1, Number(event.target.value || 1));
+      if (state.apmWorkspace.pathLatencyCriticalMs <= state.apmWorkspace.pathLatencyWarningMs) {
+        state.apmWorkspace.pathLatencyCriticalMs = state.apmWorkspace.pathLatencyWarningMs + 1;
+      }
+      renderRoute().catch((error) => alert(error.message));
+      return;
+    }
+    if (event.target.matches("#apm-path-critical-ms")) {
+      state.apmWorkspace.pathLatencyCriticalMs = Math.max(
+        state.apmWorkspace.pathLatencyWarningMs + 1,
+        Number(event.target.value || state.apmWorkspace.pathLatencyWarningMs + 1)
+      );
+      renderRoute().catch((error) => alert(error.message));
+      return;
+    }
     if (
       event.target.matches("#browser-monitor-form select[name='placement_mode']") ||
       event.target.matches("#monitor-recorder-form select[name='placement_mode']")

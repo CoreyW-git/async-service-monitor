@@ -43,6 +43,14 @@ notifications:
     subject_prefix: "[async-service-monitor]"
     use_tls: true
     use_ssl: false
+  slack:
+    enabled: ${SLACK_ENABLED}
+    webhook_url: ${SLACK_WEBHOOK_URL}
+    channel: ${SLACK_CHANNEL}
+    username: Service Health Portal
+    icon_emoji: ":satellite_antenna:"
+    mention_here: false
+    message_prefix: "[async-service-monitor]"
 
 telemetry:
   enabled: false

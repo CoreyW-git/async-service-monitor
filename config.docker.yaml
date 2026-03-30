@@ -19,6 +19,13 @@ notifications:
     subject_prefix: "[async-service-monitor]"
     use_tls: true
     use_ssl: false
+  slack:
+    enabled: false
+    channel: "#monitoring-alerts"
+    username: Service Health Portal
+    icon_emoji: ":satellite_antenna:"
+    mention_here: false
+    message_prefix: "[async-service-monitor]"
 
 telemetry:
   enabled: false

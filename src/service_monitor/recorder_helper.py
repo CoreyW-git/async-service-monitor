@@ -121,10 +121,15 @@ INIT_SCRIPT_TEMPLATE = """
     const target = event.target;
     if (!target || !target.tagName) return;
     if (!["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
+    const inputType = (target.getAttribute("type") || "").toLowerCase();
+    const autocomplete = (target.getAttribute("autocomplete") || "").toLowerCase();
+    const sensitive = inputType === "password" || autocomplete.includes("password");
     send({
       event: "fill",
       selector: selectorFor(target),
-      value: target.value || ""
+      value: target.value || "",
+      display_value: sensitive ? "••••••••" : (target.value || ""),
+      sensitive
     });
   }, true);
 

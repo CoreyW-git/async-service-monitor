@@ -21,9 +21,10 @@ from service_monitor.checks import (
     run_dns_check,
     run_generic_check,
     run_http_check,
+    run_network_path_check,
 )
 from service_monitor.config import AppConfig, CheckConfig
-from service_monitor.notifier import EmailNotifier
+from service_monitor.notifier import NotificationManager
 from service_monitor.state import MonitorState
 from service_monitor.telemetry import TelemetryStore
 
@@ -37,7 +38,10 @@ class MonitorRunner:
         self.state.node_listeners = list(self.state.node_listeners) + [self._record_node_telemetry]
         self.stop_event = asyncio.Event()
         self.reload_lock = asyncio.Lock()
-        self.notifier = EmailNotifier(config.notifications.email)
+        self.notifier = NotificationManager(
+            config.notifications.email,
+            config.notifications.slack,
+        )
         self.cluster = ClusterCoordinator(config, self.notifier, self.state)
         self.tasks: dict[str, asyncio.Task[None]] = {}
         self.peer_task: asyncio.Task[None] | None = None
@@ -84,7 +88,10 @@ class MonitorRunner:
             previous_states = self.cluster.peer_states
             self.config = config
             self.telemetry.config = config.telemetry
-            self.notifier.config = config.notifications.email
+            self.notifier.update(
+                config.notifications.email,
+                config.notifications.slack,
+            )
             if previous_enabled and self.client is not None:
                 await self.cluster.stop()
             self.cluster.config = config
@@ -323,6 +330,8 @@ class MonitorRunner:
             return await run_database_check(check, timeout_seconds)
         if check.type == "browser":
             return await run_browser_check(check, timeout_seconds)
+        if check.type == "network_path":
+            return await run_network_path_check(check, timeout_seconds)
 
         raise ValueError(f"Unsupported check type: {check.type}")
 
@@ -386,6 +395,31 @@ class MonitorRunner:
                 ],
             }
             if check.browser
+            else None,
+            "network_path": {
+                "request_type": check.network_path.request_type,
+                "source_service": check.network_path.source_service,
+                "destination_service": check.network_path.destination_service,
+                "max_ttl": check.network_path.max_ttl,
+                "e2e_queries": check.network_path.e2e_queries,
+                "traceroute_queries": check.network_path.traceroute_queries,
+                "tcp_traceroute_strategy": check.network_path.tcp_traceroute_strategy,
+                "latency_operator_1": check.network_path.latency_operator_1,
+                "latency_operator_2": check.network_path.latency_operator_2,
+                "latency_value": check.network_path.latency_value,
+                "packet_loss_operator": check.network_path.packet_loss_operator,
+                "packet_loss_value": check.network_path.packet_loss_value,
+                "jitter_operator": check.network_path.jitter_operator,
+                "jitter_value": check.network_path.jitter_value,
+                "hops_operator_1": check.network_path.hops_operator_1,
+                "hops_operator_2": check.network_path.hops_operator_2,
+                "hops_value": check.network_path.hops_value,
+                "alert_window_minutes": check.network_path.alert_window_minutes,
+                "n_locations": check.network_path.n_locations,
+                "total_locations": check.network_path.total_locations,
+                "tags": check.network_path.tags,
+            }
+            if check.network_path
             else None,
             "expected_statuses": check.expected_statuses,
             "expect_authenticated_statuses": check.expect_authenticated_statuses,

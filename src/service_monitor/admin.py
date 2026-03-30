@@ -36,12 +36,14 @@ from service_monitor.config import (
     DockerRecoveryConfig,
     EmailConfig,
     HeaderAssertionConfig,
+    NetworkPathConfig,
     OCIAuthConfig,
     PeerConfig,
     PortalAuthConfig,
     PortalUserConfig,
     RequestHeaderConfig,
     RetryConfig,
+    SlackConfig,
     TelemetryConfig,
     UIScalingConfig,
     UnauthenticatedProbeConfig,
@@ -100,6 +102,7 @@ class BrowserStepPayload(BaseModel):
     selector: str | None = None
     value: str | None = None
     timeout_seconds: float | None = None
+    sensitive: bool = False
 
 
 class BrowserPayload(BaseModel):
@@ -129,10 +132,34 @@ class AlertThresholdsPayload(BaseModel):
     p99_latency_critical_ms: float = 5000.0
 
 
+class NetworkPathPayload(BaseModel):
+    request_type: Literal["tcp", "udp", "icmp"] = "tcp"
+    source_service: str | None = None
+    destination_service: str | None = None
+    max_ttl: int = 30
+    e2e_queries: int = 50
+    traceroute_queries: int = 3
+    tcp_traceroute_strategy: Literal["sack", "syn", "force_sack"] = "sack"
+    latency_operator_1: Literal["avg", "max", "min"] = "avg"
+    latency_operator_2: Literal["is", "<", "<=", ">", ">="] = "<="
+    latency_value: float | None = None
+    packet_loss_operator: Literal["is", "<", "<=", ">", ">="] = "<="
+    packet_loss_value: float | None = None
+    jitter_operator: Literal["is", "<", "<=", ">", ">="] = "<="
+    jitter_value: float | None = None
+    hops_operator_1: Literal["avg", "max", "min"] = "avg"
+    hops_operator_2: Literal["is", "<", "<=", ">", ">="] = "<="
+    hops_value: float | None = None
+    alert_window_minutes: int = 5
+    n_locations: int = 1
+    total_locations: int = 3
+    tags: list[str] = Field(default_factory=list)
+
+
 class CheckPayload(BaseModel):
     id: str | None = None
     name: str
-    type: Literal["http", "dns", "auth", "database", "generic", "browser", "api"]
+    type: Literal["http", "dns", "auth", "database", "generic", "browser", "api", "network_path"]
     enabled: bool = True
     interval_seconds: float
     placement_mode: Literal["auto", "specific"] = "auto"
@@ -154,6 +181,7 @@ class CheckPayload(BaseModel):
     auth: AuthPayload | None = None
     content: ContentPayload | None = None
     browser: BrowserPayload | None = None
+    network_path: NetworkPathPayload | None = None
     retry: RetryPayload = Field(default_factory=RetryPayload)
     alert_thresholds: AlertThresholdsPayload = Field(default_factory=AlertThresholdsPayload)
 
@@ -293,6 +321,16 @@ class EmailSettingsPayload(BaseModel):
     local_ui_port: int = 8025
 
 
+class SlackSettingsPayload(BaseModel):
+    enabled: bool = False
+    webhook_url: str | None = None
+    channel: str | None = None
+    username: str | None = None
+    icon_emoji: str | None = None
+    mention_here: bool = False
+    message_prefix: str = "[async-service-monitor]"
+
+
 class UIScalingPayload(BaseModel):
     enabled: bool = False
     dashboard_replicas: int = 2
@@ -337,6 +375,7 @@ def _browser_from_payload(payload: BrowserPayload | None) -> BrowserConfig | Non
                 selector=step.selector,
                 value=step.value,
                 timeout_seconds=step.timeout_seconds,
+                sensitive=step.sensitive,
             )
             for step in payload.steps
         ],
@@ -347,6 +386,12 @@ def _alert_thresholds_from_payload(payload: AlertThresholdsPayload | None) -> Al
     if payload is None:
         return AlertThresholdsConfig()
     return AlertThresholdsConfig(**payload.model_dump())
+
+
+def _network_path_from_payload(payload: NetworkPathPayload | None) -> NetworkPathConfig | None:
+    if payload is None:
+        return None
+    return NetworkPathConfig(**payload.model_dump())
 
 
 def _request_headers_from_payload(payload: list[RequestHeaderPayload] | None) -> list[RequestHeaderConfig]:
@@ -399,6 +444,7 @@ def _check_from_payload(payload: CheckPayload) -> CheckConfig:
         auth=_auth_from_payload(payload.auth),
         content=_content_from_payload(payload.content),
         browser=_browser_from_payload(payload.browser),
+        network_path=_network_path_from_payload(payload.network_path),
         retry=_retry_from_payload(payload.retry),
         alert_thresholds=_alert_thresholds_from_payload(payload.alert_thresholds),
     )
@@ -453,6 +499,11 @@ def _frontend_html() -> str:
     html = html.replace('src="/vendor/plotly.min.js"', f'src="/vendor/plotly.min.js?v={plotly_version}"')
     html = html.replace('src="/app.js"', f'src="/app.js?v={js_version}"')
     return html
+
+
+def _frontend_version() -> int:
+    web_dir = Path(__file__).parent / "web"
+    return int((web_dir / "app.js").stat().st_mtime)
 
 
 def _no_cache_headers() -> dict[str, str]:
@@ -602,10 +653,15 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
     const target = event.target;
     if (!target || !target.tagName) return;
     if (!["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
+    const inputType = (target.getAttribute("type") || "").toLowerCase();
+    const autocomplete = (target.getAttribute("autocomplete") || "").toLowerCase();
+    const sensitive = inputType === "password" || autocomplete.indexOf("password") >= 0;
     post({{
       event: "fill",
       selector: selectorFor(target),
-      value: target.value || ""
+      value: target.value || "",
+      display_value: sensitive ? "••••••••" : (target.value || ""),
+      sensitive: sensitive
     }});
   }}, true);
 
@@ -1364,6 +1420,10 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
     async def dashboard_detail_page(check_name: str) -> str:
         return HTMLResponse(_frontend_html(), headers=_no_cache_headers())
 
+    @app.get("/apm", response_class=HTMLResponse)
+    async def apm_page() -> str:
+        return HTMLResponse(_frontend_html(), headers=_no_cache_headers())
+
     @app.get("/monitors/new", response_class=HTMLResponse)
     async def monitor_create_page() -> str:
         return HTMLResponse(_frontend_html(), headers=_no_cache_headers())
@@ -1378,6 +1438,10 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
 
     @app.get("/monitors/new/advanced/browser-health-monitor", response_class=HTMLResponse)
     async def monitor_create_browser_health_page() -> str:
+        return HTMLResponse(_frontend_html(), headers=_no_cache_headers())
+
+    @app.get("/monitors/new/advanced/network-path-monitor", response_class=HTMLResponse)
+    async def monitor_create_network_path_page() -> str:
         return HTMLResponse(_frontend_html(), headers=_no_cache_headers())
 
     @app.get("/monitors/new/advanced/real-user-monitoring", response_class=HTMLResponse)
@@ -1479,7 +1543,9 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
 
     @app.get("/api/session")
     async def session(session_id: str | None = Cookie(default=None, alias="service_monitor_session")) -> dict[str, object]:
-        return auth_manager.authenticate_optional(session_id)
+        payload = auth_manager.authenticate_optional(session_id)
+        payload["app_version"] = _frontend_version()
+        return payload
 
     @app.get("/livez")
     async def livez() -> dict[str, object]:
@@ -1745,7 +1811,7 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
 
         runner = _get_runner()
         await runner.apply_config(store.load())
-        return {"status": "ok"}
+        return {"status": "ok", "check": {"id": check.id, "name": check.name, "type": check.type}}
 
     @app.put("/api/checks/{check_name}")
     async def update_check(
@@ -1774,7 +1840,7 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
 
         runner = _get_runner()
         await runner.apply_config(store.load())
-        return {"status": "ok"}
+        return {"status": "ok", "check": {"id": check.id, "name": check.name, "type": check.type}}
 
     @app.patch("/api/checks/{check_name}/enabled")
     async def set_check_enabled(
@@ -2429,6 +2495,34 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         await runner.apply_config(store.load())
         return {"status": "ok", "message": message}
+
+    @app.get("/api/settings/slack")
+    async def slack_settings(
+        current_user: dict[str, object] = Depends(require_admin),
+    ) -> dict[str, object]:
+        slack = _get_runtime_config().notifications.slack
+        return {
+            "enabled": slack.enabled,
+            "webhook_url": slack.webhook_url,
+            "channel": slack.channel,
+            "username": slack.username,
+            "icon_emoji": slack.icon_emoji,
+            "mention_here": slack.mention_here,
+            "message_prefix": slack.message_prefix,
+        }
+
+    @app.put("/api/settings/slack")
+    async def update_slack_settings(
+        payload: SlackSettingsPayload,
+        current_user: dict[str, object] = Depends(require_admin),
+    ) -> dict[str, object]:
+        slack = SlackConfig(**payload.model_dump())
+        try:
+            store.update_slack_settings(slack)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        await _get_runner().apply_config(store.load())
+        return {"status": "ok", "message": "Slack settings saved."}
 
     @app.get("/api/settings/portal")
     async def portal_settings(
