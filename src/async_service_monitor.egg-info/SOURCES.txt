@@ -16,6 +16,7 @@ src/service_monitor/cluster.py
 src/service_monitor/config.py
 src/service_monitor/config_store.py
 src/service_monitor/notifier.py
+src/service_monitor/recorder_helper.py
 src/service_monitor/runner.py
 src/service_monitor/secrets.py
 src/service_monitor/state.py
@@ -23,3 +24,7 @@ src/service_monitor/telemetry.py
 src/service_monitor/web/app.css
 src/service_monitor/web/app.js
 src/service_monitor/web/index.html
+src/service_monitor/web/help_assets/architecture-overview.svg
+src/service_monitor/web/help_assets/monitor-lifecycle.svg
+src/service_monitor/web/help_assets/telemetry-data-layer.svg
+src/service_monitor/web/vendor/plotly.min.js

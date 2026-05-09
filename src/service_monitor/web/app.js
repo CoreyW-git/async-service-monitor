@@ -49,9 +49,8 @@ const state = {
     traceTab: "flame",
     detailTab: "overview",
     selectedSpanId: "",
-    selectedHopId: "",
-    pathLatencyWarningMs: 80,
-    pathLatencyCriticalMs: 200,
+    pathMetric: "loss",
+    selectedPathNodeKey: "",
   },
   helpWorkspace: {
     query: "",
@@ -1560,92 +1559,75 @@ function hydratePlotlyCharts(root = document) {
         xaxis: { gridcolor: palette.line, color: palette.muted, title: { text: "Elapsed Time (ms)", font: { color: palette.muted, size: 10 } } },
         yaxis: { autorange: "reversed", color: palette.muted, fixedrange: true },
       };
-    } else if (kind === "path-e2e") {
-      traces = [
-        {
-          x: points.map((point) => point.query),
-          y: points.map((point) => Number(point.latency_ms || 0)),
+    } else if (kind === "network-path-metric") {
+      const metric = payload.metric || "loss";
+      const points = Array.isArray(payload.points) ? payload.points : [];
+      const baseX = points.map((point) => point.label || "");
+      if (metric === "latency") {
+        traces = [{
+          x: baseX,
+          y: points.map((point) => Number(point.value ?? 0)),
           type: "scatter",
           mode: "lines+markers",
-          name: "Latency (ms)",
           line: { color: "#2563eb", width: 3 },
-          marker: { size: 8, color: points.map((point) => point.success ? palette.green : palette.red) },
-          hovertemplate: "Query %{x}<br>Latency %{y:.2f} ms<extra></extra>",
-        },
-        {
-          x: points.map((point) => point.query),
-          y: points.map((point) => Number(point.packet_loss_pct || 0)),
-          type: "scatter",
-          mode: "lines+markers",
-          name: "Packet Loss (%)",
-          yaxis: "y2",
-          line: { color: palette.red, width: 2, dash: "dot" },
-          marker: { size: 6, color: palette.red },
-          hovertemplate: "Query %{x}<br>Packet Loss %{y:.2f}%<extra></extra>",
-        },
-      ];
-      layout = {
-        ...layout,
-        height: payload.height || 220,
-        legend: { orientation: "h", x: 0, y: 1.14, font: { color: palette.muted, size: 10 } },
-        xaxis: { gridcolor: palette.line, color: palette.muted, title: { text: "Query", font: { color: palette.muted, size: 10 } } },
-        yaxis: { gridcolor: palette.line, color: palette.muted, title: { text: "Latency (ms)", font: { color: palette.muted, size: 10 } } },
-        yaxis2: { overlaying: "y", side: "right", showgrid: false, color: palette.muted, title: { text: "Packet Loss (%)", font: { color: palette.muted, size: 10 } } },
-      };
-    } else if (kind === "path-hop") {
-      traces = [{
-        x: points.map((point) => `Hop ${point.hop}`),
-        y: points.map((point) => Number(point.latency_ms || 0)),
-        type: "bar",
-        marker: {
-          color: points.map((point) => {
-            if (point.timeout) return palette.red;
-            if (Number(point.latency_ms || 0) >= Number(payload.criticalMs || 200)) return palette.red;
-            if (Number(point.latency_ms || 0) >= Number(payload.warningMs || 80)) return palette.amber;
-            return palette.green;
-          }),
-        },
-        customdata: points.map((point) => [point.address || "*", point.timeout ? "timeout" : "reachable", Number(point.packet_loss_pct || 0)]),
-        hovertemplate: "%{x}<br>Latency %{y:.2f} ms<br>Address %{customdata[0]}<br>Status %{customdata[1]}<br>Packet Loss %{customdata[2]:.2f}%<extra></extra>",
-      }];
-      layout = {
-        ...layout,
-        height: payload.height || 220,
-        xaxis: { gridcolor: palette.line, color: palette.muted, title: { text: "Hop", font: { color: palette.muted, size: 10 } } },
-        yaxis: { gridcolor: palette.line, color: palette.muted, title: { text: "Latency (ms)", font: { color: palette.muted, size: 10 } } },
-      };
-    } else if (kind === "path-hop-history") {
-      traces = [
-        {
-          x: points.map((point) => new Date(Number(point.timestamp || 0) * 1000)),
-          y: points.map((point) => Number(point.latency_ms || 0)),
-          type: "scatter",
-          mode: "lines+markers",
-          name: "Hop Latency (ms)",
-          line: { color: "#2563eb", width: 3 },
-          marker: { size: 8, color: points.map((point) => point.timeout ? palette.red : palette.green) },
+          marker: { size: 8, color: points.map((point) => point.ok === false ? palette.red : palette.blue) },
+          fill: "tozeroy",
+          fillcolor: "rgba(37,99,235,0.10)",
           hovertemplate: "%{x}<br>Latency %{y:.2f} ms<extra></extra>",
-        },
-        {
-          x: points.map((point) => new Date(Number(point.timestamp || 0) * 1000)),
-          y: points.map((point) => Number(point.packet_loss_pct || 0)),
+        }];
+        layout = {
+          ...layout,
+          height: payload.height || 220,
+          xaxis: { gridcolor: palette.line, color: palette.muted, title: { text: "Query", font: { color: palette.muted, size: 10 } } },
+          yaxis: { gridcolor: palette.line, color: palette.muted, title: { text: "Latency (ms)", font: { color: palette.muted, size: 10 } } },
+        };
+      } else if (metric === "jitter") {
+        traces = [{
+          x: baseX,
+          y: points.map((point) => Number(point.value ?? 0)),
           type: "scatter",
           mode: "lines+markers",
-          name: "Hop Packet Loss (%)",
-          yaxis: "y2",
-          line: { color: palette.red, width: 2, dash: "dot" },
-          marker: { size: 6, color: palette.red },
-          hovertemplate: "%{x}<br>Packet Loss %{y:.2f}%<extra></extra>",
-        },
-      ];
-      layout = {
-        ...layout,
-        height: payload.height || 220,
-        legend: { orientation: "h", x: 0, y: 1.14, font: { color: palette.muted, size: 10 } },
-        xaxis: { gridcolor: palette.line, color: palette.muted },
-        yaxis: { gridcolor: palette.line, color: palette.muted, title: { text: "Latency (ms)", font: { color: palette.muted, size: 10 } } },
-        yaxis2: { overlaying: "y", side: "right", showgrid: false, color: palette.muted, title: { text: "Packet Loss (%)", font: { color: palette.muted, size: 10 } } },
-      };
+          line: { color: "#7c3aed", width: 3 },
+          marker: { size: 8, color: "#7c3aed" },
+          fill: "tozeroy",
+          fillcolor: "rgba(124,58,237,0.10)",
+          hovertemplate: "%{x}<br>Jitter %{y:.2f} ms<extra></extra>",
+        }];
+        layout = {
+          ...layout,
+          height: payload.height || 220,
+          xaxis: { gridcolor: palette.line, color: palette.muted, title: { text: "Query", font: { color: palette.muted, size: 10 } } },
+          yaxis: { gridcolor: palette.line, color: palette.muted, title: { text: "Jitter (ms)", font: { color: palette.muted, size: 10 } } },
+        };
+      } else if (metric === "hops") {
+        traces = [{
+          x: baseX,
+          y: points.map((point) => Number(point.value ?? 0)),
+          type: "bar",
+          marker: { color: points.map((point) => point.ok === false ? palette.red : "#0f766e") },
+          hovertemplate: "%{x}<br>Hop Count %{y:.0f}<extra></extra>",
+        }];
+        layout = {
+          ...layout,
+          height: payload.height || 220,
+          xaxis: { gridcolor: palette.line, color: palette.muted, title: { text: "Traceroute Run", font: { color: palette.muted, size: 10 } } },
+          yaxis: { gridcolor: palette.line, color: palette.muted, title: { text: "Hop Count", font: { color: palette.muted, size: 10 } } },
+        };
+      } else {
+        traces = [{
+          x: baseX,
+          y: points.map((point) => Number(point.value ?? 0)),
+          type: "bar",
+          marker: { color: points.map((point) => Number(point.value ?? 0) > 0 ? palette.red : palette.green) },
+          hovertemplate: "%{x}<br>Loss %{y:.2f}%<extra></extra>",
+        }];
+        layout = {
+          ...layout,
+          height: payload.height || 220,
+          xaxis: { gridcolor: palette.line, color: palette.muted, title: { text: "Query", font: { color: palette.muted, size: 10 } } },
+          yaxis: { gridcolor: palette.line, color: palette.muted, title: { text: "Loss (%)", font: { color: palette.muted, size: 10 } } },
+        };
+      }
     } else {
       return;
     }
@@ -3646,6 +3628,593 @@ function inferApmTrace(check, result) {
   return { traceId, spans, selectedSpan };
 }
 
+function networkPathNodeKey(node) {
+  const role = String(node?.role || "hop");
+  const hop = Number(node?.hop || 0);
+  const address = String(node?.address || node?.label || "unknown")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return `${role}-${hop}-${address || "unknown"}`;
+}
+
+function networkPathNodeTone(node, context = {}) {
+  if (!node) return "neutral";
+  if (node.role === "source") return "healthy";
+  if (node.role === "destination") return context.runHealthy === false ? "critical" : "healthy";
+  const packetLoss = Number(node.packet_loss_pct || 0);
+  if (node.timeout || packetLoss >= 50) return "critical";
+  if (packetLoss > 0) return "warning";
+  return "healthy";
+}
+
+function networkPathEdgeTone(edge, baselineLatency = 25) {
+  if (!edge) return "neutral";
+  if (Number(edge.traversedCount || 0) <= 0) return "critical";
+  if (Number(edge.traversedCount || 0) < Number(edge.totalTraces || 1)) return "warning";
+  const latency = Number(edge.avgLatencyMs || 0);
+  if (latency >= baselineLatency * 2.5) return "critical";
+  if (latency >= baselineLatency * 1.45) return "warning";
+  return "healthy";
+}
+
+function networkPathToneLabel(tone) {
+  if (tone === "critical") return "Critical";
+  if (tone === "warning") return "Warning";
+  if (tone === "healthy") return "Healthy";
+  return "Neutral";
+}
+
+function buildNetworkPathTopology(check, result) {
+  const details = result?.details || {};
+  const traces = Array.isArray(details?.path?.traces) ? details.path.traces : [];
+  const aggregatedHops = Array.isArray(details?.path?.hops) ? details.path.hops : [];
+  const totalTraces = Math.max(1, traces.length || Number(details?.path?.traceroute_runs || 0) || 1);
+  const sourceNode = {
+    id: "source",
+    role: "source",
+    hop: 0,
+    label: details?.target?.source_service || "Source",
+    address: details?.target?.host || details?.target?.display || "source",
+    avg_latency_ms: 0,
+    packet_loss_pct: 0,
+    traversed_count: totalTraces,
+    timeout_count: 0,
+    raw: "Monitor source",
+  };
+  const destinationNode = {
+    id: "destination",
+    role: "destination",
+    hop: Number(aggregatedHops.length || 0) + 1,
+    label: details?.target?.destination_service || "Destination",
+    address: details?.target?.display || details?.target?.host || "destination",
+    avg_latency_ms: Number(details?.stats?.latency_ms?.avg || 0),
+    packet_loss_pct: Number(details?.stats?.packet_loss_pct || 0),
+    traversed_count: totalTraces,
+    timeout_count: 0,
+    raw: result?.message || "Destination summary",
+  };
+
+  const nodeMap = new Map();
+  const edgeMap = new Map();
+
+  const ensureHopNode = (hop, fallbackIndex = 0) => {
+    const key = networkPathNodeKey({
+      role: "hop",
+      hop: Number(hop?.hop || fallbackIndex + 1),
+      address: hop?.address || "*",
+    });
+    if (!nodeMap.has(key)) {
+      nodeMap.set(key, {
+        id: key,
+        role: "hop",
+        hop: Number(hop?.hop || fallbackIndex + 1),
+        label: `Hop ${Number(hop?.hop || fallbackIndex + 1)}`,
+        address: hop?.address || "*",
+        latencies_ms: [],
+        traversed_count: 0,
+        timeout_count: 0,
+        raw_samples: [],
+      });
+    }
+    return nodeMap.get(key);
+  };
+
+  const recordEdge = (fromId, toId, latencyMs = null) => {
+    const key = `${fromId}->${toId}`;
+    if (!edgeMap.has(key)) {
+      edgeMap.set(key, {
+        id: key,
+        fromId,
+        toId,
+        traversedCount: 0,
+        latencies: [],
+        totalTraces,
+      });
+    }
+    const edge = edgeMap.get(key);
+    edge.traversedCount += 1;
+    if (latencyMs != null && !Number.isNaN(Number(latencyMs))) {
+      edge.latencies.push(Number(latencyMs));
+    }
+  };
+
+  const usableTraces = traces.length
+    ? traces
+    : [{ hops: aggregatedHops }];
+
+  usableTraces.forEach((trace) => {
+    const hops = Array.isArray(trace?.hops) ? trace.hops : [];
+    let previousId = sourceNode.id;
+    let previousLatency = 0;
+    hops.forEach((hop, index) => {
+      const node = ensureHopNode(hop, index);
+      const hopLatencies = Array.isArray(hop?.latencies_ms)
+        ? hop.latencies_ms.map((value) => Number(value))
+        : [];
+      node.traversed_count += hop.timeout ? 0 : 1;
+      node.timeout_count += hop.timeout ? 1 : 0;
+      node.latencies_ms.push(...hopLatencies);
+      node.raw_samples.push(hop.raw || "");
+      if (hop.address && node.address === "*") {
+        node.address = hop.address;
+      }
+      const hopLatency = Number(hop.avg_latency_ms || 0);
+      const edgeLatency = hopLatency > 0 ? Math.max(0, hopLatency - previousLatency) : null;
+      recordEdge(previousId, node.id, edgeLatency);
+      previousId = node.id;
+      previousLatency = hopLatency > 0 ? hopLatency : previousLatency;
+    });
+    const destinationLatency = Number(details?.stats?.latency_ms?.avg || 0);
+    const destinationEdgeLatency = destinationLatency > 0 ? Math.max(0, destinationLatency - previousLatency) : null;
+    recordEdge(previousId, destinationNode.id, destinationEdgeLatency);
+  });
+
+  const hops = Array.from(nodeMap.values())
+    .map((node) => {
+      const latencyValues = node.latencies_ms.filter((value) => Number.isFinite(Number(value)));
+      return {
+        ...node,
+        avg_latency_ms: latencyValues.length
+          ? Number((latencyValues.reduce((sum, value) => sum + Number(value || 0), 0) / latencyValues.length).toFixed(2))
+          : null,
+        packet_loss_pct: Number((((totalTraces - Number(node.traversed_count || 0)) / Math.max(totalTraces, 1)) * 100).toFixed(2)),
+        timeout: Number(node.traversed_count || 0) === 0,
+        raw: node.raw_samples.find(Boolean) || "",
+      };
+    })
+    .sort((left, right) => (left.hop - right.hop) || String(left.address || "").localeCompare(String(right.address || "")));
+
+  const grouped = new Map();
+  hops.forEach((node) => {
+    if (!grouped.has(node.hop)) grouped.set(node.hop, []);
+    grouped.get(node.hop).push(node);
+  });
+
+  const columns = [
+    { key: "source", label: "Source", nodes: [sourceNode] },
+    ...Array.from(grouped.keys()).sort((a, b) => a - b).map((hop) => ({
+      key: `ttl-${hop}`,
+      label: `TTL ${hop}`,
+      nodes: grouped.get(hop),
+    })),
+    { key: "destination", label: "Destination", nodes: [destinationNode] },
+  ];
+
+  const edgeLatencies = Array.from(edgeMap.values())
+    .map((edge) => edge.latencies.length ? edge.latencies.reduce((sum, value) => sum + Number(value || 0), 0) / edge.latencies.length : 0)
+    .filter((value) => value > 0);
+  const baselineLatency = edgeLatencies.length
+    ? Math.max(8, edgeLatencies.reduce((sum, value) => sum + value, 0) / edgeLatencies.length)
+    : 25;
+
+  const edges = Array.from(edgeMap.values()).map((edge) => ({
+    ...edge,
+    avgLatencyMs: edge.latencies.length
+      ? Number((edge.latencies.reduce((sum, value) => sum + Number(value || 0), 0) / edge.latencies.length).toFixed(2))
+      : null,
+  }));
+
+  const nodeById = new Map([
+    [sourceNode.id, sourceNode],
+    [destinationNode.id, destinationNode],
+    ...hops.map((node) => [node.id, node]),
+  ]);
+
+  return {
+    totalTraces,
+    sourceNode,
+    destinationNode,
+    hops,
+    columns,
+    edges,
+    nodeById,
+    baselineLatency,
+    context: { runHealthy: Boolean(result?.success) },
+  };
+}
+
+function networkPathSelectedNode(topology) {
+  const selected = topology?.nodeById?.get(state.apmWorkspace.selectedPathNodeKey);
+  if (selected) return selected;
+  const next = topology?.hops?.[0] || topology?.destinationNode || topology?.sourceNode || null;
+  state.apmWorkspace.selectedPathNodeKey = next?.id || "";
+  return next;
+}
+
+function networkPathRollingJitter(attempts = []) {
+  const latencies = [];
+  return attempts.map((attempt) => {
+    if (attempt?.success !== false && Number.isFinite(Number(attempt?.latency_ms))) {
+      latencies.push(Number(attempt.latency_ms));
+    }
+    if (latencies.length < 2) return 0;
+    const deltas = [];
+    for (let index = 1; index < latencies.length; index += 1) {
+      deltas.push(Math.abs(latencies[index] - latencies[index - 1]));
+    }
+    return Number((deltas.reduce((sum, value) => sum + value, 0) / Math.max(deltas.length, 1)).toFixed(2));
+  });
+}
+
+function networkPathMetricPayload(details) {
+  const attempts = Array.isArray(details?.probe?.attempts) ? details.probe.attempts : [];
+  const traces = Array.isArray(details?.path?.traces) ? details.path.traces : [];
+  const metric = state.apmWorkspace.pathMetric || "loss";
+  if (metric === "hops") {
+    const points = (traces.length ? traces : [{ hops: Array.isArray(details?.path?.hops) ? details.path.hops : [] }]).map((trace, index) => ({
+      label: `Trace ${index + 1}`,
+      value: Number((trace?.hops || []).length || 0),
+      ok: Array.isArray(trace?.hops) && trace.hops.some((hop) => !hop.timeout),
+    }));
+    return {
+      metric,
+      title: "Hop Count Per Traceroute",
+      description: "Compare how many hops were observed in each traceroute query for this run.",
+      points,
+    };
+  }
+  if (metric === "jitter") {
+    const jitter = networkPathRollingJitter(attempts);
+    return {
+      metric,
+      title: "Rolling Jitter",
+      description: "Shows how uneven end-to-end latency becomes as the query series progresses.",
+      points: attempts.map((attempt, index) => ({
+        label: `Query ${index + 1}`,
+        value: Number(jitter[index] || 0),
+        ok: attempt?.success !== false,
+      })),
+    };
+  }
+  if (metric === "latency") {
+    return {
+      metric,
+      title: "End-to-end Latency",
+      description: "Shows end-to-end latency for each query attempt in the selected run.",
+      points: attempts.map((attempt, index) => ({
+        label: `Query ${index + 1}`,
+        value: Number(attempt?.latency_ms || 0),
+        ok: attempt?.success !== false,
+      })),
+    };
+  }
+  return {
+    metric: "loss",
+    title: "Per-query Loss",
+    description: "A failed end-to-end query is shown as 100% loss for that query, so drops are obvious.",
+    points: attempts.map((attempt, index) => ({
+      label: `Query ${index + 1}`,
+      value: attempt?.success === false ? 100 : 0,
+      ok: attempt?.success !== false,
+    })),
+  };
+}
+
+function networkPathAssertionValue(assertionName, details, check) {
+  const stats = details?.stats || {};
+  const latencyStats = stats.latency_ms || {};
+  const hopStats = stats.network_hops || {};
+  if (assertionName === "latency") {
+    const operator = check?.network_path?.latency_operator_1 || "avg";
+    return latencyStats[operator];
+  }
+  if (assertionName === "packet_loss") return stats.packet_loss_pct;
+  if (assertionName === "jitter") return stats.jitter_ms;
+  if (assertionName === "network_hops") {
+    const operator = check?.network_path?.hops_operator_1 || "avg";
+    return hopStats[operator];
+  }
+  return null;
+}
+
+function networkPathAssertionsPanelMarkup(check, result) {
+  const details = result?.details || {};
+  const assertions = Array.isArray(details?.assertions) ? details.assertions : [];
+  const attempts = Array.isArray(details?.probe?.attempts) ? details.probe.attempts : [];
+  const packetsReceived = Number(details?.probe?.successes || attempts.filter((attempt) => attempt?.success !== false).length);
+  const totalPackets = Math.max(packetsReceived, attempts.length, Number(details?.queries?.e2e_queries || 0));
+  if (!assertions.length) {
+    return `
+      <section class="guide-card apm-path-assertions-panel">
+        <div class="mini-panel-header">
+          <h4>Assertions</h4>
+          <span>No explicit assertions were configured</span>
+        </div>
+        <p class="subtle">This run was evaluated by basic success criteria only. Add latency, packet-loss, jitter, or hop-count assertions on the monitor if you want clearer pass/fail rules here.</p>
+      </section>
+    `;
+  }
+  return `
+    <section class="guide-card apm-path-assertions-panel">
+      <div class="mini-panel-header">
+        <h4>Assertions</h4>
+        <span>${escapeHtml(`${packetsReceived} / ${totalPackets} packets received`)}</span>
+      </div>
+      <div class="apm-path-assertion-list">
+        ${assertions.map((assertion) => {
+          const actual = networkPathAssertionValue(assertion.name, details, check);
+          const actualLabel = assertion.name === "packet_loss"
+            ? `${Number(actual || 0).toFixed(2)}%`
+            : assertion.name === "network_hops"
+              ? `${Number(actual || 0).toFixed(2)} hops`
+              : `${Number(actual || 0).toFixed(2)} ms`;
+          return `
+            <div class="apm-path-assertion ${assertion.success ? "healthy" : "critical"}">
+              <div>
+                <strong>${escapeHtml(String(assertion.name || "assertion").replace(/_/g, " "))}</strong>
+                <p>${escapeHtml(assertion.message || "")}</p>
+              </div>
+              <div class="apm-path-assertion-value">
+                <span>${assertion.success ? "PASS" : "FAIL"}</span>
+                <strong>${escapeHtml(actualLabel)}</strong>
+              </div>
+            </div>
+          `;
+        }).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function networkPathRouteMarkup(topology) {
+  const columnWidth = 232;
+  const rowHeight = 172;
+  const leftPad = 32;
+  const topPad = 68;
+  const colGap = 32;
+  const cardWidth = 206;
+  const cardHeight = 132;
+  const columnStride = columnWidth + colGap;
+  const maxRows = Math.max(1, ...topology.columns.map((column) => column.nodes.length));
+  const width = Math.max(920, leftPad * 2 + topology.columns.length * columnWidth + Math.max(0, topology.columns.length - 1) * colGap);
+  const height = Math.max(380, topPad + 32 + maxRows * rowHeight);
+  const positions = new Map();
+  topology.columns.forEach((column, columnIndex) => {
+    const columnHeight = column.nodes.length * rowHeight;
+    const offsetY = topPad + Math.max(0, ((maxRows * rowHeight) - columnHeight) / 2);
+    column.nodes.forEach((node, nodeIndex) => {
+      positions.set(node.id, {
+        x: leftPad + columnIndex * columnStride,
+        y: offsetY + nodeIndex * rowHeight,
+      });
+    });
+  });
+  const selectedNode = networkPathSelectedNode(topology);
+
+  return `
+    <div class="apm-path-canvas-wrap">
+      <div class="apm-path-canvas" style="width:${width}px;height:${height}px">
+        <svg class="apm-path-edge-layer" viewBox="0 0 ${width} ${height}" aria-label="Network path topology">
+          <defs>
+            <marker id="apm-path-arrow-healthy" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#16a34a"></path>
+            </marker>
+            <marker id="apm-path-arrow-warning" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#d97706"></path>
+            </marker>
+            <marker id="apm-path-arrow-critical" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#b42318"></path>
+            </marker>
+          </defs>
+          <rect x="0" y="0" width="${width}" height="${height}" rx="28" class="apm-path-canvas-backdrop"></rect>
+          ${topology.columns.map((column, columnIndex) => {
+            const labelX = leftPad + columnIndex * columnStride + (cardWidth / 2);
+            return `<text x="${labelX}" y="${topPad - 24}" text-anchor="middle" class="apm-path-column-label">${escapeHtml(column.label)}</text>`;
+          }).join("")}
+          ${topology.edges.map((edge) => {
+            const from = positions.get(edge.fromId);
+            const to = positions.get(edge.toId);
+            if (!from || !to) return "";
+            const tone = networkPathEdgeTone(edge, topology.baselineLatency);
+            const markerId = tone === "critical" ? "apm-path-arrow-critical" : tone === "warning" ? "apm-path-arrow-warning" : "apm-path-arrow-healthy";
+            const x1 = from.x + cardWidth;
+            const y1 = from.y + cardHeight / 2;
+            const x2 = to.x;
+            const y2 = to.y + cardHeight / 2;
+            const midX = (x1 + x2) / 2;
+            const midY = (y1 + y2) / 2;
+            return `
+              <g>
+                <path d="M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}" class="apm-path-edge ${tone}" marker-end="url(#${markerId})"></path>
+                <g transform="translate(${midX - 42}, ${midY - 16})">
+                  <rect width="84" height="32" rx="16" class="apm-path-edge-badge ${tone}"></rect>
+                  <text x="42" y="13" text-anchor="middle" class="apm-path-edge-metric">${escapeHtml(edge.avgLatencyMs != null ? `${Number(edge.avgLatencyMs).toFixed(0)} ms` : "n/a")}</text>
+                  <text x="42" y="24" text-anchor="middle" class="apm-path-edge-count">${escapeHtml(`${edge.traversedCount}/${topology.totalTraces} traces`)}</text>
+                </g>
+              </g>
+            `;
+          }).join("")}
+        </svg>
+        ${topology.columns.flatMap((column) => column.nodes).map((node) => {
+          const pos = positions.get(node.id);
+          const tone = networkPathNodeTone(node, topology.context);
+          const selected = selectedNode?.id === node.id;
+          const latencyLabel = node.avg_latency_ms != null ? `${Number(node.avg_latency_ms).toFixed(0)} ms` : (node.timeout ? "Timeout" : "n/a");
+          const lossLabel = `${Number(node.packet_loss_pct || 0).toFixed(0)}% loss`;
+          const tracesLabel = `${Number(node.traversed_count || 0)}/${topology.totalTraces} traces`;
+          return `
+            <button
+              type="button"
+              class="apm-path-node-card ${tone} ${selected ? "active" : ""}"
+              data-apm-path-node="${escapeHtml(node.id)}"
+              style="left:${pos.x}px;top:${pos.y}px;width:${cardWidth}px;height:${cardHeight}px"
+            >
+              <span class="apm-path-node-role">
+                <span class="apm-path-node-icon ${escapeHtml(node.role)}"></span>
+                ${escapeHtml(node.role === "source" ? "Source" : node.role === "destination" ? "Destination" : `Hop ${node.hop}`)}
+              </span>
+              <strong class="apm-path-node-label">${escapeHtml(node.label || node.address || "Node")}</strong>
+              <span class="apm-path-node-address">${escapeHtml(node.address || "Address unavailable")}</span>
+              <div class="apm-path-node-stats">
+                <span>${escapeHtml(latencyLabel)}</span>
+                <span>${escapeHtml(lossLabel)}</span>
+              </div>
+              <small class="apm-path-node-footer">${escapeHtml(tracesLabel)}</small>
+            </button>
+          `;
+        }).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function networkPathInspectorMarkup(node, topology, result) {
+  if (!node) {
+    return `
+      <section class="guide-card apm-path-inspector-panel">
+        <div class="panel-head compact">
+          <h4>Hop Inspector</h4>
+          <p>Select a node in the route view to inspect that stop in more detail.</p>
+        </div>
+      </section>
+    `;
+  }
+  const tone = networkPathNodeTone(node, topology.context);
+  return `
+    <section class="guide-card apm-path-inspector-panel">
+      <div class="panel-head compact">
+        <div>
+          <h4>Hop Inspector</h4>
+          <p>${escapeHtml(node.role === "hop" ? `Hop ${node.hop}` : node.role === "source" ? "Source node" : "Destination node")}</p>
+        </div>
+        <span class="status-pill ${tone}">${escapeHtml(networkPathToneLabel(tone))}</span>
+      </div>
+      <div class="apm-path-inspector-grid">
+        <div class="apm-path-inspector-hero ${tone}">
+          <strong>${escapeHtml(node.label || node.address || "Node")}</strong>
+          <span>${escapeHtml(node.address || "Address unavailable")}</span>
+        </div>
+        ${apmMetadataListMarkup([
+          ["Role", node.role],
+          ["Hop TTL", node.hop],
+          ["Average Latency", node.avg_latency_ms != null ? `${Number(node.avg_latency_ms).toFixed(2)} ms` : "n/a"],
+          ["Packet Loss", `${Number(node.packet_loss_pct || 0).toFixed(2)}%`],
+          ["Traversed Count", Number(node.traversed_count || 0)],
+          ["Timeout Count", Number(node.timeout_count || 0)],
+          ["Trace Health", networkPathToneLabel(tone)],
+          ["Raw Sample", node.raw || result?.message || "n/a"],
+        ])}
+      </div>
+    </section>
+  `;
+}
+
+function networkPathSummaryCardsMarkup(check, result, topology) {
+  const details = result?.details || {};
+  const stats = details?.stats || {};
+  const probe = details?.probe || {};
+  const attempts = Array.isArray(probe?.attempts) ? probe.attempts : [];
+  const packetsReceived = Number(probe?.successes || attempts.filter((attempt) => attempt?.success !== false).length);
+  const totalPackets = Math.max(packetsReceived, attempts.length, Number(details?.queries?.e2e_queries || 0));
+  const hopStats = stats.network_hops || {};
+  const summaryCards = [
+    ["Trace Health", result?.success ? "Healthy" : "Failed"],
+    ["Source", details?.target?.source_service || "Source"],
+    ["Destination", details?.target?.display || check?.host || check?.url || "Target"],
+    ["Packets Received", `${packetsReceived} / ${totalPackets}`],
+    ["Packet Loss", `${Number(stats.packet_loss_pct || 0).toFixed(2)}%`],
+    ["P50 Latency", formatDuration((stats.latency_ms || {}).avg || 0)],
+    ["Jitter", formatDuration(Number(stats.jitter_ms || 0))],
+    ["Average Hops", Number(hopStats.avg || 0).toFixed(2)],
+  ];
+  return `
+    <div class="apm-path-summary-grid">
+      ${summaryCards.map(([label, value]) => `
+        <article class="compact-card">
+          <h4>${escapeHtml(label)}</h4>
+          <p>${escapeHtml(String(value))}</p>
+        </article>
+      `).join("")}
+    </div>
+  `;
+}
+
+function networkPathAnalysisMarkup(check, result, runs = []) {
+  const details = result?.details || {};
+  const topology = buildNetworkPathTopology(check, result);
+  const selectedNode = networkPathSelectedNode(topology);
+  const metricPayload = networkPathMetricPayload(details);
+  const recentRunPoints = runs
+    .slice()
+    .reverse()
+    .slice(-12)
+    .map((run, index) => ({
+      label: `Run ${index + 1}`,
+      value: Number(run?.details?.stats?.packet_loss_pct || 0),
+      ok: Boolean(run?.success),
+    }));
+
+  return `
+    <section class="guide-card apm-network-path-panel">
+      <div class="panel-head">
+        <div>
+          <h4>Network Path Analysis</h4>
+          <p>Read the end-to-end health first, then inspect the actual route and each stop along the way.</p>
+        </div>
+        <label class="apm-path-metric-select">
+          <span>Metric</span>
+          <select id="apm-path-metric">
+            <option value="loss" ${state.apmWorkspace.pathMetric === "loss" ? "selected" : ""}>Loss</option>
+            <option value="latency" ${state.apmWorkspace.pathMetric === "latency" ? "selected" : ""}>Latency</option>
+            <option value="jitter" ${state.apmWorkspace.pathMetric === "jitter" ? "selected" : ""}>Jitter</option>
+            <option value="hops" ${state.apmWorkspace.pathMetric === "hops" ? "selected" : ""}>Hop Count</option>
+          </select>
+        </label>
+      </div>
+      ${networkPathSummaryCardsMarkup(check, result, topology)}
+      <div class="dashboard-detail-grid">
+        <section class="guide-card">
+          <div class="mini-panel-header">
+            <h4>${escapeHtml(metricPayload.title)}</h4>
+            <span>${escapeHtml(metricPayload.description)}</span>
+          </div>
+          ${plotlyHostMarkup("network-path-metric", { ...metricPayload, height: 220 }, `<div class="empty-chart-state">No query-level data was captured for this metric.</div>`, "plotly-network-path-metric")}
+        </section>
+        ${networkPathAssertionsPanelMarkup(check, result)}
+      </div>
+      <section class="guide-card apm-path-visual-card">
+        <div class="mini-panel-header">
+          <h4>Path Visualization</h4>
+          <span>${escapeHtml(`${topology.totalTraces} traceroute ${topology.totalTraces === 1 ? "query" : "queries"} aggregated for this run`)}</span>
+        </div>
+        <p class="subtle">Each card is a stop in the route. Green is healthy, amber needs attention, and red indicates loss or timeout at that stop.</p>
+        ${networkPathRouteMarkup(topology)}
+      </section>
+      <div class="dashboard-detail-grid">
+        ${networkPathInspectorMarkup(selectedNode, topology, result)}
+        <section class="guide-card">
+          <div class="mini-panel-header">
+            <h4>Recent Loss Trend</h4>
+            <span>Compare this run to the most recent path runs for the same monitor.</span>
+          </div>
+          ${plotlyHostMarkup("network-path-metric", { metric: "loss", points: recentRunPoints, height: 220 }, `<div class="empty-chart-state">Not enough runs are available yet to compare recent loss.</div>`, "plotly-network-path-recent-loss")}
+        </section>
+      </div>
+    </section>
+  `;
+}
+
 function apmFlameFallbackMarkup(spans = [], totalDuration = 1) {
   return `
     <div class="apm-flame-fallback">
@@ -3664,667 +4233,6 @@ function apmFlameFallbackMarkup(spans = [], totalDuration = 1) {
 function apmFlameGraphMarkup(spans = []) {
   const totalDuration = Math.max(...spans.map((span) => Number(span.startMs || 0) + Number(span.durationMs || 0)), 1);
   return plotlyHostMarkup("apm-flame", { spans, totalDuration }, apmFlameFallbackMarkup(spans, totalDuration), "plotly-apm-flame");
-}
-
-function networkPathHopStatusClass(hop, warningMs, criticalMs) {
-  if (!hop || hop.timeout) return "unhealthy";
-  const packetLossPct = Number(hop.packet_loss_pct || 0);
-  if (packetLossPct >= 50) return "critical";
-  if (packetLossPct >= 10) return "warning";
-  const latency = Number(hop.avg_latency_ms || 0);
-  if (latency >= Number(criticalMs || 0)) return "critical";
-  if (latency >= Number(warningMs || 0)) return "warning";
-  return "healthy";
-}
-
-function networkPathColorLabel(status) {
-  if (status === "critical") return "Critical";
-  if (status === "warning") return "Warning";
-  if (status === "unhealthy") return "Timeout";
-  return "Healthy";
-}
-
-function networkPathSvgPalette(status, role = "hop") {
-  const dark = document.body?.dataset?.theme === "dark";
-  const base = dark
-    ? { fill: "#1f2937", stroke: "#475569", title: "#f8fafc", subtitle: "#cbd5e1", metric: "#f8fafc" }
-    : { fill: "#fff8ec", stroke: "rgba(28, 36, 51, 0.14)", title: "#1c2433", subtitle: "#5d6678", metric: "#1c2433" };
-  if (role === "source" || role === "destination") {
-    return dark
-      ? { fill: "#1e293b", stroke: "#64748b", title: "#f8fafc", subtitle: "#cbd5e1", metric: "#f8fafc" }
-      : { fill: "#f5f7fb", stroke: "rgba(100, 116, 139, 0.28)", title: "#1c2433", subtitle: "#5d6678", metric: "#1c2433" };
-  }
-  if (status === "healthy") {
-    return dark
-      ? { fill: "rgba(20, 128, 74, 0.24)", stroke: "rgba(74, 222, 128, 0.55)", title: "#f0fdf4", subtitle: "#bbf7d0", metric: "#f0fdf4" }
-      : { fill: "rgba(20, 128, 74, 0.10)", stroke: "rgba(20, 128, 74, 0.28)", title: "#14532d", subtitle: "#166534", metric: "#14532d" };
-  }
-  if (status === "warning") {
-    return dark
-      ? { fill: "rgba(181, 122, 0, 0.24)", stroke: "rgba(250, 204, 21, 0.58)", title: "#fffbeb", subtitle: "#fde68a", metric: "#fffbeb" }
-      : { fill: "rgba(181, 122, 0, 0.12)", stroke: "rgba(181, 122, 0, 0.32)", title: "#78350f", subtitle: "#92400e", metric: "#78350f" };
-  }
-  if (status === "critical" || status === "unhealthy") {
-    return dark
-      ? { fill: "rgba(180, 35, 24, 0.24)", stroke: "rgba(248, 113, 113, 0.58)", title: "#fef2f2", subtitle: "#fecaca", metric: "#fef2f2" }
-      : { fill: "rgba(180, 35, 24, 0.10)", stroke: "rgba(180, 35, 24, 0.30)", title: "#7f1d1d", subtitle: "#991b1b", metric: "#7f1d1d" };
-  }
-  return base;
-}
-
-function routeNodeKey(node) {
-  const hop = Number(node?.hop || 0);
-  const address = String(node?.address || "unknown")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return `hop-${hop}-${address || "unknown"}`;
-}
-
-function networkPathWrapText(value, maxChars = 24, maxLines = 2) {
-  const text = String(value || "").trim();
-  if (!text) return [];
-  const sourceTokens = /\s/.test(text)
-    ? text.split(/\s+/)
-    : (text.match(new RegExp(`.{1,${Math.max(4, maxChars)}}`, "g")) || [text]);
-  const lines = [];
-  let current = "";
-  sourceTokens.forEach((token) => {
-    const candidate = current ? `${current} ${token}` : token;
-    if (candidate.length <= maxChars) {
-      current = candidate;
-      return;
-    }
-    if (current) {
-      lines.push(current);
-      current = token;
-    } else {
-      lines.push(token.slice(0, maxChars));
-      current = token.slice(maxChars);
-    }
-  });
-  if (current) {
-    lines.push(current);
-  }
-  if (lines.length <= maxLines) {
-    return lines;
-  }
-  const clipped = lines.slice(0, maxLines);
-  clipped[maxLines - 1] = `${clipped[maxLines - 1].slice(0, Math.max(1, maxChars - 1)).replace(/\s+$/g, "")}…`;
-  return clipped;
-}
-
-function networkPathSvgTextMarkup({ x, y, className, fill, lines, lineHeight = 14, anchor = "start" }) {
-  if (!lines?.length) return "";
-  return `
-    <text x="${x}" y="${y}" text-anchor="${anchor}" class="${className}" style="fill:${fill}">
-      ${lines.map((line, index) => `
-        <tspan x="${x}" dy="${index === 0 ? 0 : lineHeight}">${escapeHtml(line)}</tspan>
-      `).join("")}
-    </text>
-  `;
-}
-
-function buildNetworkPathRouteGraph(details, warningMs, criticalMs) {
-  const traces = Array.isArray(details?.path?.traces) ? details.path.traces : [];
-  const aggregatedHops = Array.isArray(details?.path?.hops) ? details.path.hops : [];
-  const totalTraces = Math.max(traces.length, 1);
-  const source = {
-    id: "source",
-    hop: 0,
-    label: details?.target?.source_service || "Source",
-    address: details?.target?.host || "source",
-    role: "source",
-    avg_latency_ms: 0,
-    packet_loss_pct: 0,
-    traversed_count: totalTraces,
-    timeout_count: 0,
-  };
-  const destination = {
-    id: "destination",
-    hop: Number((details?.path?.hops || []).length || 0) + 1,
-    label: details?.target?.destination_service || details?.target?.display || "Destination",
-    address: details?.target?.display || details?.target?.host || "destination",
-    role: "destination",
-    avg_latency_ms: Number((details?.stats?.latency_ms || {}).avg || 0),
-    packet_loss_pct: Number(details?.stats?.packet_loss_pct || 0),
-    traversed_count: totalTraces,
-    timeout_count: 0,
-  };
-  const nodeMap = new Map();
-  const edgeMap = new Map();
-
-  const touchEdge = (fromId, toId, latencyMs = null) => {
-    const key = `${fromId}->${toId}`;
-    if (!edgeMap.has(key)) {
-      edgeMap.set(key, { id: key, fromId, toId, traversedCount: 0, latencies: [] });
-    }
-    const edge = edgeMap.get(key);
-    edge.traversedCount += 1;
-    if (latencyMs != null && !Number.isNaN(Number(latencyMs))) {
-      edge.latencies.push(Number(latencyMs));
-    }
-  };
-
-  const ensureHopNode = (hop, fallbackIndex = 0) => {
-    const key = routeNodeKey(hop);
-    if (!nodeMap.has(key)) {
-      nodeMap.set(key, {
-        id: key,
-        hop: Number(hop.hop || fallbackIndex + 1),
-        label: `Hop ${Number(hop.hop || fallbackIndex + 1)}`,
-        address: hop.address || "*",
-        role: "hop",
-        latencies_ms: [],
-        traversed_count: 0,
-        timeout_count: 0,
-        raw_samples: [],
-      });
-    }
-    return nodeMap.get(key);
-  };
-
-  traces.forEach((trace) => {
-    const hops = Array.isArray(trace?.hops) ? trace.hops : [];
-    let previousId = source.id;
-    let previousLatency = 0;
-    hops.forEach((hop, index) => {
-      const node = ensureHopNode(hop, index);
-      node.traversed_count += 1;
-      node.timeout_count += hop.timeout ? 1 : 0;
-      node.raw_samples.push(hop.raw);
-      node.latencies_ms.push(...(Array.isArray(hop.latencies_ms) ? hop.latencies_ms.map((value) => Number(value)) : []));
-      const hopLatency = Number(hop.avg_latency_ms || 0);
-      const edgeLatency = hopLatency > 0 ? Math.max(0, hopLatency - previousLatency) : null;
-      touchEdge(previousId, node.id, edgeLatency);
-      previousId = node.id;
-      previousLatency = hopLatency > 0 ? hopLatency : previousLatency;
-    });
-    const destinationLatency = Number(details?.stats?.latency_ms?.avg || 0);
-    const destinationEdgeLatency = destinationLatency > 0 ? Math.max(0, destinationLatency - previousLatency) : null;
-    touchEdge(previousId, destination.id, destinationEdgeLatency);
-  });
-
-  if (!traces.length && aggregatedHops.length) {
-    let previousId = source.id;
-    let previousLatency = 0;
-    aggregatedHops.forEach((hop, index) => {
-      const node = ensureHopNode(hop, index);
-      node.traversed_count = Math.max(Number(node.traversed_count || 0), Number(hop.traversed_count || 0));
-      node.timeout_count = Math.max(Number(node.timeout_count || 0), Number(hop.timeout_count || 0));
-      node.raw_samples.push(hop.raw);
-      node.latencies_ms.push(...(Array.isArray(hop.latencies_ms) ? hop.latencies_ms.map((value) => Number(value)) : []));
-      const hopLatency = Number(hop.avg_latency_ms || 0);
-      const edgeLatency = hopLatency > 0 ? Math.max(0, hopLatency - previousLatency) : null;
-      touchEdge(previousId, node.id, edgeLatency);
-      previousId = node.id;
-      previousLatency = hopLatency > 0 ? hopLatency : previousLatency;
-    });
-    const destinationLatency = Number(details?.stats?.latency_ms?.avg || 0);
-    const destinationEdgeLatency = destinationLatency > 0 ? Math.max(0, destinationLatency - previousLatency) : null;
-    touchEdge(previousId, destination.id, destinationEdgeLatency);
-  }
-
-  const hopNodes = Array.from(nodeMap.values())
-    .map((node) => ({
-      ...node,
-      avg_latency_ms: node.latencies_ms.length
-        ? Number((node.latencies_ms.reduce((sum, value) => sum + Number(value || 0), 0) / node.latencies_ms.length).toFixed(2))
-        : null,
-      packet_loss_pct: Number((((totalTraces - node.traversed_count) / Math.max(totalTraces, 1)) * 100).toFixed(2)),
-      raw: node.raw_samples.find(Boolean) || "",
-      status: networkPathHopStatusClass(
-        {
-          timeout: node.traversed_count === 0,
-          avg_latency_ms: node.latencies_ms.length
-            ? node.latencies_ms.reduce((sum, value) => sum + Number(value || 0), 0) / node.latencies_ms.length
-            : null,
-          packet_loss_pct: ((totalTraces - node.traversed_count) / Math.max(totalTraces, 1)) * 100,
-        },
-        warningMs,
-        criticalMs
-      ),
-    }))
-    .sort((left, right) => (left.hop - right.hop) || String(left.address || "").localeCompare(String(right.address || "")));
-
-  const grouped = new Map();
-  hopNodes.forEach((node) => {
-    if (!grouped.has(node.hop)) {
-      grouped.set(node.hop, []);
-    }
-    grouped.get(node.hop).push(node);
-  });
-
-  const columns = [
-    { key: "source", hop: 0, label: "Source", nodes: [source] },
-    ...Array.from(grouped.keys()).sort((a, b) => a - b).map((hop) => ({
-      key: `hop-${hop}`,
-      hop,
-      label: `TTL ${hop}`,
-      nodes: grouped.get(hop) || [],
-    })),
-    { key: "destination", hop: destination.hop, label: "Destination", nodes: [destination] },
-  ];
-
-  const nodeById = new Map([[source.id, source], [destination.id, destination], ...hopNodes.map((node) => [node.id, node])]);
-  const edges = Array.from(edgeMap.values()).map((edge) => ({
-    ...edge,
-    avgLatencyMs: edge.latencies.length
-      ? Number((edge.latencies.reduce((sum, value) => sum + Number(value || 0), 0) / edge.latencies.length).toFixed(2))
-      : null,
-    label: edge.latencies.length
-      ? `${Number((edge.latencies.reduce((sum, value) => sum + Number(value || 0), 0) / edge.latencies.length).toFixed(1))} ms\n${edge.traversedCount}/${totalTraces}`
-      : `${edge.traversedCount}/${totalTraces}`,
-  }));
-
-  return {
-    totalTraces,
-    source,
-    destination,
-    columns,
-    edges,
-    hopNodes,
-    nodeById,
-  };
-}
-
-function networkPathSelectedHop(hops = []) {
-  const selected = hops.find((hop) => routeNodeKey(hop) === state.apmWorkspace.selectedHopId);
-  if (selected) return selected;
-  const first = hops[0] || null;
-  state.apmWorkspace.selectedHopId = first ? routeNodeKey(first) : "";
-  return first;
-}
-
-function networkPathRouteMapMarkup(graph, warningMs, criticalMs) {
-  const columnWidth = 252;
-  const rowHeight = 188;
-  const columnGap = 84;
-  const leftPadding = 38;
-  const topPadding = 30;
-  const maxNodes = Math.max(...graph.columns.map((column) => column.nodes.length), 1);
-  const width = Math.max(900, leftPadding * 2 + graph.columns.length * columnWidth + Math.max(graph.columns.length - 1, 0) * columnGap);
-  const height = Math.max(420, topPadding * 2 + maxNodes * rowHeight + 96);
-  const positions = new Map();
-  graph.columns.forEach((column, columnIndex) => {
-    const columnHeight = column.nodes.length * rowHeight;
-    const offsetY = topPadding + Math.max(0, ((maxNodes * rowHeight) - columnHeight) / 2);
-    column.nodes.forEach((node, nodeIndex) => {
-      positions.set(node.id, {
-        x: leftPadding + columnIndex * (columnWidth + columnGap),
-        y: offsetY + nodeIndex * rowHeight,
-        width: 196,
-        height: 138,
-      });
-    });
-  });
-  const selectedHop = networkPathSelectedHop(graph.hopNodes);
-
-  const fallback = `
-    <div class="apm-path-map-wrap">
-      <div class="apm-path-legend">
-        <span><i class="healthy"></i> Healthy path edge</span>
-        <span><i class="warning"></i> Warning latency / packet loss</span>
-        <span><i class="critical"></i> Critical latency / packet loss</span>
-      </div>
-      <div class="apm-path-focus ${selectedHop ? networkPathHopStatusClass(selectedHop, warningMs, criticalMs) : "empty"}">
-        ${selectedHop ? `
-          <div class="apm-path-focus-copy">
-            <span class="apm-path-focus-eyebrow">Selected hop</span>
-            <strong>${escapeHtml(`Hop ${selectedHop.hop} · ${selectedHop.address || "*"}`)}</strong>
-            <p>${escapeHtml(selectedHop.raw || "The selected route hop is aggregated across traceroute queries for this run.")}</p>
-          </div>
-          <div class="apm-path-focus-stats">
-            <span><strong>${escapeHtml(`${Number(selectedHop.avg_latency_ms || 0).toFixed(2)} ms`)}</strong><small>Latency</small></span>
-            <span><strong>${escapeHtml(`${Number(selectedHop.packet_loss_pct || 0).toFixed(2)}%`)}</strong><small>Packet loss</small></span>
-            <span><strong>${escapeHtml(String(Number(selectedHop.traversed_count || 0)))}</strong><small>Traversed</small></span>
-          </div>
-        ` : `
-          <div class="apm-path-focus-copy">
-            <span class="apm-path-focus-eyebrow">Route inspector</span>
-            <strong>Select any hop in the path</strong>
-            <p>Click a route node to inspect its latency, packet loss, TTL position, and traversal count.</p>
-          </div>
-        `}
-      </div>
-      <svg class="apm-path-map" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" aria-label="Aggregated network path map">
-        <defs>
-          <marker id="apm-path-arrow-healthy" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="rgba(20, 128, 74, 0.82)"></path>
-          </marker>
-          <marker id="apm-path-arrow-warning" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="rgba(181, 122, 0, 0.86)"></path>
-          </marker>
-          <marker id="apm-path-arrow-critical" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="rgba(180, 35, 24, 0.86)"></path>
-          </marker>
-        </defs>
-        <rect x="6" y="26" width="${width - 12}" height="${height - 36}" rx="24" class="apm-path-map-backdrop"></rect>
-        ${graph.columns.map((column) => {
-          const firstNode = column.nodes[0];
-          const position = firstNode ? positions.get(firstNode.id) : { x: leftPadding, y: topPadding };
-          return `
-            <text x="${position.x + 10}" y="16" class="apm-path-column-label">${escapeHtml(column.label)}</text>
-          `;
-        }).join("")}
-        ${graph.edges.map((edge) => {
-          const from = positions.get(edge.fromId);
-          const to = positions.get(edge.toId);
-          if (!from || !to) return "";
-          const x1 = from.x + from.width;
-          const y1 = from.y + from.height / 2;
-          const x2 = to.x;
-          const y2 = to.y + to.height / 2;
-          const controlX = (x1 + x2) / 2;
-          const targetNode = graph.nodeById.get(edge.toId);
-          const status = networkPathHopStatusClass(targetNode, warningMs, criticalMs);
-          const labelX = controlX;
-          const labelY = ((y1 + y2) / 2) - 8;
-          const markerId = status === "critical" || status === "unhealthy"
-            ? "apm-path-arrow-critical"
-            : status === "warning"
-              ? "apm-path-arrow-warning"
-              : "apm-path-arrow-healthy";
-          return `
-            <g>
-              <path d="M ${x1} ${y1} C ${controlX} ${y1}, ${controlX} ${y2}, ${x2} ${y2}" class="apm-path-edge ${escapeHtml(status)}" marker-end="url(#${markerId})"></path>
-              <rect x="${labelX - 34}" y="${labelY - 18}" width="68" height="36" rx="14" class="apm-path-edge-badge ${escapeHtml(status)}"></rect>
-              <text x="${labelX}" y="${labelY - 3}" text-anchor="middle" class="apm-path-edge-text">${escapeHtml(edge.avgLatencyMs != null ? `${Number(edge.avgLatencyMs).toFixed(0)} ms` : "n/a")}</text>
-              <text x="${labelX}" y="${labelY + 12}" text-anchor="middle" class="apm-path-edge-subtext">${escapeHtml(`${edge.traversedCount}/${graph.totalTraces}`)}</text>
-            </g>
-          `;
-        }).join("")}
-        ${graph.columns.flatMap((column) => column.nodes).map((node) => {
-          const position = positions.get(node.id);
-          if (!position) return "";
-          const status = node.role === "hop" ? networkPathHopStatusClass(node, warningMs, criticalMs) : "endpoint";
-          const active = node.role === "hop" && routeNodeKey(node) === state.apmWorkspace.selectedHopId;
-          const palette = networkPathSvgPalette(status, node.role);
-          const titleLines = networkPathWrapText(node.role === "hop" ? node.label : node.label, 18, 2);
-          const addressLines = networkPathWrapText(node.address || "", 22, 2);
-          const roleLines = node.role === "source"
-            ? ["Source service"]
-            : node.role === "destination"
-              ? ["Destination service"]
-              : [`TTL ${Number(node.hop || 0)}`];
-          const footerLeft = node.role === "hop"
-            ? `${Number(node.packet_loss_pct || 0).toFixed(0)}% loss`
-            : node.role === "source"
-              ? `${Number(node.traversed_count || 0)} traces`
-              : "Aggregated end-to-end";
-          const footerRight = node.role === "hop"
-            ? `${Number(node.traversed_count || 0)}x traversed`
-            : node.role === "destination"
-              ? `${graph.totalTraces} traces`
-              : "";
-          return `
-            <g class="apm-path-svg-node ${escapeHtml(status)} ${active ? "active" : ""}" ${node.role === "hop" ? `data-apm-hop-id="${escapeHtml(routeNodeKey(node))}"` : ""}>
-              <rect x="${position.x}" y="${position.y}" width="${position.width}" height="${position.height}" rx="16" class="apm-path-node-box" style="fill:${palette.fill};stroke:${active ? "#2563eb" : palette.stroke};stroke-width:${active ? 2.5 : 1.5}"></rect>
-              <rect x="${position.x + 12}" y="${position.y + 12}" width="72" height="20" rx="10" class="apm-path-node-pill"></rect>
-              <text x="${position.x + 48}" y="${position.y + 25}" text-anchor="middle" class="apm-path-node-pill-text" style="fill:${palette.subtitle}">${escapeHtml(roleLines[0])}</text>
-              ${networkPathSvgTextMarkup({
-                x: position.x + 12,
-                y: position.y + 48,
-                className: "apm-path-node-title",
-                fill: palette.title,
-                lines: titleLines,
-                lineHeight: 15,
-              })}
-              ${networkPathSvgTextMarkup({
-                x: position.x + 12,
-                y: position.y + 78,
-                className: "apm-path-node-subtitle",
-                fill: palette.subtitle,
-                lines: addressLines,
-                lineHeight: 13,
-              })}
-              <text x="${position.x + 12}" y="${position.y + 107}" class="apm-path-node-metric" style="fill:${palette.metric}">${escapeHtml(node.avg_latency_ms != null ? `${Number(node.avg_latency_ms).toFixed(0)} ms` : node.role === "destination" ? `${Number(node.avg_latency_ms || 0).toFixed(0)} ms` : "timeout")}</text>
-              <line x1="${position.x + 12}" y1="${position.y + 114}" x2="${position.x + position.width - 12}" y2="${position.y + 114}" class="apm-path-node-divider"></line>
-              <text x="${position.x + 12}" y="${position.y + 134}" class="apm-path-node-footer" style="fill:${palette.subtitle}">${escapeHtml(footerLeft)}</text>
-              <text x="${position.x + position.width - 12}" y="${position.y + 134}" text-anchor="end" class="apm-path-node-footer" style="fill:${palette.subtitle}">${escapeHtml(footerRight)}</text>
-            </g>
-          `;
-        }).join("")}
-      </svg>
-    </div>
-  `;
-  return fallback;
-}
-
-function networkPathAssertionsMarkup(check, details) {
-  const assertions = Array.isArray(details?.assertions) ? details.assertions : [];
-  const config = check?.network_path || {};
-  const stats = details?.stats || {};
-  const latencyStats = stats.latency_ms || {};
-  const hopStats = stats.network_hops || {};
-  const probe = details?.probe || {};
-  const attempts = Array.isArray(probe.attempts) ? probe.attempts : [];
-  const queryCount = Math.max(attempts.length, Number(probe.total_queries || 0), Number(details?.queries?.e2e_queries || 0));
-  const packetsReceived = Number(probe.successes || attempts.filter((attempt) => attempt.success !== false).length);
-  const formatActualValue = (name, value) => {
-    if (value == null) return "n/a";
-    if (name === "packet_loss") return `${Number(value).toFixed(2)}%`;
-    if (name === "latency" || name === "jitter") return `${Number(value).toFixed(2)} ms`;
-    if (name === "network_hops") return `${Number(value).toFixed(2)} hops`;
-    return String(value);
-  };
-  const actualByAssertion = {
-    latency: config.latency_operator_1 ? latencyStats[config.latency_operator_1] : null,
-    packet_loss: stats.packet_loss_pct,
-    jitter: stats.jitter_ms,
-    network_hops: config.hops_operator_1 ? hopStats[config.hops_operator_1] : null,
-  };
-  if (!assertions.length) {
-    return `
-      <section class="guide-card">
-        <div class="panel-head compact">
-          <h4>Assertions</h4>
-          <p>No explicit assertions were configured for this run.</p>
-        </div>
-      </section>
-    `;
-  }
-  return `
-    <section class="guide-card">
-      <div class="panel-head compact">
-        <h4>Assertions</h4>
-        <p>Aggregated across all end-to-end queries from this network path run. ${escapeHtml(`${packetsReceived} of ${Math.max(queryCount, packetsReceived)} packets were received.`)}</p>
-      </div>
-      <div class="apm-assertion-list">
-        ${assertions.map((assertion) => `
-          <div class="apm-assertion-row ${assertion.success ? "healthy" : "unhealthy"}">
-            <div>
-              <strong>${escapeHtml((assertion.name || "assertion").replace(/_/g, " "))}</strong>
-              <p>${escapeHtml(assertion.message || "")}</p>
-            </div>
-            <div class="apm-assertion-value">
-              <span>${escapeHtml(assertion.success ? "PASS" : "FAIL")}</span>
-              <strong>${escapeHtml(formatActualValue(assertion.name, actualByAssertion[assertion.name]))}</strong>
-            </div>
-          </div>
-        `).join("")}
-      </div>
-    </section>
-  `;
-}
-
-function networkPathInspectorMarkup(selectedHop, warningMs, criticalMs) {
-  if (!selectedHop) {
-    return `
-      <section class="guide-card apm-path-inspector">
-        <div class="panel-head compact">
-          <h4>Route Inspector</h4>
-          <p>Click any hop box in the route map to inspect its details.</p>
-        </div>
-      </section>
-    `;
-  }
-  const status = selectedHop.timeout ? "timeout" : networkPathColorLabel(networkPathHopStatusClass(selectedHop, warningMs, criticalMs));
-  return `
-    <section class="guide-card apm-path-inspector">
-      <div class="panel-head compact">
-        <h4>Route Inspector</h4>
-        <p>${escapeHtml(`Hop ${selectedHop.hop} | ${selectedHop.address || "*"}`)}</p>
-      </div>
-      <div class="apm-inspector-hero ${escapeHtml(status.toLowerCase())}">
-        <strong>${escapeHtml(selectedHop.address || "*")}</strong>
-        <span>${escapeHtml(status)}</span>
-      </div>
-      ${apmMetadataListMarkup([
-        ["Hop TTL", selectedHop.hop],
-        ["Latency", `${Number(selectedHop.avg_latency_ms || 0).toFixed(2)} ms`],
-        ["Packet Loss", `${Number(selectedHop.packet_loss_pct || 0).toFixed(2)}%`],
-        ["Traversed Count", Number(selectedHop.traversed_count || 0)],
-        ["Timeout Count", Number(selectedHop.timeout_count || 0)],
-        ["Status", status],
-      ])}
-      <div class="apm-inspector-note">
-        <strong>Raw Hop Sample</strong>
-        <p>${escapeHtml(selectedHop.raw || "No raw hop sample was captured.")}</p>
-      </div>
-    </section>
-  `;
-}
-
-function networkPathThresholdControlsMarkup() {
-  return `
-    <div class="apm-path-thresholds">
-      <label>
-        <span>Warning Latency (ms)</span>
-        <input id="apm-path-warning-ms" type="number" min="1" value="${escapeHtml(state.apmWorkspace.pathLatencyWarningMs)}" />
-      </label>
-      <label>
-        <span>Critical Latency (ms)</span>
-        <input id="apm-path-critical-ms" type="number" min="1" value="${escapeHtml(state.apmWorkspace.pathLatencyCriticalMs)}" />
-      </label>
-    </div>
-  `;
-}
-
-function networkPathViewMarkup(check, result, runs = []) {
-  const details = result?.details || {};
-  const path = details.path || {};
-  const hops = Array.isArray(path.hops) ? path.hops : [];
-  const stats = details.stats || {};
-  const probe = details.probe || {};
-  const attempts = Array.isArray(probe.attempts) ? probe.attempts : [];
-  const warningMs = Number(state.apmWorkspace.pathLatencyWarningMs || 80);
-  const criticalMs = Math.max(warningMs + 1, Number(state.apmWorkspace.pathLatencyCriticalMs || 200));
-  const routeGraph = buildNetworkPathRouteGraph(details, warningMs, criticalMs);
-  const selectedHop = networkPathSelectedHop(routeGraph.hopNodes);
-  const sourceLabel = details.target?.source_service || "Source";
-  const destinationLabel = details.target?.destination_service || details.target?.display || "Destination";
-  const packetsReceived = Number(probe.successes || attempts.filter((attempt) => attempt.success !== false).length);
-  const endToEndPoints = attempts.map((attempt, index) => {
-    const seen = attempts.slice(0, index + 1);
-    const failures = seen.filter((item) => !item.success).length;
-    return {
-      query: index + 1,
-      label: `Query ${index + 1}`,
-      latency_ms: Number(attempt.latency_ms || 0),
-      packet_loss_pct: Number(((failures / Math.max(seen.length, 1)) * 100).toFixed(2)),
-      success: attempt.success !== false,
-    };
-  });
-  const hopLatencyPoints = hops.map((hop, index) => ({
-    hop: Number(hop.hop || index + 1),
-    address: hop.address || "*",
-    latency_ms: Number(hop.avg_latency_ms || 0),
-    packet_loss_pct: Number(hop.packet_loss_pct || 0),
-    timeout: Boolean(hop.timeout),
-  }));
-  const hopHistoryPoints = runs
-    .map((run) => {
-      const graph = buildNetworkPathRouteGraph(run?.details || {}, warningMs, criticalMs);
-      const historyHop = selectedHop ? graph.hopNodes.find((hop) => routeNodeKey(hop) === routeNodeKey(selectedHop)) : null;
-      if (!historyHop) return null;
-      return {
-        timestamp: Number(run.timestamp || 0),
-        latency_ms: Number(historyHop.avg_latency_ms || 0),
-        packet_loss_pct: Number(historyHop.packet_loss_pct || 0),
-        timeout: Boolean(historyHop.timeout),
-      };
-    })
-    .filter(Boolean);
-  return `
-    <section class="guide-card apm-path-card">
-      <div class="panel-head">
-        <div>
-          <h4>Path View</h4>
-          <p>Inspect the route from source to destination, compare end-to-end latency and packet loss, and click any hop to drill into its route details.</p>
-        </div>
-        ${networkPathThresholdControlsMarkup()}
-      </div>
-      <div class="apm-path-topline">
-        <div class="status-meta">
-          <span>${escapeHtml(sourceLabel)}</span>
-          <span>${escapeHtml(String(details.request_type || check?.network_path?.request_type || "tcp").toUpperCase())}</span>
-          <span>${escapeHtml(destinationLabel)}</span>
-        </div>
-        <div class="status-meta">
-          <span>Packets Received ${escapeHtml(`${packetsReceived} / ${Math.max(attempts.length, packetsReceived)}`)}</span>
-          <span>P50 Latency ${escapeHtml(formatDuration((stats.latency_ms || {}).avg || 0))}</span>
-          <span>Min ${escapeHtml(formatDuration((stats.latency_ms || {}).min || 0))}</span>
-          <span>Max ${escapeHtml(formatDuration((stats.latency_ms || {}).max || 0))}</span>
-          <span>Packet Loss ${escapeHtml(`${Number(stats.packet_loss_pct || 0).toFixed(2)}%`)}</span>
-          <span>Jitter ${escapeHtml(formatDuration(Number(stats.jitter_ms || 0)))}</span>
-          <span>Hops Avg ${escapeHtml(Number((stats.network_hops || {}).avg || 0).toFixed(2))}</span>
-          <span>Hops Min ${escapeHtml(String(Number((stats.network_hops || {}).min || 0)))} </span>
-          <span>Hops Max ${escapeHtml(String(Number((stats.network_hops || {}).max || 0)))} </span>
-        </div>
-      </div>
-      <div class="apm-path-legend">
-        <span><i class="healthy"></i> Healthy latency path</span>
-        <span><i class="warning"></i> Warning threshold reached</span>
-        <span><i class="critical"></i> Critical latency or packet loss</span>
-        <span><strong>${escapeHtml(String(routeGraph.totalTraces))}</strong> traceroute queries aggregated</span>
-        <span>Click any hop to expand its route details in place</span>
-      </div>
-      <div class="apm-path-workbench">
-        ${networkPathRouteMapMarkup(routeGraph, warningMs, criticalMs)}
-      </div>
-      <div class="dashboard-detail-grid">
-        <div class="guide-card compact-card">
-          <div class="mini-panel-header">
-            <h4>End-to-end Metrics</h4>
-            <span>Latency and packet loss per query</span>
-          </div>
-          ${plotlyHostMarkup("path-e2e", { points: endToEndPoints, height: 220 }, `<div class="empty-chart-state">No end-to-end probe points were captured.</div>`, "plotly-path-e2e")}
-        </div>
-        <div class="guide-card compact-card">
-          <div class="mini-panel-header">
-            <h4>Hop-to-hop Latency</h4>
-            <span>Average latency for each hop</span>
-          </div>
-          ${plotlyHostMarkup("path-hop", { points: hopLatencyPoints, warningMs, criticalMs, height: 220 }, `<div class="empty-chart-state">No hop timing data was captured.</div>`, "plotly-path-hop")}
-        </div>
-      </div>
-      <div class="guide-card compact-card">
-        <div class="mini-panel-header">
-          <h4>Selected Hop History</h4>
-          <span>${escapeHtml(selectedHop ? `Hop ${selectedHop.hop} across recent runs` : "Choose a hop to compare it across runs")}</span>
-        </div>
-        ${plotlyHostMarkup("path-hop-history", { points: hopHistoryPoints, height: 220 }, `<div class="empty-chart-state">This hop has not been captured across enough runs to compare yet.</div>`, "plotly-path-hop-history")}
-      </div>
-      <div class="guide-card dashboard-span-full">
-        <div class="panel-head compact">
-          <h4>Hop Details</h4>
-          <p>${escapeHtml(selectedHop ? `Hop ${selectedHop.hop} | ${selectedHop.address || "*"}` : "No hop selected")}</p>
-        </div>
-        ${selectedHop ? apmMetadataListMarkup([
-          ["Hop TTL", selectedHop.hop],
-          ["Hop Address", selectedHop.address || "*"],
-          ["Hop Latency", `${Number(selectedHop.avg_latency_ms || 0).toFixed(2)} ms`],
-          ["Traversed Count", Number(selectedHop.traversed_count || 0)],
-          ["Hop Packet Loss", `${Number(selectedHop.packet_loss_pct || 0).toFixed(2)}%`],
-          ["Timeout Count", Number(selectedHop.timeout_count || 0)],
-          ["Status", selectedHop.timeout ? "timeout" : networkPathColorLabel(networkPathHopStatusClass(selectedHop, warningMs, criticalMs))],
-          ["Raw Hop", selectedHop.raw || "n/a"],
-        ]) : `<p class="subtle">Click a hop in the path view to inspect its details.</p>`}
-      </div>
-      ${networkPathAssertionsMarkup(check, details)}
-    </section>
-  `;
 }
 
 function apmMetadataListMarkup(items = []) {
@@ -4467,7 +4375,7 @@ function renderApmPage(checks, recentResults = []) {
                 </div>
                 ${state.apmWorkspace.traceTab === "flame" ? apmFlameGraphMarkup(trace.spans) : apmSpanTableMarkup(trace.spans)}
               </section>
-              ${selectedCheck?.type === "network_path" && selectedRun ? networkPathViewMarkup(selectedCheck, selectedRun, runs) : ""}
+              ${selectedCheck?.type === "network_path" && selectedRun ? networkPathAnalysisMarkup(selectedCheck, selectedRun, runs) : ""}
               <section class="guide-card">
                 <div class="panel-head">
                   <div><h4>Span Details</h4><p>${escapeHtml(selectedSpan?.name || "No span selected")}</p></div>
@@ -9968,9 +9876,9 @@ async function handleClick(event) {
     return;
   }
 
-  const apmHopButton = event.target.closest("[data-apm-hop-id]");
-  if (apmHopButton) {
-    state.apmWorkspace.selectedHopId = apmHopButton.dataset.apmHopId || "";
+  const apmPathNode = event.target.closest("[data-apm-path-node]");
+  if (apmPathNode) {
+    state.apmWorkspace.selectedPathNodeKey = apmPathNode.dataset.apmPathNode || "";
     renderRoute().catch((error) => alert(error.message));
     return;
   }
@@ -10160,6 +10068,7 @@ function handleChange(event) {
   if (
     event.target.matches("#apm-monitor-select") ||
     event.target.matches("#apm-run-select") ||
+    event.target.matches("#apm-path-metric") ||
     event.target.matches("#browser-monitor-form select[name='placement_mode']") ||
     event.target.matches("#monitor-recorder-form select[name='placement_mode']") ||
     event.target.matches("select[name='browser_step_action']")
@@ -10168,30 +10077,19 @@ function handleChange(event) {
       state.apmWorkspace.selectedCheckKey = event.target.value || "";
       state.apmWorkspace.selectedRunKey = "";
       state.apmWorkspace.selectedSpanId = "";
-      state.apmWorkspace.selectedHopId = "";
+      state.apmWorkspace.selectedPathNodeKey = "";
       renderRoute().catch((error) => alert(error.message));
       return;
     }
     if (event.target.matches("#apm-run-select")) {
       state.apmWorkspace.selectedRunKey = event.target.value || "";
       state.apmWorkspace.selectedSpanId = "";
-      state.apmWorkspace.selectedHopId = "";
+      state.apmWorkspace.selectedPathNodeKey = "";
       renderRoute().catch((error) => alert(error.message));
       return;
     }
-    if (event.target.matches("#apm-path-warning-ms")) {
-      state.apmWorkspace.pathLatencyWarningMs = Math.max(1, Number(event.target.value || 1));
-      if (state.apmWorkspace.pathLatencyCriticalMs <= state.apmWorkspace.pathLatencyWarningMs) {
-        state.apmWorkspace.pathLatencyCriticalMs = state.apmWorkspace.pathLatencyWarningMs + 1;
-      }
-      renderRoute().catch((error) => alert(error.message));
-      return;
-    }
-    if (event.target.matches("#apm-path-critical-ms")) {
-      state.apmWorkspace.pathLatencyCriticalMs = Math.max(
-        state.apmWorkspace.pathLatencyWarningMs + 1,
-        Number(event.target.value || state.apmWorkspace.pathLatencyWarningMs + 1)
-      );
+    if (event.target.matches("#apm-path-metric")) {
+      state.apmWorkspace.pathMetric = event.target.value || "loss";
       renderRoute().catch((error) => alert(error.message));
       return;
     }

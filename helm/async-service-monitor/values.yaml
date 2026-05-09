@@ -82,8 +82,17 @@ env:
     existingSecret: async-service-monitor-secrets
     key: ASM_CONFIG_PASSPHRASE
 
+persistence:
+  enabled: true
+  accessModes:
+    - ReadWriteOnce
+  size: 1Gi
+  storageClassName: ""
+  bootstrapImage: busybox:1.36
+
 config:
-  mountPath: /app/config.yaml
+  runtimeDir: /var/lib/async-service-monitor
+  runtimeFileName: config.yaml
   fileName: config.kubernetes.yaml
   content: |
     defaults:

@@ -26,13 +26,35 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      initContainers:
+        - name: seed-config
+          image: "{{ .Values.persistence.bootstrapImage }}"
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              mkdir -p {{ .Values.config.runtimeDir }}
+              if [ ! -f {{ .Values.config.runtimeDir }}/{{ .Values.config.runtimeFileName }} ]; then
+                cp /bootstrap/{{ .Values.config.fileName }} {{ .Values.config.runtimeDir }}/{{ .Values.config.runtimeFileName }}
+              fi
+          volumeMounts:
+            - name: bootstrap-config
+              mountPath: /bootstrap
+              readOnly: true
+            - name: app-data
+              mountPath: {{ .Values.config.runtimeDir }}
       containers:
         - name: async-service-monitor
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - python
+            - -m
+            - service_monitor
           args:
             - --config
-            - {{ .Values.config.mountPath }}
+            - {{ .Values.config.runtimeDir }}/{{ .Values.config.runtimeFileName }}
             - --host
             - 0.0.0.0
             - --port
@@ -77,11 +99,16 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
-            - name: app-config
-              mountPath: {{ .Values.config.mountPath }}
-              subPath: {{ .Values.config.fileName }}
-              readOnly: true
+            - name: app-data
+              mountPath: {{ .Values.config.runtimeDir }}
       volumes:
-        - name: app-config
+        - name: bootstrap-config
           configMap:
             name: {{ include "async-service-monitor.fullname" . }}-config
+        - name: app-data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "async-service-monitor.fullname" . }}-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
