@@ -3785,18 +3785,17 @@ function buildNetworkPathTopology(check, result) {
     })
     .sort((left, right) => (left.hop - right.hop) || String(left.address || "").localeCompare(String(right.address || "")));
 
-  const grouped = new Map();
-  hops.forEach((node) => {
-    if (!grouped.has(node.hop)) grouped.set(node.hop, []);
-    grouped.get(node.hop).push(node);
-  });
+  const uniqueHops = hops.reduce((acc, hop) => {
+    if (!acc.has(hop.hop)) acc.set(hop.hop, hop);
+    return acc;
+  }, new Map());
 
   const columns = [
     { key: "source", label: "Source", nodes: [sourceNode] },
-    ...Array.from(grouped.keys()).sort((a, b) => a - b).map((hop) => ({
-      key: `ttl-${hop}`,
-      label: `TTL ${hop}`,
-      nodes: grouped.get(hop),
+    ...Array.from(uniqueHops.values()).map((hop) => ({
+      key: `ttl-${hop.hop}`,
+      label: `Hop ${hop.hop}`,
+      nodes: [hop],
     })),
     { key: "destination", label: "Destination", nodes: [destinationNode] },
   ];
@@ -3992,7 +3991,7 @@ function networkPathRouteMarkup(topology) {
   const positions = new Map();
   topology.columns.forEach((column, columnIndex) => {
     const columnHeight = column.nodes.length * rowHeight;
-    const offsetY = topPad + Math.max(0, ((maxRows * rowHeight) - columnHeight) / 2);
+    const offsetY = topPad + Math.max(0, (rowHeight - cardHeight) / 2);
     column.nodes.forEach((node, nodeIndex) => {
       positions.set(node.id, {
         x: leftPad + columnIndex * columnStride,
@@ -4018,10 +4017,6 @@ function networkPathRouteMarkup(topology) {
             </marker>
           </defs>
           <rect x="0" y="0" width="${width}" height="${height}" rx="28" class="apm-path-canvas-backdrop"></rect>
-          ${topology.columns.map((column, columnIndex) => {
-            const labelX = leftPad + columnIndex * columnStride + (cardWidth / 2);
-            return `<text x="${labelX}" y="${topPad - 24}" text-anchor="middle" class="apm-path-column-label">${escapeHtml(column.label)}</text>`;
-          }).join("")}
           ${topology.edges.map((edge) => {
             const from = positions.get(edge.fromId);
             const to = positions.get(edge.toId);
@@ -4036,7 +4031,7 @@ function networkPathRouteMarkup(topology) {
             const midY = (y1 + y2) / 2;
             return `
               <g>
-                <path d="M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}" class="apm-path-edge ${tone}" marker-end="url(#${markerId})"></path>
+                <path d="M ${x1} ${y1} L ${x2} ${y2}" class="apm-path-edge ${tone}" marker-end="url(#${markerId})"></path>
                 <g transform="translate(${midX - 42}, ${midY - 16})">
                   <rect width="84" height="32" rx="16" class="apm-path-edge-badge ${tone}"></rect>
                   <text x="42" y="13" text-anchor="middle" class="apm-path-edge-metric">${escapeHtml(edge.avgLatencyMs != null ? `${Number(edge.avgLatencyMs).toFixed(0)} ms` : "n/a")}</text>
