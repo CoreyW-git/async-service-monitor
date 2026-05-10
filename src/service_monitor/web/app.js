@@ -3184,103 +3184,7 @@ function monitorTroubleshootingHints(check, latest, failures) {
   if (failures.length) {
     hints.push("Open the dedicated monitor page to replay the monitor immediately and compare the new result with the latest failure snapshots.");
   } else if (check?.type === "network_path") {
-    const path = details.path || {};
-    const hops = Array.isArray(path.hops) ? path.hops : [];
-    const stats = details.stats || {};
-    const latencyStats = stats.latency_ms || {};
-    const packetLossPct = Number(stats.packet_loss_pct || 0);
-    const jitterMs = Number(stats.jitter_ms || 0);
-    const networkHops = stats.network_hops || {};
-    const probe = details.probe || {};
-    const attempts = Array.isArray(probe.attempts) ? probe.attempts : [];
-    const traceDuration = Math.max(1, Math.round(totalDuration * 0.65));
-    pushSpan({
-      id: `${traceId}:path`,
-      parentId: `${traceId}:root`,
-      name: "Network Path Execution",
-      kind: "network_path",
-      startMs: 0,
-      durationMs: traceDuration,
-      status: result?.success ? "healthy" : "unhealthy",
-      host: details.target?.display || check?.host || check?.url || "",
-      tags: [
-        ["request_type", details.request_type || check?.network_path?.request_type || "tcp"],
-        ["target", details.target?.display || check?.host || check?.url || "n/a"],
-        ["source_service", details.target?.source_service || "n/a"],
-        ["destination_service", details.target?.destination_service || "n/a"],
-      ],
-      runtimeMetrics: {
-        latency_avg_ms: Number(latencyStats.avg || 0),
-        latency_max_ms: Number(latencyStats.max || 0),
-        latency_min_ms: Number(latencyStats.min || 0),
-        packet_loss_pct: packetLossPct,
-        jitter_ms: jitterMs,
-        hop_avg: Number(networkHops.avg || 0),
-      },
-      logs: result?.message ? [result.message] : [],
-      error: result?.success ? "" : (result?.message || ""),
-      network: hops.map((hop) => ({
-        method: String(details.request_type || check?.network_path?.request_type || "tcp").toUpperCase(),
-        url: hop.address || `Hop ${hop.hop}`,
-        status: hop.timeout ? "timeout" : "reachable",
-        duration_ms: Number(hop.avg_latency_ms || 0),
-        resource_type: "hop",
-        failure: hop.timeout ? "timeout" : "",
-      })),
-      infrastructure: {
-        hop_count: hops.length,
-        traceroute_queries: Number(details.queries?.traceroute_queries || 0),
-        e2e_queries: Number(details.queries?.e2e_queries || 0),
-      },
-    });
-    pushSpan({
-      id: `${traceId}:e2e`,
-      parentId: `${traceId}:path`,
-      name: "End To End Metrics",
-      kind: "metrics",
-      startMs: 0,
-      durationMs: Math.max(1, Math.round(traceDuration * 0.55)),
-      status: result?.success ? "healthy" : "unhealthy",
-      runtimeMetrics: {
-        attempts: attempts.length,
-        successes: Number(probe.successes || 0),
-        failures: Number(probe.failures || 0),
-        packet_loss_pct: packetLossPct,
-        jitter_ms: jitterMs,
-      },
-      logs: (probe.failure_messages || []).slice(0, 10),
-    });
-    hops.forEach((hop, index) => {
-      pushSpan({
-        id: `${traceId}:hop:${index}`,
-        parentId: `${traceId}:path`,
-        name: `Hop ${hop.hop}: ${hop.address || "*"}`,
-        kind: "hop",
-        startMs: Math.min(index * 16, Math.max(traceDuration - 8, 0)),
-        durationMs: Math.max(4, Number(hop.avg_latency_ms || 4)),
-        status: hop.timeout ? "unhealthy" : "healthy",
-        host: hop.address || "",
-        tags: [
-          ["hop", hop.hop],
-          ["address", hop.address || "*"],
-          ["timeout", hop.timeout ? "true" : "false"],
-        ],
-        runtimeMetrics: {
-          hop_ttl: Number(hop.hop || index + 1),
-          avg_latency_ms: Number(hop.avg_latency_ms || 0),
-          traversed_count: Array.isArray(hop.latencies_ms) ? hop.latencies_ms.length : 0,
-        },
-        network: [{
-          method: String(details.request_type || check?.network_path?.request_type || "tcp").toUpperCase(),
-          url: hop.address || `Hop ${hop.hop}`,
-          status: hop.timeout ? "timeout" : "reachable",
-          duration_ms: Number(hop.avg_latency_ms || 0),
-          resource_type: "hop",
-          failure: hop.timeout ? "timeout" : "",
-        }],
-        error: hop.timeout ? "Hop timed out" : "",
-      });
-    });
+    hints.push("Inspect the path visualization to identify hops with elevated loss or latency. Re-run the monitor to compare routes over time.");
   } else {
     hints.push("This monitor has no recent failures. Use this dashboard to watch trend changes before they become incidents.");
   }
@@ -3422,6 +3326,104 @@ function inferApmTrace(check, result) {
         tags: [["url", entry.url || ""], ["status", entry.status ?? "n/a"], ["resource_type", entry.resource_type || "unknown"]],
         network: [entry],
         error: entry.failure || "",
+      });
+    });
+  } else if (check?.type === "network_path") {
+    const path = details.path || {};
+    const hops = Array.isArray(path.hops) ? path.hops : [];
+    const stats = details.stats || {};
+    const latencyStats = stats.latency_ms || {};
+    const packetLossPct = Number(stats.packet_loss_pct || 0);
+    const jitterMs = Number(stats.jitter_ms || 0);
+    const networkHops = stats.network_hops || {};
+    const probe = details.probe || {};
+    const attempts = Array.isArray(probe.attempts) ? probe.attempts : [];
+    const traceDuration = Math.max(1, Math.round(totalDuration * 0.65));
+    pushSpan({
+      id: `${traceId}:path`,
+      parentId: `${traceId}:root`,
+      name: "Network Path Execution",
+      kind: "network_path",
+      startMs: 0,
+      durationMs: traceDuration,
+      status: result?.success ? "healthy" : "unhealthy",
+      host: details.target?.display || check?.host || check?.url || "",
+      tags: [
+        ["request_type", details.request_type || check?.network_path?.request_type || "tcp"],
+        ["target", details.target?.display || check?.host || check?.url || "n/a"],
+        ["source_service", details.target?.source_service || "n/a"],
+        ["destination_service", details.target?.destination_service || "n/a"],
+      ],
+      runtimeMetrics: {
+        latency_avg_ms: Number(latencyStats.avg || 0),
+        latency_max_ms: Number(latencyStats.max || 0),
+        latency_min_ms: Number(latencyStats.min || 0),
+        packet_loss_pct: packetLossPct,
+        jitter_ms: jitterMs,
+        hop_avg: Number(networkHops.avg || 0),
+      },
+      logs: result?.message ? [result.message] : [],
+      error: result?.success ? "" : (result?.message || ""),
+      network: hops.map((hop) => ({
+        method: String(details.request_type || check?.network_path?.request_type || "tcp").toUpperCase(),
+        url: hop.address || `Hop ${hop.hop}`,
+        status: hop.timeout ? "timeout" : "reachable",
+        duration_ms: Number(hop.avg_latency_ms || 0),
+        resource_type: "hop",
+        failure: hop.timeout ? "timeout" : "",
+      })),
+      infrastructure: {
+        hop_count: hops.length,
+        traceroute_queries: Number(details.queries?.traceroute_queries || 0),
+        e2e_queries: Number(details.queries?.e2e_queries || 0),
+      },
+    });
+    pushSpan({
+      id: `${traceId}:e2e`,
+      parentId: `${traceId}:path`,
+      name: "End To End Metrics",
+      kind: "metrics",
+      startMs: 0,
+      durationMs: Math.max(1, Math.round(traceDuration * 0.55)),
+      status: result?.success ? "healthy" : "unhealthy",
+      runtimeMetrics: {
+        attempts: attempts.length,
+        successes: Number(probe.successes || 0),
+        failures: Number(probe.failures || 0),
+        packet_loss_pct: packetLossPct,
+        jitter_ms: jitterMs,
+      },
+      logs: (probe.failure_messages || []).slice(0, 10),
+    });
+    hops.forEach((hop, index) => {
+      pushSpan({
+        id: `${traceId}:hop:${index}`,
+        parentId: `${traceId}:path`,
+        name: `Hop ${hop.hop}: ${hop.address || "*"}`,
+        kind: "hop",
+        startMs: Math.min(index * 16, Math.max(traceDuration - 8, 0)),
+        durationMs: Math.max(4, Number(hop.avg_latency_ms || 4)),
+        status: hop.timeout ? "unhealthy" : "healthy",
+        host: hop.address || "",
+        tags: [
+          ["hop", hop.hop],
+          ["address", hop.address || "*"],
+          ["timeout", hop.timeout ? "true" : "false"],
+        ],
+        runtimeMetrics: {
+          hop_ttl: Number(hop.hop || index + 1),
+          avg_latency_ms: Number(hop.avg_latency_ms || 0),
+          traversed_count: Array.isArray(hop.latencies_ms) ? hop.latencies_ms.length : 0,
+        },
+        network: [{
+          method: String(details.request_type || check?.network_path?.request_type || "tcp").toUpperCase(),
+          url: hop.address || `Hop ${hop.hop}`,
+          status: hop.timeout ? "timeout" : "reachable",
+          duration_ms: Number(hop.avg_latency_ms || 0),
+          resource_type: "hop",
+          failure: hop.timeout ? "timeout" : "",
+        }],
+        error: hop.timeout ? "Hop timed out" : "",
       });
     });
   } else {
@@ -3978,143 +3980,231 @@ function networkPathAssertionsPanelMarkup(check, result) {
 }
 
 function networkPathRouteMarkup(topology) {
-  const columnWidth = 232;
-  const rowHeight = 172;
-  const leftPad = 32;
-  const topPad = 68;
-  const colGap = 32;
-  const cardWidth = 206;
-  const cardHeight = 132;
-  const columnStride = columnWidth + colGap;
-  const maxRows = Math.max(1, ...topology.columns.map((column) => column.nodes.length));
-  const width = Math.max(920, leftPad * 2 + topology.columns.length * columnWidth + Math.max(0, topology.columns.length - 1) * colGap);
-  const height = Math.max(380, topPad + 32 + maxRows * rowHeight);
+  const isDark = document.body.dataset.theme === "dark";
+  const canvasBg = isDark ? "#1e293b" : "#f1f5f9";
+  const numCols = topology.columns.length;
+  // Scale stride down for wide paths so nodes stay a readable size
+  const colStride = Math.max(72, Math.min(190, Math.floor(1100 / Math.max(numCols - 1, 1))));
+  const nodeR = colStride >= 130 ? 26 : colStride >= 100 ? 20 : 16;
+  const leftPad = nodeR + 30;
+  const topPad = 36;
+  const rowHeight = nodeR * 2 + 78;
+  const labelBelowH = 52;
+  const chartGap = 16;
+  const chartBarMaxH = 48;
+  const chartAxisH = 22;
+  const botPad = 14;
+
+  const maxRows = Math.max(1, ...topology.columns.map((c) => c.nodes.length));
+  const nodeAreaH = maxRows * rowHeight;
+  const totalWidth = Math.max(600, leftPad * 2 + (numCols - 1) * colStride);
+  const chartBaseY = topPad + nodeAreaH + labelBelowH + chartGap + chartBarMaxH;
+  const totalHeight = chartBaseY + chartAxisH + botPad;
+
   const positions = new Map();
-  topology.columns.forEach((column, columnIndex) => {
-    const columnHeight = column.nodes.length * rowHeight;
-    const offsetY = topPad + Math.max(0, ((maxRows * rowHeight) - columnHeight) / 2);
-    column.nodes.forEach((node, nodeIndex) => {
-      positions.set(node.id, {
-        x: leftPad + columnIndex * columnStride,
-        y: offsetY + nodeIndex * rowHeight,
-      });
+  topology.columns.forEach((col, ci) => {
+    const cx = leftPad + ci * colStride;
+    const colH = col.nodes.length * rowHeight;
+    const startCY = topPad + rowHeight / 2 + Math.max(0, (nodeAreaH - colH) / 2);
+    col.nodes.forEach((node, ri) => {
+      positions.set(node.id, { cx, cy: startCY + ri * rowHeight });
     });
   });
+
+  const colRTTs = topology.columns.map((col) => {
+    const lats = col.nodes.map((n) => Number(n.avg_latency_ms || 0)).filter((v) => v > 0);
+    return lats.length ? Math.max(...lats) : 0;
+  });
+  const maxRTT = Math.max(...colRTTs, 1);
+
   const selectedNode = networkPathSelectedNode(topology);
 
+  // Inline color palette — CSS class fills don't resolve reliably on SVG elements
+  const C = isDark ? {
+    node: { source: ["#0d3d38","#2dd4bf"], destination: ["#172554","#60a5fa"], healthy: ["#052e16","#4ade80"], warning: ["#431407","#fbbf24"], critical: ["#3f0d0d","#f87171"], neutral: ["#1e293b","#94a3b8"], timeout: ["#2d0f0f","#f87171"] },
+    nodeText: "#f1f5f9", addrText: "#94a3b8", rttText: "#64748b",
+    selRing: "rgba(96,165,250,0.22)",
+    edge: { healthy: "#4ade80", warning: "#fbbf24", critical: "#f87171" },
+    pill: { healthy: ["rgba(5,46,22,0.93)","#4ade80"], warning: ["rgba(67,20,7,0.93)","#fbbf24"], critical: ["rgba(63,13,13,0.93)","#f87171"] },
+    pillText: "#f1f5f9",
+    barTrack: "rgba(255,255,255,0.06)",
+    bar: { healthy: "#4ade80", warning: "#fbbf24", critical: "#f87171", neutral: "#64748b" },
+    divider: "rgba(148,163,184,0.14)", colLabel: "#6b7a96", chartText: "#64748b",
+  } : {
+    node: { source: ["#ccfbf1","#0d9488"], destination: ["#dbeafe","#2563eb"], healthy: ["#dcfce7","#16a34a"], warning: ["#fef9c3","#d97706"], critical: ["#fee2e2","#ef4444"], neutral: ["#f1f5f9","#64748b"], timeout: ["#fff1f2","#ef4444"] },
+    nodeText: "#0f172a", addrText: "#475569", rttText: "#64748b",
+    selRing: "rgba(37,99,235,0.16)",
+    edge: { healthy: "#16a34a", warning: "#d97706", critical: "#ef4444" },
+    pill: { healthy: ["rgba(220,252,231,0.96)","#16a34a"], warning: ["rgba(254,249,195,0.96)","#d97706"], critical: ["rgba(254,226,226,0.96)","#ef4444"] },
+    pillText: "#0f172a",
+    barTrack: "rgba(0,0,0,0.05)",
+    bar: { healthy: "#16a34a", warning: "#d97706", critical: "#ef4444", neutral: "#94a3b8" },
+    divider: "rgba(148,163,184,0.22)", colLabel: "#64748b", chartText: "#64748b",
+  };
+
+  const nodeKey = (node) => node.timeout && node.role === "hop" ? "timeout" : node.role === "source" ? "source" : node.role === "destination" ? "destination" : networkPathNodeTone(node, topology.context);
+  const arrowDefs = ["healthy", "warning", "critical"]
+    .map((tone) => `<marker id="npa-arr-${tone}" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8z" fill="${C.edge[tone]}"/></marker>`)
+    .join("");
+
+  // Only show pills when there's enough horizontal room
+  const showPills = colStride >= 100;
+  const edgesSvg = topology.edges
+    .map((edge) => {
+      const fp = positions.get(edge.fromId);
+      const tp = positions.get(edge.toId);
+      if (!fp || !tp) return "";
+      const tone = networkPathEdgeTone(edge, topology.baselineLatency);
+      const edgeColor = C.edge[tone] || C.edge.healthy;
+      const x1 = fp.cx + nodeR + 2, y1 = fp.cy;
+      const x2 = tp.cx - nodeR - 2, y2 = tp.cy;
+      const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+      const pd = Math.abs(y1 - y2) < 3 ? `M${x1} ${y1} L${x2} ${y2}` : `M${x1} ${y1} C${mx} ${y1} ${mx} ${y2} ${x2} ${y2}`;
+      const dLabel = edge.avgLatencyMs != null ? `+${Number(edge.avgLatencyMs).toFixed(0)} ms` : "";
+      const [pillBg, pillBorder] = C.pill[tone] || C.pill.healthy;
+      return `
+        <path d="${pd}" fill="none" stroke="${edgeColor}" stroke-width="2" marker-end="url(#npa-arr-${tone})"/>
+        ${showPills && dLabel ? `
+          <rect x="${mx - 22}" y="${my - 11}" width="44" height="20" rx="5" fill="${pillBg}" stroke="${pillBorder}" stroke-width="1"/>
+          <text x="${mx}" y="${my + 4}" text-anchor="middle" font-family="inherit" font-size="10" font-weight="600" fill="${C.pillText}">${escapeHtml(dLabel)}</text>
+        ` : ""}
+      `;
+    })
+    .join("");
+
+  const nodesSvg = topology.columns
+    .flatMap((c) => c.nodes)
+    .map((node) => {
+      const p = positions.get(node.id);
+      if (!p) return "";
+      const isSel = selectedNode?.id === node.id;
+      const [nodeFill, nodeStroke] = C.node[nodeKey(node)] || C.node.neutral;
+      const innerTxt = node.role === "source" ? "SRC" : node.role === "destination" ? "DST" : String(node.hop);
+      const addrRaw = String(node.address || "");
+      const maxAddrLen = colStride >= 130 ? 16 : colStride >= 90 ? 12 : 9;
+      const addr = addrRaw.length > maxAddrLen ? addrRaw.slice(0, maxAddrLen - 1) + "…" : (addrRaw || (node.timeout ? "*" : "—"));
+      const rtt = node.avg_latency_ms != null ? `${Number(node.avg_latency_ms).toFixed(0)} ms` : (node.timeout && node.role === "hop" ? "timeout" : "—");
+      const fontSize = nodeR >= 22 ? 11 : nodeR >= 17 ? 10 : 9;
+      const innerSize = nodeR >= 22 ? 11 : 10;
+      return `
+        <g data-apm-path-node="${escapeHtml(node.id)}" style="cursor:pointer">
+          ${isSel ? `<circle cx="${p.cx}" cy="${p.cy}" r="${nodeR + 7}" fill="${C.selRing}" stroke="none"/>` : ""}
+          <circle cx="${p.cx}" cy="${p.cy}" r="${nodeR}" fill="${nodeFill}" stroke="${nodeStroke}" stroke-width="2"/>
+          <text x="${p.cx}" y="${p.cy + 4}" text-anchor="middle" font-family="inherit" font-size="${innerSize}" font-weight="700" fill="${C.nodeText}">${escapeHtml(innerTxt)}</text>
+          <text x="${p.cx}" y="${p.cy + nodeR + 14}" text-anchor="middle" font-family="inherit" font-size="${fontSize}" fill="${C.addrText}">${escapeHtml(addr)}</text>
+          <text x="${p.cx}" y="${p.cy + nodeR + 26}" text-anchor="middle" font-family="inherit" font-size="${fontSize}" fill="${C.rttText}">${escapeHtml(rtt)}</text>
+        </g>
+      `;
+    })
+    .join("");
+
+  const colLabelsSvg = topology.columns
+    .map((col, ci) => {
+      const cx = leftPad + ci * colStride;
+      const labelSize = colStride >= 130 ? 11 : 10;
+      return `<text x="${cx}" y="20" text-anchor="middle" font-family="inherit" font-size="${labelSize}" font-weight="700" fill="${C.colLabel}" letter-spacing="0.5">${escapeHtml(col.label)}</text>`;
+    })
+    .join("");
+
+  const barW = Math.min(Math.max(colStride - 28, 16), 44);
+  const chartTitleY = topPad + nodeAreaH + labelBelowH + chartGap - 4;
+  const barChartSvg = `
+    <text x="${leftPad}" y="${chartTitleY}" font-family="inherit" font-size="11" font-weight="700" fill="${C.chartText}">Per-hop RTT</text>
+    <line x1="${leftPad - 16}" y1="${chartTitleY + 5}" x2="${totalWidth - leftPad + 16}" y2="${chartTitleY + 5}" stroke="${C.divider}" stroke-width="1"/>
+    ${topology.columns.map((col, ci) => {
+      const rtt = colRTTs[ci];
+      const cx = leftPad + ci * colStride;
+      const bx = cx - barW / 2;
+      const barH = rtt > 0 ? Math.max(3, (rtt / maxRTT) * chartBarMaxH) : 0;
+      const by = chartBaseY - barH;
+      const worstTone = col.nodes.reduce((w, n) => {
+        const t = networkPathNodeTone(n, topology.context);
+        return t === "critical" ? "critical" : t === "warning" && w !== "critical" ? "warning" : w;
+      }, col.nodes[0]?.role === "source" ? "neutral" : "healthy");
+      const barColor = C.bar[worstTone] || C.bar.neutral;
+      const rLabel = rtt > 0 ? `${rtt.toFixed(0)} ms` : "—";
+      const labelSize = colStride >= 100 ? 10 : 9;
+      return `
+        <rect x="${bx}" y="${chartBaseY - chartBarMaxH}" width="${barW}" height="${chartBarMaxH}" rx="3" fill="${C.barTrack}"/>
+        ${barH > 0 ? `<rect x="${bx}" y="${by}" width="${barW}" height="${barH}" rx="3" fill="${barColor}"/>` : ""}
+        <text x="${cx}" y="${chartBaseY + 15}" text-anchor="middle" font-family="inherit" font-size="${labelSize}" fill="${C.chartText}">${escapeHtml(rLabel)}</text>
+      `;
+    }).join("")}
+    <line x1="${leftPad - 16}" y1="${chartBaseY}" x2="${totalWidth - leftPad + 16}" y2="${chartBaseY}" stroke="${C.divider}" stroke-width="1"/>
+  `;
+
   return `
-    <div class="apm-path-canvas-wrap">
-      <div class="apm-path-canvas" style="width:${width}px;height:${height}px">
-        <svg class="apm-path-edge-layer" viewBox="0 0 ${width} ${height}" aria-label="Network path topology">
-          <defs>
-            <marker id="apm-path-arrow-healthy" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
-              <path d="M 0 0 L 10 5 L 0 10 z" fill="#16a34a"></path>
-            </marker>
-            <marker id="apm-path-arrow-warning" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
-              <path d="M 0 0 L 10 5 L 0 10 z" fill="#d97706"></path>
-            </marker>
-            <marker id="apm-path-arrow-critical" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
-              <path d="M 0 0 L 10 5 L 0 10 z" fill="#b42318"></path>
-            </marker>
-          </defs>
-          <rect x="0" y="0" width="${width}" height="${height}" rx="28" class="apm-path-canvas-backdrop"></rect>
-          ${topology.columns.map((column, columnIndex) => {
-            const labelX = leftPad + columnIndex * columnStride + (cardWidth / 2);
-            return `<text x="${labelX}" y="${topPad - 24}" text-anchor="middle" class="apm-path-column-label">${escapeHtml(column.label)}</text>`;
-          }).join("")}
-          ${topology.edges.map((edge) => {
-            const from = positions.get(edge.fromId);
-            const to = positions.get(edge.toId);
-            if (!from || !to) return "";
-            const tone = networkPathEdgeTone(edge, topology.baselineLatency);
-            const markerId = tone === "critical" ? "apm-path-arrow-critical" : tone === "warning" ? "apm-path-arrow-warning" : "apm-path-arrow-healthy";
-            const x1 = from.x + cardWidth;
-            const y1 = from.y + cardHeight / 2;
-            const x2 = to.x;
-            const y2 = to.y + cardHeight / 2;
-            const midX = (x1 + x2) / 2;
-            const midY = (y1 + y2) / 2;
-            return `
-              <g>
-                <path d="M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}" class="apm-path-edge ${tone}" marker-end="url(#${markerId})"></path>
-                <g transform="translate(${midX - 42}, ${midY - 16})">
-                  <rect width="84" height="32" rx="16" class="apm-path-edge-badge ${tone}"></rect>
-                  <text x="42" y="13" text-anchor="middle" class="apm-path-edge-metric">${escapeHtml(edge.avgLatencyMs != null ? `${Number(edge.avgLatencyMs).toFixed(0)} ms` : "n/a")}</text>
-                  <text x="42" y="24" text-anchor="middle" class="apm-path-edge-count">${escapeHtml(`${edge.traversedCount}/${topology.totalTraces} traces`)}</text>
-                </g>
-              </g>
-            `;
-          }).join("")}
-        </svg>
-        ${topology.columns.flatMap((column) => column.nodes).map((node) => {
-          const pos = positions.get(node.id);
-          const tone = networkPathNodeTone(node, topology.context);
-          const selected = selectedNode?.id === node.id;
-          const latencyLabel = node.avg_latency_ms != null ? `${Number(node.avg_latency_ms).toFixed(0)} ms` : (node.timeout ? "Timeout" : "n/a");
-          const lossLabel = `${Number(node.packet_loss_pct || 0).toFixed(0)}% loss`;
-          const tracesLabel = `${Number(node.traversed_count || 0)}/${topology.totalTraces} traces`;
-          return `
-            <button
-              type="button"
-              class="apm-path-node-card ${tone} ${selected ? "active" : ""}"
-              data-apm-path-node="${escapeHtml(node.id)}"
-              style="left:${pos.x}px;top:${pos.y}px;width:${cardWidth}px;height:${cardHeight}px"
-            >
-              <span class="apm-path-node-role">
-                <span class="apm-path-node-icon ${escapeHtml(node.role)}"></span>
-                ${escapeHtml(node.role === "source" ? "Source" : node.role === "destination" ? "Destination" : `Hop ${node.hop}`)}
-              </span>
-              <strong class="apm-path-node-label">${escapeHtml(node.label || node.address || "Node")}</strong>
-              <span class="apm-path-node-address">${escapeHtml(node.address || "Address unavailable")}</span>
-              <div class="apm-path-node-stats">
-                <span>${escapeHtml(latencyLabel)}</span>
-                <span>${escapeHtml(lossLabel)}</span>
-              </div>
-              <small class="apm-path-node-footer">${escapeHtml(tracesLabel)}</small>
-            </button>
-          `;
-        }).join("")}
-      </div>
+    <div class="npa-canvas-wrap">
+      <svg class="npa-canvas" viewBox="0 0 ${totalWidth} ${totalHeight}" xmlns="http://www.w3.org/2000/svg">
+        <defs>${arrowDefs}</defs>
+        <rect width="${totalWidth}" height="${totalHeight}" rx="12" fill="${canvasBg}"/>
+        ${colLabelsSvg}
+        ${edgesSvg}
+        ${nodesSvg}
+        ${barChartSvg}
+      </svg>
     </div>
   `;
 }
 
-function networkPathInspectorMarkup(node, topology, result) {
-  if (!node) {
-    return `
-      <section class="guide-card apm-path-inspector-panel">
-        <div class="panel-head compact">
-          <h4>Hop Inspector</h4>
-          <p>Select a node in the route view to inspect that stop in more detail.</p>
-        </div>
-      </section>
-    `;
-  }
-  const tone = networkPathNodeTone(node, topology.context);
+function networkPathHopTableMarkup(topology, result) {
+  const allNodes = [topology.sourceNode, ...topology.hops, topology.destinationNode];
+  const selectedNode = networkPathSelectedNode(topology);
   return `
-    <section class="guide-card apm-path-inspector-panel">
-      <div class="panel-head compact">
-        <div>
-          <h4>Hop Inspector</h4>
-          <p>${escapeHtml(node.role === "hop" ? `Hop ${node.hop}` : node.role === "source" ? "Source node" : "Destination node")}</p>
-        </div>
-        <span class="status-pill ${tone}">${escapeHtml(networkPathToneLabel(tone))}</span>
+    <section class="guide-card npa-hop-table-card">
+      <div class="mini-panel-header">
+        <h4>Hop Details</h4>
+        <span>${escapeHtml(`${topology.hops.length} intermediate ${topology.hops.length === 1 ? "hop" : "hops"} · ${topology.totalTraces} ${topology.totalTraces === 1 ? "trace" : "traces"}`)}</span>
       </div>
-      <div class="apm-path-inspector-grid">
-        <div class="apm-path-inspector-hero ${tone}">
-          <strong>${escapeHtml(node.label || node.address || "Node")}</strong>
-          <span>${escapeHtml(node.address || "Address unavailable")}</span>
-        </div>
-        ${apmMetadataListMarkup([
-          ["Role", node.role],
-          ["Hop TTL", node.hop],
-          ["Average Latency", node.avg_latency_ms != null ? `${Number(node.avg_latency_ms).toFixed(2)} ms` : "n/a"],
-          ["Packet Loss", `${Number(node.packet_loss_pct || 0).toFixed(2)}%`],
-          ["Traversed Count", Number(node.traversed_count || 0)],
-          ["Timeout Count", Number(node.timeout_count || 0)],
-          ["Trace Health", networkPathToneLabel(tone)],
-          ["Raw Sample", node.raw || result?.message || "n/a"],
-        ])}
+      <div class="table-scroll">
+        <table class="npa-hop-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Address / IP</th>
+              <th>Avg RTT</th>
+              <th>Min / Max RTT</th>
+              <th>Loss</th>
+              <th>Timeouts</th>
+              <th>Traces</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${allNodes.map((node) => {
+              const tone = networkPathNodeTone(node, topology.context);
+              const isSel = selectedNode?.id === node.id;
+              const latencies = Array.isArray(node.latencies_ms)
+                ? node.latencies_ms.filter((v) => Number.isFinite(Number(v)))
+                : [];
+              const minRtt = latencies.length ? Math.min(...latencies).toFixed(0) : (node.role === "source" ? "0" : null);
+              const maxRttVal = latencies.length ? Math.max(...latencies).toFixed(0) : (node.role === "source" ? "0" : null);
+              const avgRtt = node.avg_latency_ms != null
+                ? `${Number(node.avg_latency_ms).toFixed(1)} ms`
+                : (node.role === "source" ? "0.0 ms" : (node.timeout ? "* * *" : "—"));
+              const minMaxLabel = minRtt != null && maxRttVal != null ? `${minRtt} / ${maxRttVal} ms` : (node.timeout ? "* * *" : "—");
+              const lossPct = Number(node.packet_loss_pct || 0);
+              const lossLabel = node.role === "source" ? "0.0%" : `${lossPct.toFixed(1)}%`;
+              const lossClass = lossPct >= 10 ? "critical" : lossPct > 0 ? "warning" : "";
+              const timeouts = Number(node.timeout_count || 0);
+              const traversed = node.role === "source" ? topology.totalTraces : Number(node.traversed_count || 0);
+              const hopNum = node.role === "source" ? "S" : node.role === "destination" ? "D" : String(node.hop);
+              const addrDisplay = node.address || node.label || "(anonymous)";
+              return `
+                <tr class="npa-hop-row ${tone} ${isSel ? "selected" : ""}" data-apm-path-node="${escapeHtml(node.id)}" title="${escapeHtml(addrDisplay)}">
+                  <td class="npa-hop-num">${escapeHtml(hopNum)}</td>
+                  <td class="npa-hop-addr">${escapeHtml(addrDisplay)}</td>
+                  <td class="npa-hop-rtt">${escapeHtml(avgRtt)}</td>
+                  <td class="npa-hop-minmax">${escapeHtml(minMaxLabel)}</td>
+                  <td class="npa-hop-loss ${lossClass}">${escapeHtml(lossLabel)}</td>
+                  <td>${escapeHtml(String(timeouts))}</td>
+                  <td>${escapeHtml(`${traversed} / ${topology.totalTraces}`)}</td>
+                  <td><span class="status-pill ${tone}">${escapeHtml(networkPathToneLabel(tone))}</span></td>
+                </tr>
+              `;
+            }).join("")}
+          </tbody>
+        </table>
       </div>
     </section>
   `;
@@ -4153,7 +4243,6 @@ function networkPathSummaryCardsMarkup(check, result, topology) {
 function networkPathAnalysisMarkup(check, result, runs = []) {
   const details = result?.details || {};
   const topology = buildNetworkPathTopology(check, result);
-  const selectedNode = networkPathSelectedNode(topology);
   const metricPayload = networkPathMetricPayload(details);
   const recentRunPoints = runs
     .slice()
@@ -4170,7 +4259,7 @@ function networkPathAnalysisMarkup(check, result, runs = []) {
       <div class="panel-head">
         <div>
           <h4>Network Path Analysis</h4>
-          <p>Read the end-to-end health first, then inspect the actual route and each stop along the way.</p>
+          <p>End-to-end path health from source to destination. Each node is a routing hop — click to highlight in the table below.</p>
         </div>
         <label class="apm-path-metric-select">
           <span>Metric</span>
@@ -4196,21 +4285,18 @@ function networkPathAnalysisMarkup(check, result, runs = []) {
       <section class="guide-card apm-path-visual-card">
         <div class="mini-panel-header">
           <h4>Path Visualization</h4>
-          <span>${escapeHtml(`${topology.totalTraces} traceroute ${topology.totalTraces === 1 ? "query" : "queries"} aggregated for this run`)}</span>
+          <span>${escapeHtml(`${topology.totalTraces} traceroute ${topology.totalTraces === 1 ? "run" : "runs"} · ${topology.hops.length} intermediate ${topology.hops.length === 1 ? "hop" : "hops"}`)}</span>
         </div>
-        <p class="subtle">Each card is a stop in the route. Green is healthy, amber needs attention, and red indicates loss or timeout at that stop.</p>
         ${networkPathRouteMarkup(topology)}
       </section>
-      <div class="dashboard-detail-grid">
-        ${networkPathInspectorMarkup(selectedNode, topology, result)}
-        <section class="guide-card">
-          <div class="mini-panel-header">
-            <h4>Recent Loss Trend</h4>
-            <span>Compare this run to the most recent path runs for the same monitor.</span>
-          </div>
-          ${plotlyHostMarkup("network-path-metric", { metric: "loss", points: recentRunPoints, height: 220 }, `<div class="empty-chart-state">Not enough runs are available yet to compare recent loss.</div>`, "plotly-network-path-recent-loss")}
-        </section>
-      </div>
+      ${networkPathHopTableMarkup(topology, result)}
+      <section class="guide-card">
+        <div class="mini-panel-header">
+          <h4>Recent Loss Trend</h4>
+          <span>Compare this run to the most recent path runs for the same monitor.</span>
+        </div>
+        ${plotlyHostMarkup("network-path-metric", { metric: "loss", points: recentRunPoints, height: 220 }, `<div class="empty-chart-state">Not enough runs are available yet to compare recent loss.</div>`, "plotly-network-path-recent-loss")}
+      </section>
     </section>
   `;
 }

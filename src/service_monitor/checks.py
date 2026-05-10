@@ -224,26 +224,40 @@ def _compute_jitter(samples: list[float]) -> float:
 async def _run_traceroute(host: str, max_ttl: int, timeout_seconds: float) -> dict[str, object]:
     if not host:
         return {"available": False, "message": "no host configured", "hops": []}
+    # Use a dedicated traceroute timeout that is generous enough to traverse real paths.
+    # Per-probe wait is reduced to 2 s (-w 2) so the tool stays fast on non-responding hops.
+    traceroute_timeout = max(timeout_seconds, max_ttl * 3.0)
     if os.name == "nt":
-        command = ["tracert", "-d", "-h", str(max_ttl), host]
+        # tracert -w is in milliseconds; uses ICMP echo by default like ping
+        command = ["tracert", "-d", "-h", str(max_ttl), "-w", "2000", host]
     else:
-        command = ["traceroute", "-n", "-m", str(max_ttl), host]
+        # -I: ICMP echo mode — destination responds to pings so traceroute stops at
+        # the real last hop instead of running to max_ttl on servers that drop UDP probes.
+        # CAP_NET_RAW is in Docker's default capability set so -I works in containers.
+        command = ["traceroute", "-n", "-w", "2", "-m", str(max_ttl), "-I", host]
+    timed_out = False
+    error_output = ""
     try:
         completed = await asyncio.to_thread(
             subprocess.run,
             command,
             capture_output=True,
             text=True,
-            timeout=timeout_seconds,
+            timeout=traceroute_timeout,
             check=False,
         )
+        output = completed.stdout or ""
+        error_output = completed.stderr or ""
     except FileNotFoundError:
         return {"available": False, "message": f"{command[0]} is not available on this host", "hops": []}
-    except subprocess.TimeoutExpired:
-        return {"available": False, "message": "traceroute timed out", "hops": []}
-    output = completed.stdout or ""
-    error_output = completed.stderr or ""
+    except subprocess.TimeoutExpired as exc:
+        # subprocess.run kills the process and populates exc.stdout with whatever was captured.
+        timed_out = True
+        raw = exc.stdout or ""
+        output = raw if isinstance(raw, str) else raw.decode("utf-8", errors="replace")
     hops: list[dict[str, object]] = []
+    _ipv4_re = re.compile(r"\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b")
+    _ipv6_re = re.compile(r"\b([0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{0,4}){3,7})\b")
     for line in output.splitlines():
         match = re.match(r"^\s*(\d+)\s+(.*)$", line.strip())
         if not match:
@@ -251,21 +265,26 @@ async def _run_traceroute(host: str, max_ttl: int, timeout_seconds: float) -> di
         hop_number = int(match.group(1))
         rest = match.group(2)
         latencies = [float(item) for item in re.findall(r"(\d+(?:\.\d+)?)\s*ms", rest)]
-        address_match = re.search(r"((?:\d{1,3}\.){3}\d{1,3}|[A-Fa-f0-9:]+)$", rest)
+        # Find IP address anywhere in the line — Linux puts it first, Windows puts it last
+        ipv4s = _ipv4_re.findall(rest)
+        ipv6s = _ipv6_re.findall(rest)
+        address = ipv4s[0] if ipv4s else (ipv6s[0] if ipv6s else None)
+        timeout = bool(re.search(r"\*", rest)) and not latencies
         hops.append(
             {
                 "hop": hop_number,
-                "address": address_match.group(1) if address_match else None,
+                "address": address,
                 "latencies_ms": latencies,
                 "avg_latency_ms": round(sum(latencies) / len(latencies), 2) if latencies else None,
-                "timeout": "*" in rest and not latencies,
+                "timeout": timeout,
                 "raw": line.strip(),
             }
         )
     return {
-        "available": True,
+        "available": bool(hops),
+        "partial": timed_out,
         "command": command,
-        "message": error_output.strip() or None,
+        "message": ("partial output — traceroute timed out" if timed_out and not hops else None) or error_output.strip() or None,
         "hops": hops,
         "raw_output": output[:12000],
     }
