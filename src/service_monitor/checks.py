@@ -221,19 +221,34 @@ def _compute_jitter(samples: list[float]) -> float:
     return round(sum(deltas) / len(deltas), 2)
 
 
-async def _run_traceroute(host: str, max_ttl: int, timeout_seconds: float) -> dict[str, object]:
+async def _run_traceroute(
+    host: str,
+    max_ttl: int,
+    timeout_seconds: float,
+    request_type: str = "tcp",
+    port: int | None = None,
+) -> dict[str, object]:
     if not host:
         return {"available": False, "message": "no host configured", "hops": []}
-    # Use a dedicated traceroute timeout that is generous enough to traverse real paths.
-    # Per-probe wait is reduced to 2 s (-w 2) so the tool stays fast on non-responding hops.
+    # Use a dedicated traceroute timeout generous enough to traverse real paths.
+    # Per-probe wait is reduced to 2 s (-w 2) so non-responding hops don't stall long.
     traceroute_timeout = max(timeout_seconds, max_ttl * 3.0)
     if os.name == "nt":
-        # tracert -w is in milliseconds; uses ICMP echo by default like ping
+        # tracert uses ICMP echo by default; -w is in milliseconds
         command = ["tracert", "-d", "-h", str(max_ttl), "-w", "2000", host]
+    elif request_type == "tcp":
+        # TCP SYN traceroute (-T): embeds TCP header (with port) inside ICMP TTL-exceeded
+        # errors, which NAT layers can reverse-map back to the container — revealing ISP
+        # backbone hops that ICMP echo mode misses behind Docker Desktop NAT.
+        # The destination responds with SYN-ACK/RST so the trace terminates cleanly.
+        probe_port = port or 443
+        command = ["traceroute", "-n", "-w", "2", "-m", str(max_ttl), "-T", "-p", str(probe_port), host]
+    elif request_type == "udp":
+        # UDP traceroute with a fixed dest port so NAT can map ICMP errors back
+        probe_port = port or 33434
+        command = ["traceroute", "-n", "-w", "2", "-m", str(max_ttl), "-U", "-p", str(probe_port), host]
     else:
-        # -I: ICMP echo mode — destination responds to pings so traceroute stops at
-        # the real last hop instead of running to max_ttl on servers that drop UDP probes.
-        # CAP_NET_RAW is in Docker's default capability set so -I works in containers.
+        # ICMP echo mode for icmp request_type
         command = ["traceroute", "-n", "-w", "2", "-m", str(max_ttl), "-I", host]
     timed_out = False
     error_output = ""
@@ -652,7 +667,7 @@ async def run_network_path_check(check: CheckConfig, timeout_seconds: float) -> 
     traceroute_runs = []
     traceroute_iterations = max(1, min(config.traceroute_queries, 3))
     for _ in range(traceroute_iterations):
-        traceroute_runs.append(await _run_traceroute(host, config.max_ttl, timeout_seconds))
+        traceroute_runs.append(await _run_traceroute(host, config.max_ttl, timeout_seconds, request_type=config.request_type, port=int(port)))
     aggregated_hops = _aggregate_traceroute_hops(traceroute_runs)
     hop_counts = [len(run.get("hops") or []) for run in traceroute_runs if run.get("hops")]
     hop_stats = _compute_latency_stats([float(value) for value in hop_counts]) if hop_counts else {"samples": 0, "min": 0.0, "max": 0.0, "avg": 0.0}
