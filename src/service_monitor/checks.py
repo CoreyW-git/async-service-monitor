@@ -669,6 +669,7 @@ async def run_network_path_check(check: CheckConfig, timeout_seconds: float) -> 
             "display": display_target,
             "host": host,
             "port": port,
+            "source_host": socket.gethostname(),
             "source_service": config.source_service,
             "destination_service": config.destination_service,
         },
