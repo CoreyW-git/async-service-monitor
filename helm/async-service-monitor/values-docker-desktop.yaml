@@ -1,6 +1,12 @@
 image:
   pullPolicy: Always
 
+securityContext:
+  capabilities:
+    add:
+      - NET_RAW
+      - NET_ADMIN
+
 service:
   type: LoadBalancer
 
