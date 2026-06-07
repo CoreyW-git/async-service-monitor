@@ -26,3 +26,6 @@ spec:
       targetPort: http
       protocol: TCP
       appProtocol: {{ .Values.service.appProtocol }}
+      {{- if .Values.service.nodePort }}
+      nodePort: {{ .Values.service.nodePort }}
+      {{- end }}

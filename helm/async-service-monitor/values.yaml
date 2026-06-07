@@ -142,6 +142,13 @@ config:
 
     checks: []
 
+dockerSocket:
+  enabled: false
+  hostPath: /var/run/docker.sock
+
+extraVolumes: []
+extraVolumeMounts: []
+
 cloud:
   provider: generic
 

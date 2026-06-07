@@ -646,6 +646,49 @@ class MonitorRunner:
             "8000",
         ]
 
+        # When using a remote TCP Docker daemon the peer container starts with
+        # the baked-in minimal config (no checks, wrong node_id). Inject a
+        # peer-appropriate config so the node can participate in check
+        # distribution correctly: same checks and peers as the main node, but
+        # with its own node_id and a non-conflicting cluster bind_port.
+        if os.getenv("DOCKER_HOST", "").startswith("tcp://"):
+            import base64 as _b64
+            import dataclasses
+            import yaml as _yaml
+
+            def _strip_none(v: object) -> object:
+                if isinstance(v, dict):
+                    return {k: _strip_none(i) for k, i in v.items() if i is not None and i != []}
+                if isinstance(v, list):
+                    return [_strip_none(i) for i in v]
+                return v
+
+            cfg_dict = _strip_none(dataclasses.asdict(self.config))
+            cfg_dict["cluster"]["node_id"] = node_id
+            cfg_dict["cluster"]["bind_port"] = 8001
+            cfg_dict["cluster"]["enabled"] = True
+            # Remove portal users so peers don't expose the admin portal
+            cfg_dict.get("portal", {}).pop("users", None)
+            cfg_dict.get("portal", {})["enabled"] = False
+            cfg_yaml = _yaml.safe_dump(cfg_dict, sort_keys=False, default_flow_style=False)
+            environment["ASM_PEER_CONFIG_B64"] = _b64.b64encode(cfg_yaml.encode()).decode()
+            command = [
+                "sh", "-c",
+                "python3 -c \""
+                "import os,base64;"
+                "open('/app/config.yaml','wb').write(base64.b64decode(os.environ['ASM_PEER_CONFIG_B64']))"
+                "\" && python -m service_monitor --config /app/config.yaml --host 0.0.0.0 --port 8000"
+            ]
+
+        # Remove any stopped (or exited) container with the same name so the
+        # user can recreate a previously deleted peer without a 409 conflict.
+        try:
+            existing = self.docker_client.containers.get(container_name)
+            if existing.status != "running":
+                existing.remove(force=False)
+        except docker.errors.NotFound:
+            pass
+
         kwargs: dict[str, object] = {
             "name": container_name,
             "detach": True,
@@ -653,6 +696,8 @@ class MonitorRunner:
             "command": command,
         }
         kwargs["ports"] = {"8000/tcp": int(host_port)} if host_port else {"8000/tcp": None}
+        if os.getenv("DOCKER_HOST", "").startswith("tcp://"):
+            kwargs["restart_policy"] = {"Name": "unless-stopped"}
         if network:
             kwargs["network"] = network
         if config_path:
@@ -668,11 +713,12 @@ class MonitorRunner:
         ports = network_settings.get("Ports") or {}
         bindings = ports.get("8000/tcp") or []
         published_port = int(bindings[0]["HostPort"]) if bindings and bindings[0].get("HostPort") else None
-        base_url = (
-            f"http://{container.name}:8000"
-            if networks
-            else f"http://127.0.0.1:{published_port or 8000}"
-        )
+        if os.getenv("DOCKER_HOST", "").startswith("tcp://"):
+            base_url = f"http://host.docker.internal:{published_port}" if published_port else "http://host.docker.internal:8000"
+        elif networks:
+            base_url = f"http://{container.name}:8000"
+        else:
+            base_url = f"http://127.0.0.1:{published_port or 8000}"
         return {
             "status": "ok",
             "container": container.name,
@@ -699,11 +745,37 @@ class MonitorRunner:
             raise ValueError(
                 "Container creation from a Dockerized admin requires ASM_CONFIG_BIND_SOURCE to point at the host path of the shared config file."
             )
-        base_url = (
-            f"http://{container_name}:8000"
-            if network
-            else f"http://127.0.0.1:{host_port or 8000}"
-        )
+        # When DOCKER_HOST is a remote TCP endpoint and no explicit host-side bind
+        # source was provided, the pod-local config path is not accessible to the
+        # remote daemon. Clear it so the peer container uses its baked-in config.
+        remote_tcp = os.getenv("DOCKER_HOST", "").startswith("tcp://")
+        explicit_bind = payload.get("config_bind_source") or os.getenv("ASM_CONFIG_BIND_SOURCE")
+        if config_path and not explicit_bind and remote_tcp:
+            config_path = None
+        # For remote TCP Docker the app cannot reach containers by Docker network
+        # hostname or by 127.0.0.1 (which resolves to the pod itself). Use
+        # host.docker.internal so the Kubernetes pod can reach the Docker host.
+        # Pick a stable host port from a fixed range so restarts don't change it.
+        if remote_tcp:
+            network = None
+            if not host_port and self.docker_client is not None:
+                used_ports: set[int] = set()
+                for c in self.docker_client.containers.list(all=True):
+                    for binding_list in (c.ports or {}).values():
+                        for b in (binding_list or []):
+                            try:
+                                used_ports.add(int(b["HostPort"]))
+                            except (KeyError, TypeError, ValueError):
+                                pass
+                for candidate in range(8100, 8300):
+                    if candidate not in used_ports:
+                        host_port = candidate
+                        break
+            base_url = f"http://host.docker.internal:{host_port}" if host_port else "http://host.docker.internal:8100"
+        elif network:
+            base_url = f"http://{container_name}:8000"
+        else:
+            base_url = f"http://127.0.0.1:{host_port or 8000}"
         return {
             "node_id": node_id,
             "container_name": container_name,
@@ -734,8 +806,11 @@ class MonitorRunner:
                 container = self.docker_client.containers.get(candidate_name)
             except docker.errors.NotFound:
                 continue
-            if container.image.tags:
-                image = container.image.tags[0]
+            try:
+                if container.image.tags:
+                    image = container.image.tags[0]
+            except (docker.errors.NotFound, docker.errors.ImageNotFound):
+                pass
             attrs = container.attrs if hasattr(container, "attrs") else {}
             networks = sorted(
                 (attrs.get("NetworkSettings", {}).get("Networks") or {}).keys()

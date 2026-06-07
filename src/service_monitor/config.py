@@ -304,8 +304,9 @@ class CheckConfig:
     interval_seconds: float
     id: str = field(default_factory=lambda: secrets.token_urlsafe(10))
     enabled: bool = True
-    placement_mode: Literal["auto", "specific"] = "auto"
+    placement_mode: Literal["auto", "specific", "pool"] = "auto"
     assigned_node_id: str | None = None
+    assigned_node_ids: list[str] = field(default_factory=list)
     timeout_seconds: float | None = None
     url: str | None = None
     host: str | None = None
@@ -687,6 +688,7 @@ def _parse_check(raw: dict[str, Any]) -> CheckConfig:
         interval_seconds=float(raw["interval_seconds"]),
         placement_mode=raw.get("placement_mode", "auto"),
         assigned_node_id=raw.get("assigned_node_id"),
+        assigned_node_ids=list(raw.get("assigned_node_ids") or []),
         timeout_seconds=(
             float(raw["timeout_seconds"]) if raw.get("timeout_seconds") is not None else None
         ),
@@ -728,13 +730,17 @@ def validate_config(config: AppConfig) -> None:
         if check.interval_seconds <= 0:
             raise ValueError(f"Check '{check.name}' interval_seconds must be > 0")
 
-        if check.placement_mode not in {"auto", "specific"}:
+        if check.placement_mode not in {"auto", "specific", "pool"}:
             raise ValueError(
-                f"Check '{check.name}' placement_mode must be either 'auto' or 'specific'"
+                f"Check '{check.name}' placement_mode must be 'auto', 'specific', or 'pool'"
             )
         if check.placement_mode == "specific" and not check.assigned_node_id:
             raise ValueError(
                 f"Check '{check.name}' must define assigned_node_id when placement_mode is 'specific'"
+            )
+        if check.placement_mode == "pool" and not check.assigned_node_ids:
+            raise ValueError(
+                f"Check '{check.name}' must define at least one assigned_node_ids when placement_mode is 'pool'"
             )
 
         if check.type in {"http", "auth", "browser", "api"} and not check.url:

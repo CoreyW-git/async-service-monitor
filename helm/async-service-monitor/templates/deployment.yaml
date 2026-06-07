@@ -70,6 +70,10 @@ spec:
                   key: {{ .Values.env.configPassphrase.key }}
                   optional: true
             {{- end }}
+            {{- if .Values.env.dockerHost }}
+            - name: DOCKER_HOST
+              value: {{ .Values.env.dockerHost | quote }}
+            {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.service.targetPort }}
@@ -105,6 +109,13 @@ spec:
           volumeMounts:
             - name: app-data
               mountPath: {{ .Values.config.runtimeDir }}
+            {{- if .Values.dockerSocket.enabled }}
+            - name: docker-socket
+              mountPath: /var/run/docker.sock
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
       volumes:
         - name: bootstrap-config
           configMap:
@@ -116,3 +127,12 @@ spec:
           {{- else }}
           emptyDir: {}
           {{- end }}
+        {{- if .Values.dockerSocket.enabled }}
+        - name: docker-socket
+          hostPath:
+            path: {{ .Values.dockerSocket.hostPath }}
+            type: ""
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}

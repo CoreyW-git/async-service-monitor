@@ -131,6 +131,16 @@ class ClusterCoordinator:
             if check.assigned_node_id in fallback_nodes:
                 return check.assigned_node_id
 
+        if check.placement_mode == "pool" and check.assigned_node_ids:
+            pool = [n for n in check.assigned_node_ids if n in assignable_nodes]
+            if not pool:
+                pool = [n for n in check.assigned_node_ids if n in fallback_nodes]
+            if pool:
+                min_load = min(loads.get(n, 0) for n in pool)
+                least_loaded = [n for n in pool if loads.get(n, 0) == min_load]
+                check_hash = int(hashlib.sha256(check.name.encode("utf-8")).hexdigest(), 16)
+                return least_loaded[check_hash % len(least_loaded)]
+
         candidates = assignable_nodes or fallback_nodes
         if not candidates:
             return self.config.cluster.node_id
@@ -155,7 +165,7 @@ class ClusterCoordinator:
         return sorted(node_ids)
 
     async def _poll_peer(self, client: httpx.AsyncClient, peer: PeerConfig) -> None:
-        url = f"{peer.base_url}/health"
+        url = f"{peer.base_url}/healthz"
         state = self.peer_states[peer.node_id]
         was_healthy = state.healthy
 
@@ -167,8 +177,8 @@ class ClusterCoordinator:
             )
             response.raise_for_status()
             payload = response.json()
-            if payload.get("status") != "ok":
-                raise ValueError(f"unexpected peer payload: {payload}")
+            if payload.get("status") not in ("ready", "ok"):
+                raise ValueError(f"unexpected peer status: {payload.get('status')!r}")
 
             state.healthy = True
             state.last_ok_at = time.time()
@@ -189,7 +199,7 @@ class ClusterCoordinator:
             body=(
                 f"Peer {peer.node_id} is unhealthy.\n"
                 f"Container: {peer.container_name or 'unknown'}\n"
-                f"Endpoint: {peer.base_url}/health\n"
+                f"Endpoint: {peer.base_url}/healthz\n"
                 f"Error: {state.last_error or 'unknown'}\n"
                 f"Recovery owner: {self.recovery_owner_for_peer(peer.node_id)}\n"
             ),

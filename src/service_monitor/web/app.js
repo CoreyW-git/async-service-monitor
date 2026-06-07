@@ -1820,6 +1820,7 @@ function monitorCardMarkup(check, checkMetrics) {
         <div class="status-meta">
           <span>${escapeHtml(checkCategoryLabel(check.type))}</span>
           <span>${escapeHtml(checkTargetLabel(check))}</span>
+          ${check.owner ? `<span title="Running on">${escapeHtml(check.owner)}</span>` : ""}
         </div>
       </div>
       <div>
@@ -2049,6 +2050,7 @@ function renderNetworkPathMonitorPage() {
       },
     },
     "create",
+    state.cluster || { node_id: "monitor-1", peers: [], healthy_nodes: [] },
     state.networkPathMonitorBuilder.lastTestResult
   );
 }
@@ -2131,10 +2133,12 @@ function networkPathMonitorPreviewMarkup(result) {
   `;
 }
 
-function networkPathMonitorBuilderMarkup(check, mode = "create", testResult = null) {
+function networkPathMonitorBuilderMarkup(check, mode = "create", cluster = { node_id: "monitor-1", peers: [], healthy_nodes: [] }, testResult = null) {
   const isNew = mode === "create";
   const config = check.network_path || {};
   const targetValue = check.url || check.host || "";
+  const nodes = assignableNodeOptions(cluster);
+  const placementMode = check.placement_mode || "auto";
   return `
     <div class="monitor-builder-layout">
       <section class="panel">
@@ -2228,7 +2232,29 @@ function networkPathMonitorBuilderMarkup(check, mode = "create", testResult = nu
           <details class="accordion-item">
             <summary class="accordion-summary">
               <div>
-                <strong>5. Configure The Monitor</strong>
+                <strong>5. Monitor Placement</strong>
+                <div class="status-meta">
+                  <span>Choose a specific monitoring container or let the service auto-place it</span>
+                </div>
+              </div>
+            </summary>
+            <div class="accordion-body">
+              <label>
+                <span>Placement</span>
+                ${placementModeSelectMarkup(placementMode)}
+              </label>
+              ${placementFieldsMarkup(check, nodes, placementMode)}
+              <div class="guide-card">
+                <h4>Placement Notes</h4>
+                <p>${nodes.length ? "Network path monitors benefit from pool placement when you want to validate the route from multiple vantage points." : "No full-monitoring peer nodes are currently available — this monitor will run on the local node."}</p>
+              </div>
+            </div>
+          </details>
+
+          <details class="accordion-item">
+            <summary class="accordion-summary">
+              <div>
+                <strong>6. Configure The Monitor</strong>
                 <div class="status-meta">
                   <span>Name, tags, and lifecycle</span>
                 </div>
@@ -2255,7 +2281,7 @@ function networkPathMonitorBuilderMarkup(check, mode = "create", testResult = nu
   `;
 }
 
-function renderNetworkPathMonitorBuilder(check, mode = "create", testResult = null) {
+function renderNetworkPathMonitorBuilder(check, mode = "create", cluster = { node_id: "monitor-1", peers: [], healthy_nodes: [] }, testResult = null) {
   setWorkspaceHeader("Network Path Monitor", "Build and test route-aware synthetic monitors with live path telemetry, packet health, and hop-aware assertions.", [
     { label: "Monitors", href: "/monitors" },
     { label: "Add Monitor", href: "/monitors/new" },
@@ -2263,7 +2289,7 @@ function renderNetworkPathMonitorBuilder(check, mode = "create", testResult = nu
     { label: "Network Path Monitor" },
   ]);
   document.getElementById("overview-cards").innerHTML = "";
-  document.getElementById("app-root").innerHTML = networkPathMonitorBuilderMarkup(check, mode, testResult);
+  document.getElementById("app-root").innerHTML = networkPathMonitorBuilderMarkup(check, mode, cluster, testResult);
 }
 
 function renderAdvancedMonitorSubpage(title, description) {
@@ -4798,6 +4824,35 @@ function assignableNodeOptions(cluster) {
   });
 }
 
+function placementFieldsMarkup(check, nodes, placementMode, readonlyAttr = "") {
+  const selectedIds = Array.isArray(check.assigned_node_ids) ? check.assigned_node_ids : [];
+  return `
+    <label class="field-assigned-node ${placementMode === "specific" ? "" : "hidden"}">
+      <span>Monitoring Container</span>
+      <select name="assigned_node_id" ${readonlyAttr}>
+        <option value="">Select a monitoring container</option>
+        ${nodes.map((node) => `<option value="${escapeHtml(node.node_id)}" ${(check.assigned_node_id || "") === node.node_id ? "selected" : ""}>${escapeHtml(node.label)}${node.healthy ? " | healthy" : " | unhealthy"} | ${escapeHtml(node.description || "")}</option>`).join("")}
+      </select>
+    </label>
+    <label class="field-pool-nodes ${placementMode === "pool" ? "" : "hidden"}">
+      <span>Monitoring Containers (select one or more)</span>
+      <select name="assigned_node_ids" multiple size="${Math.min(nodes.length + 1, 6)}" ${readonlyAttr}>
+        ${nodes.map((node) => `<option value="${escapeHtml(node.node_id)}" ${selectedIds.includes(node.node_id) ? "selected" : ""}>${escapeHtml(node.label)}${node.healthy ? " | healthy" : " | unhealthy"}</option>`).join("")}
+      </select>
+    </label>
+  `;
+}
+
+function placementModeSelectMarkup(placementMode, readonlyAttr = "") {
+  return `
+    <select name="placement_mode" ${readonlyAttr}>
+      <option value="auto" ${placementMode === "auto" ? "selected" : ""}>Auto — healthiest least-loaded container</option>
+      <option value="pool" ${placementMode === "pool" ? "selected" : ""}>Pool — run on one of the selected containers</option>
+      <option value="specific" ${placementMode === "specific" ? "selected" : ""}>Specific — pin to one container</option>
+    </select>
+  `;
+}
+
 function alertThresholdFieldsMarkup(check, editable) {
   const thresholds = { ...defaultAlertThresholds(), ...(check.alert_thresholds || {}) };
   const readonlyAttr = editable ? "" : "disabled";
@@ -5100,23 +5155,10 @@ function basicMonitorBuilderMarkup(
                 </div>
                 <div class="guide-grid">
                   <label>
-                    <span title="Let the platform choose a monitoring node automatically or pin the monitor to a specific node.">Placement</span>
-                    <select name="placement_mode">
-                      <option value="auto" ${placementMode !== "specific" ? "selected" : ""}>Auto-select the healthiest least-loaded container</option>
-                      <option value="specific" ${placementMode === "specific" ? "selected" : ""}>Choose a specific monitoring container</option>
-                    </select>
+                    <span title="Let the platform choose a monitoring node automatically, restrict it to a pool of nodes, or pin it to one specific node.">Placement</span>
+                    ${placementModeSelectMarkup(placementMode)}
                   </label>
-                  <label class="field-assigned-node ${placementMode === "specific" ? "" : "hidden"}">
-                    <span title="The exact monitoring container that should run this monitor when placement is set to specific.">Monitoring Container</span>
-                    <select name="assigned_node_id">
-                      <option value="">Select a monitoring container</option>
-                      ${nodes
-                        .map(
-                          (node) => `<option value="${escapeHtml(node.node_id)}" ${check.assigned_node_id === node.node_id ? "selected" : ""}>${escapeHtml(node.label)}</option>`
-                        )
-                        .join("")}
-                    </select>
-                  </label>
+                  ${placementFieldsMarkup(check, nodes, placementMode)}
                 </div>
                 ${alertThresholdFieldsMarkup(check, true)}
               </div>
@@ -5274,13 +5316,10 @@ function browserMonitorBuilderMarkup(check, mode, cluster = { node_id: "monitor-
                 <div class="guide-grid">
                   <label><span title="How often this browser monitor should run.">Interval Seconds</span><input name="interval_seconds" type="number" min="1" value="${escapeHtml(check.interval_seconds || 300)}" ${canWrite ? "" : "disabled"} /></label>
                   <label>
-                    <span title="Let the platform choose where to run the browser monitor or assign it to a specific monitoring node.">Placement</span>
-                    <select name="placement_mode" ${canWrite ? "" : "disabled"}>
-                      <option value="auto" ${placementMode !== "specific" ? "selected" : ""}>Auto-select the healthiest least-loaded container</option>
-                      <option value="specific" ${placementMode === "specific" ? "selected" : ""}>Choose a specific monitoring container</option>
-                    </select>
+                    <span title="Let the platform choose automatically, restrict to a pool, or pin to one container.">Placement</span>
+                    ${placementModeSelectMarkup(placementMode, canWrite ? "" : "disabled")}
                   </label>
-                  <label class="field-assigned-node ${placementMode === "specific" ? "" : "hidden"}"><span title="The monitoring container that should own and run this browser monitor when placement is specific.">Monitoring Container</span><select name="assigned_node_id" ${canWrite ? "" : "disabled"}><option value="">Select a monitoring container</option>${nodes.map((node) => `<option value="${escapeHtml(node.node_id)}" ${selectedNodeId === node.node_id ? "selected" : ""}>${escapeHtml(node.label)}${node.healthy ? " | healthy" : " | unhealthy"} | ${escapeHtml(node.description || "")}</option>`).join("")}</select></label>
+                  ${placementFieldsMarkup(check, nodes, placementMode, canWrite ? "" : "disabled")}
                 </div>
                 ${alertThresholdFieldsMarkup(check, canWrite)}
               </div>
@@ -5427,6 +5466,7 @@ function monitorFormMarkup(check, mode, cluster = { node_id: "monitor-1", peers:
               <div class="status-meta">
                 <span>${escapeHtml(checkCategoryLabel(check.type || "http"))}</span>
                 <span>${escapeHtml(authSummary(check))}</span>
+                ${check.owner ? `<span title="Running on">${escapeHtml(check.owner)}</span>` : ""}
               </div>
             </div>
             <div>${sparklineMarkup(check.metric_points || [], check.status === "unhealthy" ? "bad" : check.status === "disabled" ? "neutral" : "good")}</div>
@@ -5443,7 +5483,7 @@ function monitorFormMarkup(check, mode, cluster = { node_id: "monitor-1", peers:
           </div>
           <div class="guide-card">
             <h4>Placement</h4>
-            <p>${check.placement_mode === "specific" ? `Pinned to ${escapeHtml(check.assigned_node_id || check.owner || "monitor-1")}` : "Automatic cluster placement"}</p>
+            <p>${check.placement_mode === "specific" ? `Pinned to ${escapeHtml(check.assigned_node_id || check.owner || "")}` : check.placement_mode === "pool" ? `Pool: ${escapeHtml((check.assigned_node_ids || []).join(", ") || "none")}` : "Automatic cluster placement"}</p>
           </div>
           <div class="guide-card">
             <h4>Target</h4>
@@ -5529,25 +5569,12 @@ function monitorFormMarkup(check, mode, cluster = { node_id: "monitor-1", peers:
               <div class="accordion-body">
                 <label>
                   <span>Placement</span>
-                  <select name="placement_mode" ${readonlyAttr}>
-                    <option value="auto" ${placementMode !== "specific" ? "selected" : ""}>Auto-select the healthiest least-loaded container</option>
-                    <option value="specific" ${placementMode === "specific" ? "selected" : ""}>Choose a specific monitoring container</option>
-                  </select>
+                  ${placementModeSelectMarkup(placementMode, readonlyAttr)}
                 </label>
-                <label class="field-assigned-node ${placementMode === "specific" ? "" : "hidden"}">
-                  <span>Monitoring Container</span>
-                  <select name="assigned_node_id" ${readonlyAttr}>
-                    <option value="">Select a monitoring container</option>
-                    ${nodes
-                      .map(
-                        (node) => `<option value="${escapeHtml(node.node_id)}" ${selectedNodeId === node.node_id ? "selected" : ""}>${escapeHtml(node.label)}${node.healthy ? " | healthy" : " | unhealthy"} | ${escapeHtml(node.description || "")}</option>`
-                      )
-                      .join("")}
-                  </select>
-                </label>
+                ${placementFieldsMarkup(check, nodes, placementMode, readonlyAttr)}
                 <div class="guide-card">
                   <h4>Placement Notes</h4>
-                  <p>${nodes.length ? "Auto placement keeps new endpoint checks on healthy full-monitoring nodes and balances them across the cluster." : "No full-monitoring peer nodes are currently available, so this monitor will stay on the local node."}</p>
+                  <p>${nodes.length ? "Auto balances across healthy nodes. Pool restricts to your selected containers. Specific pins to exactly one." : "No full-monitoring peer nodes are currently available, so this monitor will stay on the local node."}</p>
                 </div>
               </div>
             </details>
@@ -6232,8 +6259,8 @@ function browserMonitorMarkup(check, mode, cluster = { node_id: "monitor-1", pee
             <details class="accordion-item" ${isNew ? "" : "open"}>
               <summary class="accordion-summary"><div><strong>Monitor Placement</strong><div class="status-meta"><span>Choose a monitoring node or let the service place this browser journey automatically</span></div></div></summary>
               <div class="accordion-body">
-                <label><span>Placement</span><select name="placement_mode" ${canWrite ? "" : "disabled"}><option value="auto" ${placementMode !== "specific" ? "selected" : ""}>Auto-select the healthiest least-loaded container</option><option value="specific" ${placementMode === "specific" ? "selected" : ""}>Choose a specific monitoring container</option></select></label>
-                <label class="field-assigned-node ${placementMode === "specific" ? "" : "hidden"}"><span>Monitoring Container</span><select name="assigned_node_id" ${canWrite ? "" : "disabled"}><option value="">Select a monitoring container</option>${nodes.map((node) => `<option value="${escapeHtml(node.node_id)}" ${selectedNodeId === node.node_id ? "selected" : ""}>${escapeHtml(node.label)}${node.healthy ? " | healthy" : " | unhealthy"} | ${escapeHtml(node.description || "")}</option>`).join("")}</select></label>
+                <label><span>Placement</span>${placementModeSelectMarkup(placementMode, canWrite ? "" : "disabled")}</label>
+                ${placementFieldsMarkup(check, nodes, placementMode, canWrite ? "" : "disabled")}
               </div>
             </details>
 
@@ -6333,6 +6360,7 @@ function recorderMonitorPayload(form) {
     interval_seconds: Number(formData.get("interval_seconds") || 300),
     placement_mode: placementMode,
     assigned_node_id: placementMode === "specific" ? String(formData.get("assigned_node_id") || "") || null : null,
+    assigned_node_ids: placementMode === "pool" ? formData.getAll("assigned_node_ids").filter(Boolean) : [],
     timeout_seconds: formData.get("timeout_seconds") ? Number(formData.get("timeout_seconds")) : 30,
     url: String(formData.get("url") || state.recorder.targetUrl || "").trim() || null,
     host: null,
@@ -6780,8 +6808,8 @@ function renderMonitorRecorderPage(cluster = { node_id: "monitor-1", peers: [], 
                 <div class="guide-grid">
                   <label><span title="How often this saved monitor should run after you create it.">Interval Seconds</span><input name="interval_seconds" type="number" min="1" value="300" /></label>
                   <label><span title="The maximum time the full browser monitor is allowed to run before the test is treated as timed out.">Timeout Seconds</span><input name="timeout_seconds" type="number" min="1" value="30" /></label>
-                  <label><span title="Let the platform place the monitor automatically, or pin it to a specific monitoring node.">Placement</span><select name="placement_mode"><option value="auto" selected>Auto-select the healthiest least-loaded container</option><option value="specific">Choose a specific monitoring container</option></select></label>
-                  <label class="field-assigned-node hidden"><span title="The monitoring node that should run this browser monitor when placement is set to a specific container.">Monitoring Container</span><select name="assigned_node_id"><option value="">Select a monitoring container</option>${nodes.map((node) => `<option value="${escapeHtml(node.node_id)}" ${selectedNodeId === node.node_id ? "selected" : ""}>${escapeHtml(node.label)}${node.healthy ? " | healthy" : " | unhealthy"} | ${escapeHtml(node.description || "")}</option>`).join("")}</select></label>
+                  <label><span title="Auto, pool, or specific placement.">Placement</span>${placementModeSelectMarkup("auto")}</label>
+                  ${placementFieldsMarkup({}, nodes, "auto")}
                 </div>
                 ${alertThresholdFieldsMarkup({ alert_thresholds: defaultAlertThresholds() }, true)}
               </div>
@@ -8190,6 +8218,7 @@ function hydrateFormVisibility(form) {
   form.querySelectorAll("[data-auth-field='username'], [data-auth-field='password']").forEach((node) => node.classList.toggle("hidden", !showAuth || authType !== "basic"));
   form.querySelectorAll("[data-auth-field='header_name'], [data-auth-field='header_value']").forEach((node) => node.classList.toggle("hidden", !showAuth || authType !== "header"));
   form.querySelectorAll(".field-assigned-node").forEach((node) => node.classList.toggle("hidden", placementMode !== "specific"));
+  form.querySelectorAll(".field-pool-nodes").forEach((node) => node.classList.toggle("hidden", placementMode !== "pool"));
   const thresholdMode = form.querySelector("select[name='alert_threshold_mode']")?.value || "auto";
   form.querySelectorAll(".threshold-manual-fields").forEach((node) => node.classList.toggle("hidden", thresholdMode !== "manual"));
 }
@@ -8231,6 +8260,7 @@ function monitorFormPayload(form) {
     interval_seconds: Number(formData.get("interval_seconds")),
     placement_mode: placementMode,
     assigned_node_id: placementMode === "specific" ? String(formData.get("assigned_node_id") || "") || null : null,
+    assigned_node_ids: placementMode === "pool" ? formData.getAll("assigned_node_ids").filter(Boolean) : [],
     timeout_seconds: formData.get("timeout_seconds") ? Number(formData.get("timeout_seconds")) : null,
     url: formData.get("url") || null,
     host: formData.get("host") || null,
@@ -8345,8 +8375,9 @@ function networkPathMonitorPayload(form) {
     type: "network_path",
     enabled: String(formData.get("enabled")) === "true",
     interval_seconds: Number(formData.get("interval_seconds") || 300),
-    placement_mode: "auto",
-    assigned_node_id: null,
+    placement_mode: String(formData.get("placement_mode") || "auto"),
+    assigned_node_id: String(formData.get("placement_mode")) === "specific" ? String(formData.get("assigned_node_id") || "") || null : null,
+    assigned_node_ids: String(formData.get("placement_mode")) === "pool" ? formData.getAll("assigned_node_ids").filter(Boolean) : [],
     timeout_seconds: Number(formData.get("timeout_seconds") || 30),
     url: isUrl ? target : null,
     host: isUrl ? null : target || null,
@@ -9235,7 +9266,7 @@ async function renderRoute() {
       return;
     }
     if (check.type === "network_path") {
-      renderNetworkPathMonitorBuilder(check, "edit", state.networkPathMonitorBuilder.lastTestResult);
+      renderNetworkPathMonitorBuilder(check, "edit", state.cluster || { node_id: "monitor-1", peers: [], healthy_nodes: [] }, state.networkPathMonitorBuilder.lastTestResult);
       if (!hasRole("read_write")) {
         disableForm(document.getElementById("network-path-monitor-form"), true);
         setStatus(document.getElementById("network-path-monitor-status"), "Read-only access: editing is disabled for this account.");
@@ -10187,6 +10218,9 @@ function handleChange(event) {
       const placementMode = event.target.value || "auto";
       form.querySelectorAll(".field-assigned-node").forEach((node) => {
         node.classList.toggle("hidden", placementMode !== "specific");
+      });
+      form.querySelectorAll(".field-pool-nodes").forEach((node) => {
+        node.classList.toggle("hidden", placementMode !== "pool");
       });
     }
     if (event.target.matches("select[name='browser_step_action']")) {

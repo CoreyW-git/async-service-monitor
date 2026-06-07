@@ -162,8 +162,9 @@ class CheckPayload(BaseModel):
     type: Literal["http", "dns", "auth", "database", "generic", "browser", "api", "network_path"]
     enabled: bool = True
     interval_seconds: float
-    placement_mode: Literal["auto", "specific"] = "auto"
+    placement_mode: Literal["auto", "specific", "pool"] = "auto"
     assigned_node_id: str | None = None
+    assigned_node_ids: list[str] = Field(default_factory=list)
     timeout_seconds: float | None = None
     url: str | None = None
     host: str | None = None
@@ -427,6 +428,7 @@ def _check_from_payload(payload: CheckPayload) -> CheckConfig:
         interval_seconds=payload.interval_seconds,
         placement_mode=payload.placement_mode,
         assigned_node_id=payload.assigned_node_id,
+        assigned_node_ids=list(payload.assigned_node_ids or []),
         timeout_seconds=payload.timeout_seconds,
         url=payload.url,
         host=payload.host,
@@ -1265,6 +1267,11 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
         }
         cluster = await _cluster_summary(config)
         assignable_nodes = cluster.get("assignable_nodes") or [config.cluster.node_id]
+        try:
+            _runner = _get_runner()
+            _plan_owner = _runner.cluster.owner_for_check
+        except Exception:
+            _plan_owner = lambda name: (config.cluster.node_id)  # noqa: E731
         described: list[dict[str, object]] = []
         for check in config.checks:
             latest = latest_map.get(check.id) or latest_map.get(check.name)
@@ -1278,6 +1285,7 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
                     "enabled": check.enabled,
                     "placement_mode": check.placement_mode,
                     "assigned_node_id": check.assigned_node_id,
+                    "assigned_node_ids": check.assigned_node_ids,
                     "interval_seconds": check.interval_seconds,
                     "timeout_seconds": check.timeout_seconds,
                     "url": check.url,
@@ -1357,9 +1365,7 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
                         "not_contains": check.content.not_contains if check.content else [],
                         "regex": check.content.regex if check.content else None,
                     },
-                    "owner": (latest or {}).get("owner")
-                    or check.assigned_node_id
-                    or config.cluster.node_id,
+                    "owner": _plan_owner(check.name),
                     "assignable_nodes": assignable_nodes,
                 }
             )

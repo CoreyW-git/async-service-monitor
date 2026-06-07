@@ -1,5 +1,14 @@
 image:
-  pullPolicy: Always
+  pullPolicy: IfNotPresent
+
+dockerSocket:
+  enabled: false
+
+# To enable Docker container management from the admin portal, enable
+# "Expose daemon on tcp://localhost:2375 without TLS" in Docker Desktop
+# Settings > General, then uncomment the block below:
+# env:
+#   dockerHost: tcp://host.docker.internal:2375
 
 securityContext:
   capabilities:
@@ -12,7 +21,7 @@ service:
 
 persistence:
   enabled: true
-  bootstrapImage: async-service-monitor:latest
+  bootstrapImage: busybox:1.36
 
 config:
   content: |
@@ -28,6 +37,7 @@ config:
     cluster:
       enabled: false
       node_id: monitor-k8s-1
+      bind_port: 8001
 
     notifications:
       email:
