@@ -5,6 +5,7 @@ import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 import yaml
 
@@ -333,12 +334,40 @@ class CheckConfig:
 
 
 @dataclass(slots=True)
+class RecorderDesktopConfig:
+    enabled: bool = True
+    minimum_role: str = "admin"
+    allowed_users: list[str] = field(default_factory=list)
+    public_url: str = ""
+
+
+def validate_recorder_desktop(config: RecorderDesktopConfig) -> None:
+    if config.minimum_role not in {"read_write", "admin"}:
+        raise ValueError("Recorder desktop role must be read_write or admin.")
+    if not isinstance(config.allowed_users, list) or any(not isinstance(user, str) or not user.strip() for user in config.allowed_users):
+        raise ValueError("Recorder allowed users must be a list of nonempty usernames.")
+    if config.public_url:
+        try:
+            parsed = urlsplit(config.public_url)
+            valid = parsed.scheme in {"http", "https"} and parsed.hostname and parsed.port != 0
+            valid = valid and not (parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path.strip('/'))
+            valid = valid and not any(c.isspace() or c in '\\<>"' for c in config.public_url)
+            if parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
+                valid = False
+            if not valid:
+                raise ValueError()
+        except ValueError:
+            raise ValueError("Public URL must be an HTTPS origin, such as https://monitor.example.com (HTTP is allowed only for localhost).") from None
+
+
+@dataclass(slots=True)
 class AppConfig:
     defaults: DefaultsConfig = field(default_factory=DefaultsConfig)
     cluster: ClusterConfig = field(default_factory=ClusterConfig)
     notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
     telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
     ui_scaling: UIScalingConfig = field(default_factory=UIScalingConfig)
+    recorder_desktop: RecorderDesktopConfig = field(default_factory=RecorderDesktopConfig)
     portal: PortalAuthConfig = field(default_factory=PortalAuthConfig)
     checks: list[CheckConfig] = field(default_factory=list)
 
@@ -718,6 +747,7 @@ def _parse_check(raw: dict[str, Any]) -> CheckConfig:
 
 
 def validate_config(config: AppConfig) -> None:
+    validate_recorder_desktop(config.recorder_desktop)
     if not config.checks:
         raise ValueError("Configuration must define at least one check.")
 
@@ -921,6 +951,7 @@ def load_config(path: str | Path) -> AppConfig:
         notifications=_parse_notifications(raw.get("notifications")),
         telemetry=_parse_telemetry(raw.get("telemetry")),
         ui_scaling=_parse_ui_scaling(raw.get("ui_scaling")),
+        recorder_desktop=RecorderDesktopConfig(**(raw.get("recorder_desktop") or {})),
         portal=_parse_portal(raw.get("portal")),
         checks=[_parse_check(item) for item in raw.get("checks", [])],
     )

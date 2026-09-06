@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import queue
 import shutil
 import tempfile
+import threading
 import time
 import traceback
 from pathlib import Path
 from typing import Any
 
 import httpx
+from service_monitor.recorder_urls import normalize_recorder_url
 
 DEBUG_LOG = Path(__file__).resolve().parents[2] / "recorder-helper.debug.log"
 
@@ -24,29 +27,32 @@ def _debug(message: str) -> None:
 
 INIT_SCRIPT_TEMPLATE = """
 (() => {
-  if (window.top !== window.self) {
-    return;
-  }
-
   function send(payload) {
     if (window.asmRecordEvent) {
       window.asmRecordEvent(payload);
     }
   }
 
+  let popupReported = false;
   window.open = function(url, target) {
-    send({
+    if (!popupReported) send({
       event: "popup_blocked",
       url: typeof url === "string" ? url : "",
       title: document.title,
       message: "window.open was blocked so the recorder can stay locked to one primary page."
     });
+    popupReported = true;
     return null;
   };
 
+  // Block script popups in embedded ad frames too, but record only the main page.
+  if (window.top !== window.self) return;
+
   function normalizeNewWindowTargets(root) {
     const scope = root && root.querySelectorAll ? root : document;
-    scope.querySelectorAll('a[target], form[target]').forEach((node) => {
+    const nodes = Array.from(scope.querySelectorAll('a[target], form[target]'));
+    if (scope.matches && scope.matches('a[target], form[target]')) nodes.push(scope);
+    nodes.forEach((node) => {
       const target = (node.getAttribute('target') || '').toLowerCase();
       if (target === '_blank' || target === '_new') {
         node.setAttribute('target', '_self');
@@ -57,6 +63,7 @@ INIT_SCRIPT_TEMPLATE = """
   function wireMutationObserver() {
     const observer = new MutationObserver((mutations) => {
       for (const mutation of mutations) {
+        if (mutation.type === 'attributes') normalizeNewWindowTargets(mutation.target);
         for (const node of mutation.addedNodes || []) {
           if (node && node.nodeType === Node.ELEMENT_NODE) {
             normalizeNewWindowTargets(node);
@@ -66,7 +73,9 @@ INIT_SCRIPT_TEMPLATE = """
     });
     observer.observe(document.documentElement || document.body, {
       childList: true,
-      subtree: true
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['target']
     });
   }
 
@@ -153,7 +162,7 @@ INIT_SCRIPT_TEMPLATE = """
     });
   }, true);
 
-  window.addEventListener("load", () => {
+  function ready() {
     normalizeNewWindowTargets(document);
     wireMutationObserver();
     send({
@@ -162,7 +171,12 @@ INIT_SCRIPT_TEMPLATE = """
       title: document.title,
       textSnippet: (document.body && document.body.innerText ? document.body.innerText.slice(0, 280) : "")
     });
-  });
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', ready, {once: true});
+  } else {
+    ready();
+  }
 })();
 """
 
@@ -170,6 +184,44 @@ INIT_SCRIPT_TEMPLATE = """
 def _post(client: httpx.Client, url: str, payload: dict[str, Any]) -> None:
     _debug(f"POST {url} keys={sorted(payload.keys())}")
     client.post(url, json=payload, timeout=10.0)
+
+
+class EventReporter:
+    """Keep recorder callbacks independent of slow portal HTTP responses."""
+
+    def __init__(self, headers):
+        self.headers = headers
+        self.pending = queue.Queue(maxsize=512)
+        self.stopping = threading.Event()
+        self.worker = threading.Thread(target=self._run, daemon=True)
+
+    def __enter__(self):
+        self.worker.start()
+        return self
+
+    def send(self, url, payload):
+        try:
+            self.pending.put_nowait((url, payload))
+        except queue.Full:
+            _debug('Recorder reporting queue full; event dropped')
+
+    def _run(self):
+        with httpx.Client(headers=self.headers, timeout=2.0) as client:
+            while not self.stopping.is_set() or not self.pending.empty():
+                try:
+                    url, payload = self.pending.get(timeout=0.1)
+                except queue.Empty:
+                    continue
+                try:
+                    client.post(url, json=payload).raise_for_status()
+                except Exception as exc:
+                    _debug(f'Recorder report failed: {type(exc).__name__}')
+                finally:
+                    self.pending.task_done()
+
+    def __exit__(self, *_args):
+        self.stopping.set()
+        self.worker.join(timeout=3)
 
 
 def _get(client: httpx.Client, url: str) -> dict[str, Any]:
@@ -203,7 +255,6 @@ def _launch_browser_context(playwright, viewport_width: int, viewport_height: in
         "--start-maximized",
         f"--window-size={viewport_width},{viewport_height}",
         "--window-position=72,72",
-        "--disable-popup-blocking",
     ]
     errors: list[str] = []
     for channel in (None, "chrome", "msedge"):
@@ -212,6 +263,7 @@ def _launch_browser_context(playwright, viewport_width: int, viewport_height: in
             kwargs: dict[str, Any] = {
                 "user_data_dir": temp_profile.name,
                 "headless": False,
+                "ignore_default_args": ["--disable-popup-blocking"],
                 "args": launch_args,
                 "no_viewport": True,
                 "service_workers": "block",
@@ -250,8 +302,9 @@ def run(
     event_url = f"{api_base}/api/internal/recorder/playwright-session/{session_id}/event"
     control_url = f"{api_base}/api/internal/recorder/playwright-session/{session_id}/control"
 
-    with httpx.Client(headers=headers) as client:
+    with EventReporter(headers) as reporter, httpx.Client(headers=headers) as client:
         try:
+            target_url = normalize_recorder_url(target_url)
             _debug("posting launching status")
             _post(client, status_url, {"status": "launching", "message": "Launching desktop recorder browser...", "browser_open": False})
             _debug("launching status posted")
@@ -265,14 +318,14 @@ def run(
                 )
                 _debug(f"browser launched runtime={runtime_name}")
                 try:
-                    context.expose_function(
-                        "asmRecordEvent",
-                        lambda payload: _post(client, event_url, dict(payload or {})),
-                    )
-                    context.add_init_script(INIT_SCRIPT_TEMPLATE)
-
                     existing_pages = list(context.pages)
                     page = existing_pages[0] if existing_pages else context.new_page()
+                    context.expose_binding(
+                        "asmRecordEvent",
+                        lambda source, payload: reporter.send(event_url, dict(payload or {}))
+                        if source['page'] == page and source['frame'] == page.main_frame else None,
+                    )
+                    context.add_init_script(INIT_SCRIPT_TEMPLATE)
                     _debug(f"primary page selected existing={bool(existing_pages)} total_pages={len(context.pages)}")
 
                     def focus_primary_page() -> None:
@@ -284,15 +337,20 @@ def run(
                     focus_primary_page()
 
                     def handle_extra_page(extra_page):
-                        if extra_page == page:
+                        if extra_page == page or extra_page.is_closed():
                             return
                         popup_url = "about:blank"
                         try:
                             popup_url = extra_page.url or "about:blank"
                         except Exception:
                             pass
-                        _post(
-                            client,
+                        # Close before reporting so redirect chains cannot keep running.
+                        try:
+                            extra_page.close()
+                        except Exception:
+                            pass
+                        focus_primary_page()
+                        reporter.send(
                             event_url,
                             {
                                 "event": "popup_blocked",
@@ -301,45 +359,40 @@ def run(
                                 "message": "A secondary tab or popup was blocked so the recorder can stay focused on one controlled browser page.",
                             },
                         )
-                        try:
-                            extra_page.close()
-                        except Exception:
-                            pass
-                        focus_primary_page()
 
                     for extra_page in list(context.pages):
                         if extra_page != page:
                             handle_extra_page(extra_page)
 
                     context.on("page", handle_extra_page)
-                    page.on("popup", handle_extra_page)
 
                     def on_navigate(frame):
                         if frame == page.main_frame:
-                            title = ""
-                            try:
-                                title = page.title() if page.url else ""
-                            except Exception:
-                                title = ""
-                            _post(
-                                client,
+                            reporter.send(
                                 event_url,
                                 {
                                     "event": "navigate",
                                     "url": frame.url,
-                                    "title": title,
+                                    "title": "",
                                 },
                             )
 
                     page.on("framenavigated", on_navigate)
                     _debug("navigating to target")
-                    page.goto(target_url, wait_until=wait_until)
+                    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+                    try:
+                        page.goto(target_url, wait_until=wait_until, timeout=15000)
+                    except PlaywrightTimeoutError:
+                        if page.url == 'about:blank':
+                            raise
+                        _debug('Page still loading; recording continues without waiting for background traffic')
                     _debug("target loaded")
                     focus_primary_page()
 
                     _post(client, status_url, {"status": "running", "message": f"{runtime_name} recorder window launched", "browser_open": True})
                     _debug("running status posted")
 
+                    next_storage_capture = 0.0
                     while True:
                         for extra_page in list(context.pages):
                             if extra_page != page:
@@ -347,23 +400,30 @@ def run(
                         if page.is_closed():
                             break
                         try:
-                            storage_state = json.dumps(context.storage_state())
-                            _post(
-                                client,
-                                status_url,
-                                {
-                                    "status": "running",
-                                    "browser_open": True,
-                                    "storage_state": storage_state,
-                                    "storage_state_captured_at": time.time(),
-                                },
-                            )
+                            if time.monotonic() >= next_storage_capture:
+                                storage_state = json.dumps(context.storage_state())
+                                reporter.send(
+                                    status_url,
+                                    {
+                                        "status": "running",
+                                        "browser_open": True,
+                                        "storage_state": storage_state,
+                                        "storage_state_captured_at": time.time(),
+                                    },
+                                )
+                                next_storage_capture = time.monotonic() + 5.0
                         except Exception:
                             pass
-                        control = _get(client, control_url)
+                        try:
+                            response = client.get(control_url, timeout=1.0)
+                            response.raise_for_status()
+                            control = response.json()
+                        except httpx.HTTPError:
+                            control = {}
                         if control.get("stop_requested"):
                             break
-                        time.sleep(0.5)
+                        # Playwright must pump browser events between control polls.
+                        page.wait_for_timeout(500)
 
                     try:
                         storage_state = json.dumps(context.storage_state())
@@ -375,8 +435,7 @@ def run(
                     except Exception:
                         pass
 
-                    _post(
-                        client,
+                    reporter.send(
                         status_url,
                         {
                             "status": "stopped",
@@ -394,8 +453,7 @@ def run(
             _debug(f"exception: {exc!r}")
             _debug(traceback.format_exc())
             try:
-                _post(
-                    client,
+                reporter.send(
                     status_url,
                     {
                         "status": "error",

@@ -25,6 +25,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from service_monitor.auth import AuthManager
+from service_monitor.recorder_urls import normalize_recorder_url
 from service_monitor.config import (
     AlertThresholdsConfig,
     AppConfig,
@@ -1409,6 +1410,8 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
         await asyncio.gather(task, return_exceptions=True)
 
     app = FastAPI(title="Async Service Monitor Admin", lifespan=lifespan)
+    from service_monitor.recorder_desktop import authorize_desktop, install_recorder_desktop
+    require_recorder_desktop = install_recorder_desktop(app, auth_manager, store)
 
     @app.get("/", response_class=HTMLResponse)
     async def index() -> str:
@@ -1633,6 +1636,7 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
         session_id: str | None = Cookie(default=None, alias="service_monitor_session"),
     ) -> dict[str, str]:
         auth_manager.logout(response, session_id)
+        await app.state.disconnect_recorder_desktop(session_id)
         return {"status": "ok"}
 
     @app.post("/api/auth/register")
@@ -2126,8 +2130,23 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
         viewport_width: int = Query(1440),
         viewport_height: int = Query(900),
         javascript_enabled: bool = Query(True),
-        current_user: dict[str, str] = Depends(require_read_write),
+        current_user: dict[str, str] = Depends(require_recorder_desktop),
     ) -> dict[str, object]:
+        try:
+            url = normalize_recorder_url(url)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if sys.platform.startswith("linux") and not os.getenv("DISPLAY"):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Desktop recording requires a visible browser display. "
+                    "This server is running without one. Use the in-app recorder, "
+                    "run the portal on your desktop, or configure a protected remote "
+                    "desktop for the Docker recorder. Browser monitor replay can "
+                    "still run headlessly."
+                ),
+            )
         _retire_existing_playwright_recorders()
         session_id = secrets.token_urlsafe(18)
         token = secrets.token_urlsafe(24)
@@ -2168,6 +2187,7 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
             "session_id": session_id,
             "status": entry["status"],
             "message": entry["message"],
+            "url": url,
         }
 
     @app.get("/api/recorder/storage-state")
@@ -2178,6 +2198,7 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
         current_user: dict[str, str] = Depends(require_read_write),
     ) -> dict[str, object]:
         if mode == "playwright":
+            authorize_desktop(store.load(), current_user)
             entry = runtime["playwright_recorders"].get(session_id)
             if not entry:
                 raise HTTPException(status_code=404, detail="Playwright recorder session was not found")
@@ -2200,7 +2221,7 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
     @app.get("/api/recorder/playwright-session/{recorder_session_id}")
     async def playwright_recorder_status(
         recorder_session_id: str,
-        current_user: dict[str, str] = Depends(require_read_write),
+        current_user: dict[str, str] = Depends(require_recorder_desktop),
     ) -> dict[str, object]:
         entry = runtime["playwright_recorders"].get(recorder_session_id)
         if not entry:
@@ -2220,7 +2241,7 @@ def create_admin_app(config_path: str | Path) -> FastAPI:
     @app.post("/api/recorder/playwright-session/{recorder_session_id}/stop")
     async def stop_playwright_recorder(
         recorder_session_id: str,
-        current_user: dict[str, str] = Depends(require_read_write),
+        current_user: dict[str, str] = Depends(require_recorder_desktop),
     ) -> dict[str, object]:
         entry = runtime["playwright_recorders"].get(recorder_session_id)
         if not entry:

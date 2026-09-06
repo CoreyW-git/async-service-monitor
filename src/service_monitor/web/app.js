@@ -2334,6 +2334,7 @@ function renderBreadcrumbs(items = []) {
 }
 
 function setWorkspaceHeader(title, subtitle, breadcrumbs = []) {
+  document.body.dataset.view = title === "Initial Admin Setup" ? "setup" : title === "Sign In" ? "auth" : "app";
   document.getElementById("workspace-title").textContent = title;
   document.getElementById("workspace-subtitle").textContent = subtitle;
   renderBreadcrumbs(breadcrumbs);
@@ -2414,8 +2415,9 @@ function renderBootstrapPage() {
 
       <section class="panel">
         <div class="panel-head">
-          <h3>Why This Is Required</h3>
-          <p>The application no longer ships with a default admin account. The first visitor must create the initial administrator before sign-in, user registration, and the rest of the portal become available.</p>
+          <span class="console-tag">YOUR OBSERVABILITY WORKSPACE</span>
+          <h3>Clarity starts with a signal.</h3>
+          <p>Bring service health, synthetic journeys, and network diagnostics into one place. Create your administrator account to begin.</p>
         </div>
       </section>
     </div>
@@ -2664,7 +2666,7 @@ function renderProfilePage(profile) {
 }
 
 function renderDashboard(overview, checks, summaryCounts, checkMetrics, nodeMetrics, cluster) {
-  setWorkspaceHeader("Home", "Live endpoint availability and monitoring node health at a glance.", [
+  setWorkspaceHeader("Service overview", "Understand your service health. Find the signal. Investigate the impact.", [
     { label: "Home" },
   ]);
   const root = document.getElementById("app-root");
@@ -2748,6 +2750,15 @@ function renderDashboard(overview, checks, summaryCounts, checkMetrics, nodeMetr
 
   root.innerHTML = `
     <div class="grafana-dashboard">
+      <div class="console-toolbar">
+        <div><span class="console-tag">SERVICE ESTATE</span><span class="subtle">${checks.length} monitors / ${totalNodes} nodes</span></div>
+        <a class="button-link" href="/monitors" data-link>Manage monitors &rarr;</a>
+      </div>
+      <section class="signal-strip" aria-label="Monitor health map">
+        <div><strong>Health at a glance</strong><p class="subtle">Latest outcome per monitor</p></div>
+        <div class="signal-cells">${checks.map((check) => `<a class="signal-cell ${statusClass(check.status)}" href="/dashboards/${encodeURIComponent(check.name)}" data-link aria-label="${escapeHtml(check.name)}: ${escapeHtml(statusLabel(check.status))}" title="${escapeHtml(check.name)}: ${escapeHtml(statusLabel(check.status))}"></a>`).join("") || '<span class="subtle">Add a monitor to start collecting signals.</span>'}</div>
+        <div class="signal-legend"><span><i class="dot healthy"></i>Healthy</span><span><i class="dot unhealthy"></i>Unhealthy</span><span><i class="dot disabled"></i>Disabled / unknown</span></div>
+      </section>
       <section class="grafana-hero">
         <article class="panel grafana-panel grafana-panel-primary">
           <div class="panel-head">
@@ -2756,7 +2767,7 @@ function renderDashboard(overview, checks, summaryCounts, checkMetrics, nodeMetr
           </div>
           <div class="grafana-health-grid">
             <div class="grafana-health-score aggregate-${availabilityState}">
-              <span class="grafana-label">Availability</span>
+              <span class="grafana-label">Current health</span>
               <strong>${healthPercent}%</strong>
               <span class="subtle">${summaryCounts.healthy} of ${activeChecks.length} enabled monitors healthy</span>
             </div>
@@ -6647,6 +6658,9 @@ async function launchPlaywrightRecorder(url) {
       javascript_enabled: state.recorder.javascriptEnabled ? "true" : "false",
     });
     const session = await api(`/api/recorder/playwright-session?${params.toString()}`, { method: "POST" });
+    url = session.url || url;
+    const targetInput = document.getElementById("monitor-recorder-url");
+    if (targetInput) targetInput.value = url;
     state.recorder.mode = "playwright";
     state.recorder.playwrightSessionId = session.session_id;
     state.recorder.playwrightStatus = session.message || session.status || "Chromium recorder launch requested.";
@@ -8001,7 +8015,7 @@ function renderAdminUsersPage(users) {
   `;
 }
 
-function renderAdminConfigPage(telemetry, portalSettings, emailSettings, slackSettings, uiScaling) {
+function renderAdminConfigPage(telemetry, portalSettings, emailSettings, slackSettings, uiScaling, desktop) {
   setWorkspaceHeader("Application Configuration", "Configure notifications, storage, UI scaling, and cloud integrations.", [
     { label: "Administration", href: "/admin" },
     { label: "Application Configuration" },
@@ -8010,6 +8024,20 @@ function renderAdminConfigPage(telemetry, portalSettings, emailSettings, slackSe
   root.innerHTML = `
     <div class="stack">
       ${adminSectionNavMarkup("config")}
+      <section class="panel">
+        <div class="panel-head"><h3>Recorder Desktop</h3><p>Uses portal authentication (${escapeHtml(desktop.auth_provider)}). Manage accounts, passwords and roles in Administration Users. Permitted users share one desktop and its browser sessions.</p></div>
+        <form id="recorder-desktop-settings-form" class="check-form">
+          <label><input name="enabled" type="checkbox" ${desktop.enabled ? "checked" : ""}> Enable recorder desktop</label>
+          <label>Minimum role<select name="minimum_role"><option value="admin" ${desktop.minimum_role === "admin" ? "selected" : ""}>Administrator</option><option value="read_write" ${desktop.minimum_role === "read_write" ? "selected" : ""}>Read/write or administrator</option></select></label>
+          <label>Allowed usernames (comma-separated)<input name="allowed_users" value="${escapeHtml(desktop.allowed_users.join(", "))}" placeholder="Empty allows everyone with the required role"></label>
+          <label>Public application origin<input name="public_url" type="url" value="${escapeHtml(desktop.public_url)}" placeholder="https://monitor.example.com"></label>
+          <p>Configure DNS and an HTTPS reverse proxy separately, including WebSocket forwarding. Sign in through that same hostname. OCI requires the portal's OCI authentication implementation.</p>
+          <p>${desktop.available ? "Desktop runtime installed." : "Desktop runtime unavailable on this server."} Portal authentication must be enabled.</p>
+          <button type="submit">Save Desktop Settings</button>
+          <a id="recorder-desktop-link" href="${escapeHtml(desktop.public_url || "")}/recorder-desktop" target="_blank" rel="noopener">Open Recorder Desktop</a>
+          <p class="form-status" id="recorder-desktop-settings-status"></p>
+        </form>
+      </section>
       <section class="panel">
         <div class="panel-head">
           <h3>Application Configuration</h3>
@@ -9100,7 +9128,8 @@ async function renderRoute() {
       api("/api/settings/slack"),
       api("/api/settings/ui-scaling"),
     ]);
-    renderAdminConfigPage(telemetry, portalSettings, emailSettings, slackSettings, uiScaling);
+    const desktop = await api("/api/settings/recorder-desktop");
+    renderAdminConfigPage(telemetry, portalSettings, emailSettings, slackSettings, uiScaling, desktop);
     hydrateTelemetrySettingsForm(document.getElementById("telemetry-form"));
     hydrateEmailSettingsForm(document.getElementById("email-settings-form"));
     return;
@@ -9616,6 +9645,26 @@ async function handleSubmit(event) {
     } catch (error) {
       setStatus(status, error.message, true);
     }
+    return;
+  }
+
+  if (event.target.id === "recorder-desktop-settings-form") {
+    event.preventDefault();
+    if (!hasRole("admin")) return;
+    const form = event.target;
+    const status = document.getElementById("recorder-desktop-settings-status");
+    try {
+      const publicUrl = form.elements.public_url.value.trim().replace(/\/+$/, "");
+      const result = await api("/api/settings/recorder-desktop", {
+        method: "PUT",
+        body: JSON.stringify({enabled: form.elements.enabled.checked,
+          minimum_role: form.elements.minimum_role.value,
+          allowed_users: form.elements.allowed_users.value.split(",").map(value => value.trim()).filter(Boolean),
+          public_url: publicUrl}),
+      });
+      document.getElementById("recorder-desktop-link").href = `${publicUrl}/recorder-desktop`;
+      setStatus(status, result.message);
+    } catch (error) { setStatus(status, error.message, true); }
     return;
   }
 

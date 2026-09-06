@@ -10,15 +10,16 @@
     <div class="app-shell">
       <aside class="sidebar">
         <div class="brand-block">
-          <p class="eyebrow">Admin Portal</p>
-          <h1>Service Health Portal</h1>
-          <p class="sidebar-copy">Monitor Service Health & Custom Endpoints</p>
+          <div class="brand-symbol" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M3 17h6l4-10 6 18 4-8h6" /></svg></div>
+          <p class="eyebrow">Observability platform</p>
+          <h1>Async<span>Monitor</span></h1>
+          <p class="sidebar-copy">Every signal. One clear view.</p>
         </div>
 
         <nav class="sidebar-nav">
-          <a href="/" data-link>Home</a>
+          <a href="/" data-link><span class="nav-icon" aria-hidden="true">&#9638;</span>Overview</a>
           <a href="/dashboards" data-link data-role-min="read_only">Dashboards</a>
-          <a href="/apm" data-link data-role-min="read_only">Application Performance Management</a>
+          <a href="/apm" data-link data-role-min="read_only">APM &amp; traces</a>
           <a href="/monitors" data-link data-role-min="read_only">Monitors</a>
           <a href="/admin" data-link data-role-min="admin">Administration</a>
           <a href="/guide" data-link>Help</a>
@@ -31,7 +32,7 @@
         <header class="workspace-hero">
           <div>
             <nav id="workspace-breadcrumbs" class="workspace-breadcrumbs"></nav>
-            <p class="eyebrow">Status</p>
+            <p class="eyebrow workspace-section-label">Service intelligence</p>
             <h2 id="workspace-title">Home</h2>
             <p id="workspace-subtitle" class="workspace-copy">Healthy, unhealthy, and disabled endpoint monitors at a glance.</p>
           </div>
